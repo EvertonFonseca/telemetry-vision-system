@@ -547,10 +547,9 @@ uiEditObjeto <- function(ns,input,output,session,callback = NULL){
         current <- sliderPosition()
 
        if(!is.null(componenteReactive())){
-          tagList(actionButton(ns("btSair"), label = "Selecionar",icon = icon("arrow-left")))
-        }
-
-        if(current == 1){
+         tagList(actionButton(ns("btSair"), label = "Selecionar",icon = icon("arrow-left")))
+       }
+       else if(current == 1){
           tagList(actionButton(ns("btSair"), label = "Sair",icon = icon("arrow-left")))
         }
         else if(current == 2){
@@ -869,10 +868,11 @@ uiEditObjeto <- function(ns,input,output,session,callback = NULL){
                       
                     },
                     callback.yes = function(){
-                      
+                    
                       db$tryResetConnection(function(con){
                         
-                        deleteObjeto(con,objeto$CD_ID_OBJETO)
+                        db$deleteTable(con,"OBJETO",paste0("CD_ID_OBJETO = ",objeto$CD_ID_OBJETO))
+                  
                         objetos.aux <- selectAllObjetos(con)
                  
                         if(nrow(objetos.aux) == 0){
@@ -998,20 +998,19 @@ uiEditObjeto <- function(ns,input,output,session,callback = NULL){
           ativoObjeto    <- isolate(input$checkboxAtivoObjeto)  
           tipoObjeto     <- tiposObjeto |> filter(NAME_OBJETO_TIPO == isolate(input$comboTipoObjeto))
           setor          <- setores |> filter(NAME_SETOR == isolate(input$comboSetor))
-          
+       
           # try insert or roolback
           if(!.run_tx_bool(con,{
             
-            obj               <- list()
-            obj$NAME_OBJETO   <- nomeObjeto
-            obj$FG_ATIVO      <- as.integer(ativoObjeto)
-            obj$CD_ID_SETOR   <- setor$CD_ID_SETOR
-            obj$CD_ID_OBJETO_TIPO <- tipoObjeto$CD_ID_OBJETO_TIPO
-            id_obj             <- db$nextSequenciaID(con,'OBJETO')
-            obj$CD_ID_OBJETO   <- insertNewObjeto(con,id_obj,obj)
-            
+            obj                   <- list()
+            obj$NAME_OBJETO       <- nomeObjeto
+            obj$FG_ATIVO          <- as.integer(ativoObjeto)
+            obj$CD_ID_SETOR       <- setor$CD_ID_SETOR
+        
+            db$updateTable(con,"OBJETO",paste0("CD_ID_OBJETO = ",objetoSelect$CD_ID_OBJETO),obj)
+   
             id_obj_config      <- db$nextSequenciaID(con,'OBJETO_CONFIG')
-            insertNewObjetoConfig(con,id_obj_config,obj)
+            insertNewObjetoConfig(con,id_obj_config,objetoSelect)
             
             for(i in 1:nrow(componentes)){
               #insert componente do objeto
@@ -1033,7 +1032,7 @@ uiEditObjeto <- function(ns,input,output,session,callback = NULL){
             #load todos os setores
             objetos(selectAllObjetos(con))
             # volta para init
-            swiperSlideTo(idSwiper,1L)
+            swiperSlideTo(idSwiper,0)
             sliderPosition(1L)
             showNotification("objeto atualizado com sucesso!", type = "warning")
             

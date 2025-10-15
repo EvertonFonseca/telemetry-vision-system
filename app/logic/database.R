@@ -1,4 +1,4 @@
-box::use(RMariaDB,DBI,shiny[showNotification],shinyjs,global = ../view/global)
+box::use(RMariaDB,DBI,shiny[showNotification],stringi,shinyjs,global = ../view/global)
 
 #' @export
 newConnection <- function(){
@@ -85,7 +85,7 @@ nextSequenciaID <- function(con,table,schema = 'system'){
   return(as.integer(DBI$dbGetQuery(con,query,params = list(table,schema))$ID))
 }
 #' @export
-insertTable <- function(con,table,obj){
+insertTable <- function(con,table,obj,verbose = FALSE){
   
   tryCatch({
     
@@ -109,6 +109,10 @@ insertTable <- function(con,table,obj){
       
     }
     query <- paste0(query,") ",values,")")
+
+    if(verbose){
+      print(query)
+    }
     
     #Inseri dados dinamico
     result <-  DBI$dbSendStatement(con,query)
@@ -119,7 +123,7 @@ insertTable <- function(con,table,obj){
 }
 
 #' @export
-updateTable <- function(con,table,where = '',obj){
+updateTable <- function(con,table,where = '',obj,verbose = FALSE){
   
   tryCatch({
     
@@ -141,6 +145,10 @@ updateTable <- function(con,table,where = '',obj){
     
     query <- paste0(query,ifelse(stringi$stri_isempty(where),'',paste0(' WHERE ',where)))
     
+    if(verbose){
+      print(query)
+    }
+
     #Inseri dados dinamico
     result <-  DBI$dbSendStatement(con,query)
     DBI$dbBind(result,unlist(datas))
@@ -149,12 +157,15 @@ updateTable <- function(con,table,where = '',obj){
   },error = function(e) {print(e)})
 }
 #' @export
-deleteTable <- function(con,table,where = ''){
+deleteTable <- function(con,table,where = '',verbose = FALSE){
   
   tryCatch({
     
     query   <- paste0("DELETE FROM ",table," ")
     query <- paste0(query,ifelse(stringi$stri_isempty(where),'',paste0('WHERE ',where)))
+     if(verbose){
+      print(query)
+    }
     DBI$dbExecute(con,query)
     
   },error = function(e) {print(e)})
