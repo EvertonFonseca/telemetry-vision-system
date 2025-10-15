@@ -1,0 +1,14 @@
+
+.modal-content {
+  border-radius: 15px !important; /* Ajuste o valor conforme o arredondamento desejado (em px, %, etc.) */
+}
+
+.modal-header {
+  border-top-left-radius: 15px;
+  border-top-right-radius: 15px;
+}
+
+.modal-body {
+  border-bottom-left-radius: 15px;
+  border-bottom-right-radius: 15px;
+}

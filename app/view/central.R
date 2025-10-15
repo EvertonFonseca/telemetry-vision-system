@@ -1,0 +1,1 @@
+box::use(DBI,dplyr[pull,mutate],purrr[...],./camera_dao[selectCameraByComponente],jsonlite)
