@@ -397,8 +397,15 @@ renderMenuSideBarMain <- function(ns){
             # subItem oculto para resetar seleção
             menuSubItem(text = htmltools::HTML("&nbsp;"), tabName = "noop",selected = TRUE)
           )
+        ),
+        sidebarMenu(id = ns("brain"),
+          menuItem("Cerebrô", icon = icon("brain"),
+            menuSubItem("Novo",  tabName = "brainNew"),
+            menuSubItem("Lista", tabName = "brainTable"),
+            # subItem oculto para resetar seleção
+            menuSubItem(text = htmltools::HTML("&nbsp;"), tabName = "noop",selected = TRUE)
+          )
         )
       )
-
     })
 }
