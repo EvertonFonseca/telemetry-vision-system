@@ -1,4 +1,3 @@
-
 # app.R — Leaflet + Frames do MariaDB por intervalo de DT_HR_LOCAL
 options(shiny.maxRequestSize = 2048 * 1024^2)
 
@@ -15,18 +14,18 @@ library(pool)
 library(shinyDatetimePickers)
 
 # ========== CONFIG DB (AJUSTE AQUI) ==========
-con <-DBI::dbConnect(
-        RMariaDB::MariaDB(),
-        dbname = 'system',
-        username = 'root',
-        password = 'ssbwarcq',
-        host = '127.0.0.1',
-        port = 3306
-      )
+con <- DBI::dbConnect(
+  RMariaDB::MariaDB(),
+  dbname   = 'system',
+  username = 'root',
+  password = 'ssbwarcq',
+  host     = '127.0.0.1',
+  port     = 3306
+)
 
-# -------- helper: detecta mime e converte blob -> data URL --------
+# -------- helpers: mime / data URL --------
 detect_mime <- function(raw) {
-  if (length(raw) >= 3 && raw[1] == as.raw(0xFF) && raw[2] == as.raw(0xD8)) return("image/jpeg")
+  if (length(raw) >= 2 && raw[1] == as.raw(0xFF) && raw[2] == as.raw(0xD8)) return("image/jpeg")
   if (length(raw) >= 8 && all(raw[1:8] == as.raw(c(0x89,0x50,0x4E,0x47,0x0D,0x0A,0x1A,0x0A)))) return("image/png")
   "application/octet-stream"
 }
@@ -34,7 +33,49 @@ to_data_url <- function(raw) {
   paste0("data:", detect_mime(raw), ";base64,", base64encode(raw))
 }
 
-# -------- helper: busca frames por root_id e intervalo --------
+# -------- helpers: extração de dimensões W x H direto do BLOB --------
+# PNG: IHDR (bytes 17:24) width/height (big-endian)
+be32 <- function(v) {
+  sum(as.integer(v) * c(256^3, 256^2, 256, 1))
+}
+png_dims <- function(raw) {
+  if (length(raw) < 24) return(c(NA_integer_, NA_integer_))
+  if (!all(raw[1:8] == as.raw(c(0x89,0x50,0x4E,0x47,0x0D,0x0A,0x1A,0x0A)))) return(c(NA_integer_, NA_integer_))
+  w <- be32(raw[17:20]); h <- be32(raw[21:24])
+  c(w, h)
+}
+# JPEG: procura SOF0..SOF3
+jpeg_dims <- function(raw) {
+  n <- length(raw)
+  i <- 3L
+  while (i + 8L <= n) {
+    if (raw[i] != as.raw(0xFF)) { i <- i + 1L; next }
+    marker <- as.integer(raw[i + 1L])
+    # tamanhos de bloco
+    if (marker == 0xD8 || marker == 0xD9) { i <- i + 2L; next }  # SOI/EOI
+    if (i + 3L > n) break
+    len <- as.integer(raw[i + 2L]) * 256L + as.integer(raw[i + 3L])
+    if (len < 2L) break
+    # SOF0..SOF3 (baseline, extended, progressive)
+    if (marker >= 0xC0 && marker <= 0xC3) {
+      if (i + 7L > n) break
+      h <- as.integer(raw[i + 5L]) * 256L + as.integer(raw[i + 6L])
+      w <- as.integer(raw[i + 7L]) * 256L + as.integer(raw[i + 8L])
+      return(c(w, h))
+    }
+    i <- i + 2L + len
+  }
+  c(NA_integer_, NA_integer_)
+}
+img_dims <- function(raw) {
+  mime <- detect_mime(raw)
+  if (identical(mime, "image/png"))  return(png_dims(raw))
+  if (identical(mime, "image/jpeg")) return(jpeg_dims(raw))
+  c(NA_integer_, NA_integer_)
+}
+
+# -------- helper: busca frames por intervalo --------
+# OBS: agora retornamos também a coluna 'raw' (bytes) para medir w/h do 1º frame
 fetch_frames <- function(root_id, t0, t1, limit = 4000L) {
   sql <- "
     SELECT DT_HR_LOCAL, DATA_FRAME
@@ -45,13 +86,17 @@ fetch_frames <- function(root_id, t0, t1, limit = 4000L) {
   "
   rs <- dbSendQuery(con, sql)
   on.exit(try(dbClearResult(rs), silent = TRUE), add = TRUE)
-  dbBind(rs,c(t0,t1,as.integer(limit)))
+  dbBind(rs, c(t0, t1, as.integer(limit)))
   df <- dbFetch(rs)
-  if (!nrow(df)) return(tibble(ts = as.POSIXct(character()), data = character()))
+  if (!nrow(df)) {
+    return(tibble::tibble(ts = as.POSIXct(character()), data = character(), raw = list()))
+  }
 
-  tibble(
+  raws <- df$DATA_FRAME
+  tibble::tibble(
     ts   = as.POSIXct(df$DT_HR_LOCAL, tz = "UTC"),
-    data = vapply(df$DATA_FRAME, to_data_url, character(1))
+    data = vapply(raws, to_data_url, character(1)),
+    raw  = as.list(raws)
   )
 }
 
@@ -63,7 +108,7 @@ ui <- fluidPage(
       #map { border:1px solid #ddd; }
       .softcard { border:1px solid #e9ecef; border-radius:12px; padding:12px; background:#fff; }
     ")),
-    # --- Player JS: imageOverlay controlado por frames vindos do R ---
+    # --- Player JS (usa payload.w/payload.h p/ bounds) ---
     tags$script(HTML("
 (function(){
   let frames = [];   // data URLs
@@ -71,24 +116,19 @@ ui <- fluidPage(
   let idx    = 0;
   let timer  = null;
   let playing= false;
-  let fps    = 12;   // taxa base para step se necessário
-  let mapRef = null;
+  let fps    = 12;
   let imgLayer = null;
   let bounds = null;
   let t0 = null, t1 = null, durationSec = 0;
 
-  function isoToDate(s){ return s ? new Date(s) : null; }
   function fmtNow(){
     if(!frames.length) return '--';
     const d = new Date(times[idx]);
     return d.toLocaleString('pt-BR', { timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone });
   }
-
   function nearestIndexByTime(tSec){
-    // tSec: segundos desde t0
     if(!times.length || !t0) return 0;
     const target = t0.getTime()/1000 + tSec;
-    // busca binária simples
     let lo=0, hi=times.length-1, best=0;
     while(lo <= hi){
       let mid = (lo+hi)>>1;
@@ -97,11 +137,9 @@ ui <- fluidPage(
     }
     return best;
   }
-
   function updateImage(){
     if(!imgLayer || !frames.length) return;
     imgLayer.setUrl(frames[idx]);
-    // atualiza seek/timestamp
     const elSeek = document.getElementById('seek');
     const elNow  = document.getElementById('t_now');
     if(elSeek && durationSec){
@@ -110,19 +148,18 @@ ui <- fluidPage(
     }
     if(elNow) elNow.textContent = fmtNow();
   }
-
-  function stop(){ playing=false; if(timer){ clearInterval(timer); timer=null; } }
+  function stop(){ playing=false; if(timer){ clearTimeout(timer); timer=null; } }
   function play(){
     if(!frames.length || !durationSec) return;
     if(playing) return;
     playing = true;
-    // usa deltas reais entre timestamps para timing mais fiel
     const tick = ()=>{
       const next = Math.min(idx+1, frames.length-1);
       if(next === idx){ stop(); return; }
       const curT = new Date(times[idx]).getTime();
       const nxtT = new Date(times[next]).getTime();
-      const dtms = Math.max(1, nxtT - curT);
+      let dtms = nxtT - curT;
+      if(!Number.isFinite(dtms) || dtms < 1) dtms = Math.max(1, Math.round(1000/Math.max(1,fps)));
       idx = next;
       updateImage();
       timer = setTimeout(()=>{ if(playing) tick(); }, dtms);
@@ -130,41 +167,33 @@ ui <- fluidPage(
     tick();
   }
 
-  // API global para o Shiny chamar
   window.FRAMES_API = {
-    initLeafletHandle(mapId){
-      // chamado pelo onRender para registrar o map e o imageOverlay
-      mapRef = mapId ? mapId : null;
-    },
     load(payload){
       frames = payload.frames || [];
       times  = payload.times  || [];
-      t0     = payload.t0     ? new Date(payload.t0) : null;
-      t1     = payload.t1     ? new Date(payload.t1) : null;
+      t0     = payload.t0 ? new Date(payload.t0) : (times.length? new Date(times[0]) : null);
+      t1     = payload.t1 ? new Date(payload.t1) : (times.length? new Date(times[times.length-1]) : null);
       durationSec = (t0 && t1) ? Math.max(0, (t1.getTime()-t0.getTime())/1000) : 0;
       idx = 0;
       stop();
-      // prepara overlay se necessário
+
       const map = HTMLWidgets.find('#map').getMap();
       if(map){
-        if(!bounds) bounds = [[0,0],[payload.h||720, payload.w||1280]];
+        const h = payload.h || 720, w = payload.w || 1280;
+        bounds = [[0,0],[h, w]];   // respeita dimensões do frame
         if(!imgLayer){
           imgLayer = L.imageOverlay(frames.length?frames[0]:'', bounds, {opacity:1}).addTo(map);
           map.fitBounds(bounds);
         } else {
           imgLayer.setUrl(frames.length?frames[0]:'');
+          imgLayer.setBounds(bounds);
+          map.fitBounds(bounds);
         }
       }
-      // ajusta UI
       const elSeek = document.getElementById('seek');
       const elDur  = document.getElementById('t_dur');
-      if(elSeek && durationSec){
-        elSeek.min = '0'; elSeek.max = String(durationSec); elSeek.step = '0.001'; elSeek.value = '0';
-      }
-      if(elDur){
-        const df = new Date(t1);
-        elDur.textContent = frames.length ? df.toLocaleString('pt-BR') : '--';
-      }
+      if(elSeek && durationSec){ elSeek.min='0'; elSeek.max=String(durationSec); elSeek.step='0.001'; elSeek.value='0'; }
+      if(elDur){ elDur.textContent = frames.length ? (new Date(times.at(-1))).toLocaleString('pt-BR') : '--'; }
       const elNow = document.getElementById('t_now');
       if(elNow) elNow.textContent = frames.length ? (new Date(times[0])).toLocaleString('pt-BR') : '--';
       updateImage();
@@ -183,7 +212,6 @@ ui <- fluidPage(
     setFPS(x){ fps = Math.max(1, Number(x)||12); }
   };
 
-  // Handlers vindos do server
   if (typeof Shiny !== 'undefined') {
     Shiny.addCustomMessageHandler('frames_cmd', function(msg){
       if(!msg || !window.FRAMES_API) return;
@@ -245,112 +273,90 @@ server <- function(input, output, session) {
 
   timeDelta <- reactiveTimer(100)
   running   <- FALSE
-  observeEvent(timeDelta(),{
-     req(running)
-     step_cmd(1)
-  },ignoreInit = TRUE)
+  observeEvent(timeDelta(), {
+    req(running)
+    step_cmd(1)
+  }, ignoreInit = TRUE)
 
   rv <- reactiveValues(
-    frames = tibble(ts = as.POSIXct(character()), data = character()),
+    frames = tibble::tibble(ts = as.POSIXct(character()), data = character(), raw = list()),
     t0 = NULL,
     t1 = NULL,
     w = 1280,
     h = 720
   )
 
-  # Mapa base (CRS simples; bounds definidos quando carregar frames)
+  # Mapa base (CRS simples)
   output$map <- renderLeaflet({
-    leaflet(
-      options = leafletOptions(crs = leafletCRS(crsClass = "L.CRS.Simple"))
-    ) |>
+    leaflet(options = leafletOptions(crs = leafletCRS(crsClass = "L.CRS.Simple"))) |>
       addMapPane("imgPane", zIndex = 200)
   })
 
   # Carregar frames do DB
   observeEvent(input$load_db, {
     req(input$dt0, input$dt1)
-    showModal(modalDialog(
-      "Carregando frames...",
-      footer = NULL,
-      easyClose = FALSE
-    ))
+    showModal(modalDialog("Carregando frames...", footer = NULL, easyClose = FALSE))
     on.exit(removeModal(), add = TRUE)
 
     t0 <- as.POSIXct(input$dt0, tz = "UTC")
     t1 <- as.POSIXct(input$dt1, tz = "UTC")
+
     df <- fetch_frames(input$root_id, t0, t1, limit = input$limit)
     rv$frames <- df
     rv$t0 <- if (nrow(df)) df$ts[1] else t0
     rv$t1 <- if (nrow(df)) df$ts[nrow(df)] else t1
 
-    # Envia payload para o browser (frames + tempos + dimensões)
+    # === NOVO: mede w/h do primeiro frame de fato ===
+    if (nrow(df) > 0 && length(df$raw[[1]]) > 0) {
+      wh <- img_dims(df$raw[[1]])
+      if (is.finite(wh[1]) && is.finite(wh[2]) && !any(is.na(wh))) {
+        rv$w <- as.integer(wh[1]); rv$h <- as.integer(wh[2])
+      } else {
+        rv$w <- 1280L; rv$h <- 720L
+      }
+    } else {
+      rv$w <- 1280L; rv$h <- 720L
+    }
+
+    # Envia payload para o browser (frames + tempos + dimensões reais)
     session$sendCustomMessage(
       "frames_payload",
       list(
         frames = unname(df$data),
-        times = unname(format(df$ts, "%Y-%m-%dT%H:%M:%OSZ")),
-        t0 = format(rv$t0, "%Y-%m-%dT%H:%M:%OSZ"),
-        t1 = format(rv$t1, "%Y-%m-%dT%H:%M:%OSZ"),
-        w = rv$w,
-        h = rv$h
+        times  = unname(format(df$ts, "%Y-%m-%dT%H:%M:%OSZ")),
+        t0     = format(rv$t0, "%Y-%m-%dT%H:%M:%OSZ"),
+        t1     = format(rv$t1, "%Y-%m-%dT%H:%M:%OSZ"),
+        w      = rv$w,
+        h      = rv$h
       )
     )
   })
 
   # Controles (play/pause/seek/step)
-  observeEvent(input$play, {
-    running  <<- TRUE
-    #session$sendCustomMessage("frames_cmd", list(op = "play"))
-  })
-  observeEvent(input$pause, {
-    running  <<- FALSE
-    #session$sendCustomMessage("frames_cmd", list(op = "pause"))
-  })
-  observeEvent(input$seek, {
-     running  <<- FALSE
-    session$sendCustomMessage("frames_cmd", list(op = "seek", t = input$seek))
-  })
+  observeEvent(input$play,  { running <<- TRUE  })
+  observeEvent(input$pause, { running <<- FALSE })
+  observeEvent(input$seek,  { running <<- FALSE; session$sendCustomMessage("frames_cmd", list(op = "seek", t = input$seek)) })
 
   step_cmd <- function(n) {
     session$sendCustomMessage("frames_cmd", list(op = "step", n = n))
   }
-  observeEvent(input$back, {
-    running  <<- FALSE
-    step_cmd(-1)
-  })
-  observeEvent(input$fwd, {
-    running  <<- FALSE
-    step_cmd(1)
-  })
-  observeEvent(input$back10, {
-    running  <<- FALSE
-    step_cmd(-10)
-  })
-  observeEvent(input$fwd10, {
-    running  <<- FALSE
-    step_cmd(10)
-  })
-  observeEvent(input$fps, {
-    session$sendCustomMessage("frames_cmd", list(op = "fps", fps = input$fps))
-  })
+  observeEvent(input$back,   { running <<- FALSE; step_cmd(-1) })
+  observeEvent(input$fwd,    { running <<- FALSE; step_cmd( 1) })
+  observeEvent(input$back10, { running <<- FALSE; step_cmd(-10) })
+  observeEvent(input$fwd10,  { running <<- FALSE; step_cmd( 10) })
+  observeEvent(input$fps,    { session$sendCustomMessage("frames_cmd", list(op = "fps", fps = input$fps)) })
 
-  # Anotações no tempo atual (tempo relativo calculado no browser/seek)
+  # Anotações
   annots <- reactiveVal(list())
   observeEvent(input$map_draw_new_feature, {
-    # aqui usamos o valor atual do slider como “tempo relativo” (s)
     rel <- isolate(input$seek) %||% 0
     feats <- annots()
-    feats[[length(feats) + 1]] <- list(
-      time_rel_s = rel,
-      feature = input$map_draw_new_feature
-    )
+    feats[[length(feats)+1]] <- list(time_rel_s = rel, feature = input$map_draw_new_feature)
     annots(feats)
   })
   output$annots_out <- renderText({
     x <- annots()
-    if (!length(x)) {
-      return("Nenhuma anotação ainda.")
-    }
+    if (!length(x)) return("Nenhuma anotação ainda.")
     toJSON(x, auto_unbox = TRUE, pretty = TRUE)
   })
 }
