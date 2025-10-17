@@ -200,10 +200,11 @@ server <- function(id) {
         # reset da seleção para permitir clicar no mesmo item novamente
         if (!is.null(sel) && sel %in% c("cameraNew", "cameraTable"))
             updateTabItems(session, inputId = "camera", selected = "noop")
+        
       },ignoreInit = TRUE,ignoreNULL = TRUE)
 
       # ---- Obsevent Menu Setor
-      observeEvent(input$camera, {
+      observeEvent(input$setor, {
         sel <- input$setor
 
         if (identical(sel, "setorNew")) {
@@ -260,6 +261,29 @@ server <- function(id) {
         if (!is.null(sel) && sel %in% c("plotNew", "plotTable"))
            updateTabItems(session, inputId = "plot", selected = "noop")
         },ignoreInit = TRUE,ignoreNULL = TRUE)
+    
+      # ---- Obsevent Menu Camera
+      observeEvent(input$treinar, {
+
+        box::use(./treinar,)
+        sel <- input$treinar
+
+        if (identical(sel, "treinarNew")) {
+            treinar$uiNewTreinar(ns,input,output,session,function(){
+            box::unload(treinar)
+            gc()
+          })
+        } else if (identical(sel, "treinarTable")) {
+            treinar$uiEditTreinar(ns,input,output,session,function(){
+            box::unload(treinar)
+            gc()
+          })
+        }
+        # reset da seleção para permitir clicar no mesmo item novamente
+        if (!is.null(sel) && sel %in% c("treinarNew", "treinarTable"))
+            updateTabItems(session, inputId = "treinar", selected = "noop")
+        
+      },ignoreInit = TRUE,ignoreNULL = TRUE)
     
   componentHeader <- function(input,output,textoInformacao,size.right = 50 * 2) {
   
@@ -398,10 +422,10 @@ renderMenuSideBarMain <- function(ns){
             menuSubItem(text = htmltools::HTML("&nbsp;"), tabName = "noop",selected = TRUE)
           )
         ),
-        sidebarMenu(id = ns("brain"),
-          menuItem("Cerebrô", icon = icon("brain"),
-            menuSubItem("Novo",  tabName = "brainNew"),
-            menuSubItem("Lista", tabName = "brainTable"),
+        sidebarMenu(id = ns("treinar"),
+          menuItem("Treinar", icon = icon("brain"),
+            menuSubItem("Novo",  tabName = "treinarNew"),
+            menuSubItem("Lista", tabName = "treinarTable"),
             # subItem oculto para resetar seleção
             menuSubItem(text = htmltools::HTML("&nbsp;"), tabName = "noop",selected = TRUE)
           )

@@ -218,7 +218,7 @@ uiEditCamera <- function(ns,input,output,session,callback = NULL){
             mutate(
                   !!colunaNames[1] := 1:nrow(dataset),
                   !!colunaNames[2] :=  dataset$NAME_CAMERA,
-                  !!colunaNames[3] :=  dataset$URL_CAMERA,
+                  !!colunaNames[3] :=  paste0(substr(dataset$URL_CAMERA, 1,10), "..."),
                   !!colunaNames[4] :=  sapply(dataset$CD_ID_CAMERA, function (x) {
                     
                    as.character(
@@ -405,8 +405,8 @@ uiMain <- function(ns,valueName = NULL,valueUrl = NULL,valueFps = 5){
                    border.color = 'lightgray',
                    children = fluidRow(
                      style = 'padding-top: 10px; padding-left: 15px; padding-right: 15px;',
-                     column(6,textInput(ns('textUrlCamera'),label = 'Url',placeholder = 'rtsp://...',value = valueUrl)),
-                     column(6,selectizeInput(ns('comboFps'),label = 'Frame por segundos',choices = c(1,5,15,30),selected = valueFps))
+                     column(12,textInput(ns('textUrlCamera'),label = 'Url',placeholder = 'rtsp://...',value = valueUrl,width = "95%")),
+                     column(12,selectizeInput(ns('comboFps'),label = 'Frame por segundos',choices = c(1,5,15,30),selected = valueFps))
                    )
         )
       )

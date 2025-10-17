@@ -56,7 +56,8 @@ initMap <- FALSE
     cameras   <- selectAllCameras(con)
     camerasSelected <- reactiveVal(NULL)
     tiposObjeto     <- selectTipoObjeto(con)
-    deleting        <- reactiveVal(FALSE)
+    deleting <- reactiveVal(FALSE)
+    editing  <- reactiveVal(FALSE)
     sliderPosition  <- reactiveVal(1L)
     idSwiper        <- ns('swiperMain')
     frame_data         <- NULL
@@ -138,145 +139,157 @@ initMap <- FALSE
         camerasTargets <- isolate(input$multiCameras) 
         
           obs2$clear()
-  
-            # Captura novo polígono desenhado
+            
+          # -------------------------------------------------------------------
+          # BLOQUEAR / LIBERAR CLIQUES durante DELETE e EDIT
+          # -------------------------------------------------------------------
+          obs2$add(observeEvent(input$mapFrame_draw_deletestart, {
+            deleting(TRUE)
+          }, ignoreInit = TRUE))
+
+          # Alguns fluxos disparam draw_stop, outros deletestop; trate os dois.
+          obs2$add(observeEvent(input$mapFrame_draw_deletestop, {
+            deleting(FALSE)
+          }, ignoreInit = TRUE))
+
+          obs2$add(observeEvent(input$mapFrame_draw_stop, {
+            # Só libera se o modo stop era "remove"
+            if (identical(input$mapFrame_draw_stop$mode, "remove")) deleting(FALSE)
+          }, ignoreInit = TRUE))
+
+          obs2$add(observeEvent(input$mapFrame_draw_editstart, {
+            editing(TRUE)
+          }, ignoreInit = TRUE))
+
+          obs2$add(observeEvent(input$mapFrame_draw_editstop, {
+            editing(FALSE)
+          }, ignoreInit = TRUE))
+
+          # -------------------------------------------------------------------
+          # CRIAÇÃO DE POLÍGONO
+          # -------------------------------------------------------------------
           obs2$add(observeEvent(input$mapFrame_draw_new_feature, {
+            req(sliderPosition() == 2L)
 
             feat <- input$mapFrame_draw_new_feature
-
-            if(is.null(feat)) return()
-            if(!identical(feat$geometry$type, "Polygon")) return()
+            if (is.null(feat) || !identical(feat$geometry$type, "Polygon")) return()
 
             cameraTarget <- cameras |> filter(NAME_CAMERA == input$comboCameras)
-          
-            # GeoJSON coords: list(list(c(lng,lat), ...))
+            req(nrow(cameraTarget) == 1)  # garante correspondência única
+
             coords <- feat$geometry$coordinates[[1]]
             lng    <- vapply(coords, function(x) x[[1]], numeric(1))
             lat    <- vapply(coords, function(x) x[[2]], numeric(1))
-            poly   <- tibble(x = lng, y = lat)
+            poly   <- .drop_dup_last(tibble::tibble(x = lng, y = lat))
 
-            # Remove possível ponto duplicado final (= inicial)
-            if(nrow(poly) >= 2 && isTRUE(all(poly[1, ] == poly[nrow(poly), ]))) {
-              poly <- poly[-nrow(poly), ]
-            }
-
-            # Mantém só 1 polígono atual (último desenhado)
-            att_tmp <- tibble(NAME_ATRIBUTO = "",NAME_DATA = "QUALITATIVO",CLASSE_ATRIBUTO = "",FG_ATIVO = TRUE)
             if (is.null(frame_data$componente)) {
-               frame_data$componente[[1]] <<- tibble(
-                CD_ID_COMPONENTE = feat$properties$`_leaflet_id`,
-                NAME_COMPONENTE = "",
-                CD_ID_CAMERA = cameraTarget$CD_ID_CAMERA,
-                POLIGNO_COMPONENTE = list(poly),
-                ESTRUTURA          = list(NULL)
+              frame_data$componente[[1]] <<- tibble::tibble(
+                CD_ID_COMPONENTE    = feat$properties$`_leaflet_id`,
+                NAME_COMPONENTE     = "",
+                CD_ID_CAMERA        = cameraTarget$CD_ID_CAMERA,
+                POLIGNO_COMPONENTE  = list(poly),
+                ESTRUTURA           = list(NULL)
               )
             } else {
-             frame_data$componente[[1]] <<- rbind(
+              frame_data$componente[[1]] <<- bind_rows(
                 frame_data$componente[[1]],
-                tibble(
-                  CD_ID_COMPONENTE = feat$properties$`_leaflet_id`,
-                  NAME_COMPONENTE  = "",
-                  CD_ID_CAMERA       = cameraTarget$CD_ID_CAMERA,
-                  POLIGNO_COMPONENTE = list(poly),
-                  ESTRUTURA          = list(NULL)
+                tibble::tibble(
+                  CD_ID_COMPONENTE    = feat$properties$`_leaflet_id`,
+                  NAME_COMPONENTE     = "",
+                  CD_ID_CAMERA        = cameraTarget$CD_ID_CAMERA,
+                  POLIGNO_COMPONENTE  = list(poly),
+                  ESTRUTURA           = list(NULL)
                 )
               )
             }
+          }, ignoreInit = TRUE))
 
-          },ignoreInit = T))
-
-          # Captura edições (mover vértices, etc.)
+          # -------------------------------------------------------------------
+          # EDIÇÃO DE POLÍGONOS (mover vértices, etc.)
+          # -------------------------------------------------------------------
           obs2$add(observeEvent(input$mapFrame_draw_edited_features, {
+            req(sliderPosition() == 2L)
 
-            feats        <- input$mapFrame_draw_edited_features
-            cameraTarget <- cameras |> filter(NAME_CAMERA == input$comboCameras)
-
+            feats <- input$mapFrame_draw_edited_features
             if (is.null(feats$features) || length(feats$features) == 0) return()
-            
-            for(i in seq_along(feats$features)){
+            if (is.null(frame_data$componente) || is.null(frame_data$componente[[1]])) return()
 
-              feat <- feats$features[[i]]
-              #if (!identical(feat$geometry$type, "Polygon")) return()
-              id_    <- feat$properties$`_leaflet_id`
-        
-              if(!is.null(feat$properties$layerId)){
-                id_ <- feat$properties$layerId
-              }
+            df <- frame_data$componente[[1]]
+
+            for (feat in feats$features) {
+              # aceita Polygon/MultiPolygon com 1 anel
+              if (is.null(feat$geometry$type) || !(feat$geometry$type %in% c("Polygon","MultiPolygon"))) next
+
+              id_ <- feat$properties$`_leaflet_id`
+              if (!is.null(feat$properties$layerId)) id_ <- feat$properties$layerId
+
               coords <- feat$geometry$coordinates[[1]]
+              if (is.null(coords) || length(coords) < 3) next
+
               lng  <- vapply(coords, function(x) x[[1]], numeric(1))
               lat  <- vapply(coords, function(x) x[[2]], numeric(1))
-              poly <- tibble(x = lng, y = lat)
-              if (nrow(poly) >= 2 && isTRUE(all(poly[1, ] == poly[nrow(poly), ]))) {
-                poly <- poly[-nrow(poly), ]
-              }
-              frame_data$componente[[1]]$POLIGNO_COMPONENTE[[which(frame_data$componente[[1]]$CD_ID_COMPONENTE == id_)]] <<- poly
+              poly <- .drop_dup_last(tibble::tibble(x = lng, y = lat))
+
+              idx <- which(df$CD_ID_COMPONENTE == id_)
+              if (length(idx) != 1L) next  # evita sobrescrita incorreta
+
+              df$POLIGNO_COMPONENTE[[idx]] <- poly
             }
 
-          },ignoreInit = T))
-      
-        obs2$add(observeEvent(input$mapFrame_draw_deleted_features, {
-          
+            frame_data$componente[[1]] <<- df
+          }, ignoreInit = TRUE))
+
+          # -------------------------------------------------------------------
+          # REMOÇÃO DE POLÍGONOS
+          # -------------------------------------------------------------------
+          obs2$add(observeEvent(input$mapFrame_draw_deleted_features, {
+            req(sliderPosition() == 2L)
+
             feats <- input$mapFrame_draw_deleted_features
-           
-            for(i in seq_along(feats$features)){
+            if (is.null(feats$features) || length(feats$features) == 0) return()
+            if (is.null(frame_data$componente) || is.null(frame_data$componente[[1]])) return()
 
-              feat <- feats$features[[i]]
-              #if (!identical(feat$geometry$type, "Polygon")) return()
-              id_    <- feat$properties$`_leaflet_id`
-          
-              if(!is.null(feat$properties$layerId)){
-                id_ <- feat$properties$layerId
-              }
-              frame_data$componente[[1]] <<- frame_data$componente[[1]][-which(frame_data$componente[[1]]$CD_ID_COMPONENTE == id_),]
+            df <- frame_data$componente[[1]]
+
+            for (feat in feats$features) {
+              id_ <- feat$properties$`_leaflet_id`
+              if (!is.null(feat$properties$layerId)) id_ <- feat$properties$layerId
+
+              # Remoção segura (mantém list-cols inteiras)
+              df <- filter(df, .data$CD_ID_COMPONENTE != id_)
             }
-        
-        },ignoreInit = TRUE))
-      
-        obs2$add(observeEvent(input$mapFrame_shape_draw_click, {
-         
-          req(!deleting())  # não processa se está deletando
-          ev <- input$mapFrame_shape_draw_click
-          
-          #if (is.null(ev$latlngs) || length(ev$latlngs) < 1) return()
-   
-          target <- frame_data$componente[[1]] |> filter(CD_ID_COMPONENTE == ev$id)
-          componenteReactive(target)
-          swiperSlideNext(idSwiper)
-            
-        },ignoreNULL = T,ignoreInit = T))
-      
-        obs2$add(observeEvent(input$mapFrame_shape_click, {
-         
-            req(!deleting())  # não processa se está deletando
-            ev <- input$mapFrame_shape_click
-            
-            #if (is.null(ev$latlngs) || length(ev$latlngs) < 1) return()
-            target <- frame_data$componente[[1]] |> filter(CD_ID_COMPONENTE == ev$id)
-            componenteReactive(target)
-            swiperSlideNext(idSwiper)
-              
-        },ignoreNULL = T,ignoreInit = T))
-      #  obs2$add(observeEvent(input$mapFrame_shape_draw_mouseover,{
-         
-      #    debugLocal(function(x)1)
-      #  },ignoreInit = TRUE))
-      
-      #  obs2$add(observeEvent(input$mapFrame_shape_mouseover,{
-         
-      #    debugLocal(function(x)1)
-      #  },ignoreInit = TRUE))
-      
-        # liga quando entra no modo delete
-        obs2$add(observeEvent(input$mapFrame_draw_deletestart, {
-          deleting(TRUE)
-        }, ignoreInit = TRUE))
 
-        # desliga quando sair do modo delete
-        obs2$add(observeEvent(input$mapFrame_draw_stop, {
-          if (identical(input$mapFrame_draw_stop$mode, "remove")) {
-            deleting(FALSE)
-          }
-        }, ignoreInit = TRUE))
+            frame_data$componente[[1]] <<- df
+          }, ignoreInit = TRUE))
+
+          # -------------------------------------------------------------------
+          # CLICKS EM SHAPES (somente se NÃO estiver editando nem deletando)
+          # -------------------------------------------------------------------
+          obs2$add(observeEvent(input$mapFrame_shape_draw_click, {
+            req(sliderPosition() == 2L, !isTRUE(deleting()), !isTRUE(editing()))
+            ev <- input$mapFrame_shape_draw_click
+            if (is.null(frame_data$componente) || is.null(frame_data$componente[[1]])) return()
+
+            target <- frame_data$componente[[1]] |> filter(.data$CD_ID_COMPONENTE == ev$id)
+            if (nrow(target) == 1) {
+              componenteReactive(target)
+              swiperSlideNext(idSwiper)
+            }
+          }, ignoreNULL = TRUE, ignoreInit = TRUE))
+
+          # Se você já tem shape_draw_click, pode dispensar o shape_click
+          # para evitar "duplo disparo". Se quiser manter, mantenha o mesmo req().
+          obs2$add(observeEvent(input$mapFrame_shape_click, {
+            req(sliderPosition() == 2L, !isTRUE(deleting()), !isTRUE(editing()))
+            ev <- input$mapFrame_shape_click
+            if (is.null(frame_data$componente) || is.null(frame_data$componente[[1]])) return()
+
+            target <- frame_data$componente[[1]] |> filter(.data$CD_ID_COMPONENTE == ev$id)
+            if (nrow(target) == 1) {
+              componenteReactive(target)
+              swiperSlideNext(idSwiper)
+            }
+          }, ignoreNULL = TRUE, ignoreInit = TRUE))
 
         output$mapFrame <- renderLeaflet({
 
@@ -342,6 +355,8 @@ initMap <- FALSE
            if(!is.null(frame_data)) unlink(frame_data$img_path)
            sliderPosition(isolate(sliderPosition()) - 1L)
           }
+          deleting(FALSE)
+          editing(FALSE)
           swiperSlidePrevious(idSwiper)    
         }
         
@@ -467,6 +482,8 @@ initMap <- FALSE
             removeModal(session)
             swiperDestroy(idSwiper)
         }else{
+          deleting(FALSE)
+          editing(FALSE)
           sliderPosition(isolate(sliderPosition()) - 1L)
           swiperSlidePrevious(idSwiper)
         }
@@ -499,6 +516,7 @@ uiEditObjeto <- function(ns,input,output,session,callback = NULL){
     camerasSelected <- reactiveVal(NULL)
     tiposObjeto     <- selectTipoObjeto(con)
     deleting        <- reactiveVal(FALSE)
+    editing         <- reactiveVal(FALSE)
     sliderPosition  <- reactiveVal(1L)
     idSwiper        <- ns('swiperMain')
     frame_data         <- NULL
@@ -685,136 +703,122 @@ uiEditObjeto <- function(ns,input,output,session,callback = NULL){
       objetoSelect   <- isolate(objeto())
       
       obs2$clear()
-      
-      # Captura novo polígono desenhado
+
+      # --- novo polígono ---
       obs2$add(observeEvent(input$mapFrame_draw_new_feature, {
-        
         feat <- input$mapFrame_draw_new_feature
-        
-        if(is.null(feat)) return()
-        if(!identical(feat$geometry$type, "Polygon")) return()
-        
+        if (is.null(feat) || !identical(feat$geometry$type, "Polygon")) return()
+
         cameraTarget <- cameras |> filter(NAME_CAMERA == input$comboCameras)
-        
-        # GeoJSON coords: list(list(c(lng,lat), ...))
+        req(nrow(cameraTarget) == 1)  # CHANGE: garante 1 camera
+
         coords <- feat$geometry$coordinates[[1]]
         lng    <- vapply(coords, function(x) x[[1]], numeric(1))
         lat    <- vapply(coords, function(x) x[[2]], numeric(1))
-        poly   <- tibble(x = lng, y = lat)
-        
-        # Remove possível ponto duplicado final (= inicial)
-        if(nrow(poly) >= 2 && isTRUE(all(poly[1, ] == poly[nrow(poly), ]))) {
-          poly <- poly[-nrow(poly), ]
-        }
-        
-        # Mantém só 1 polígono atual (último desenhado)
-        att_tmp <- tibble(NAME_ATRIBUTO = "",NAME_DATA = "QUALITATIVO",CLASSE_ATRIBUTO = "",FG_ATIVO = TRUE)
+        poly   <- .drop_dup_last(tibble::tibble(x = lng, y = lat))  # CHANGE: helper
+
+        row_new <- tibble::tibble(
+          CD_ID_COMPONENTE    = feat$properties$`_leaflet_id`,
+          NAME_COMPONENTE     = "",
+          CD_ID_CAMERA        = cameraTarget$CD_ID_CAMERA,
+          POLIGNO_COMPONENTE  = list(poly),
+          ESTRUTURA           = list(NULL)
+        )
+
         if (is.null(frame_data$componente)) {
-          frame_data$componente[[1]] <<- tibble(
-            CD_ID_COMPONENTE = feat$properties$`_leaflet_id`,
-            NAME_COMPONENTE = "",
-            CD_ID_CAMERA = cameraTarget$CD_ID_CAMERA,
-            POLIGNO_COMPONENTE = list(poly),
-            ESTRUTURA         = list(NULL)
-          )
+          frame_data$componente[[1]] <<- row_new
         } else {
-          frame_data$componente[[1]] <<- rbind(
-            frame_data$componente[[1]],
-            tibble(
-              CD_ID_COMPONENTE = feat$properties$`_leaflet_id`,
-              NAME_COMPONENTE  = "",
-              CD_ID_CAMERA      = cameraTarget$CD_ID_CAMERA,
-              POLIGNO_COMPONENTE = list(poly),
-              ESTRUTURA          = list(NULL)
-            )
-          )
+          frame_data$componente[[1]] <<- bind_rows(frame_data$componente[[1]], row_new)  # CHANGE: bind_rows()
         }
-        
-      },ignoreInit = T))
-      
-      # Captura edições (mover vértices, etc.)
-      obs2$add(observeEvent(input$mapFrame_draw_edited_features,{
-        
+      }, ignoreInit = TRUE))
+
+      # --- edições (mover vértices etc.) ---
+      obs2$add(observeEvent(input$mapFrame_draw_edited_features, {
         feats        <- input$mapFrame_draw_edited_features
-        cameraTarget <- cameras |> filter(NAME_CAMERA == input$comboCameras)
-        
+        cameraTarget <- cameras |> filter(NAME_CAMERA == input$comboCameras)  # mantido
         if (is.null(feats$features) || length(feats$features) == 0) return()
-        
-        for(i in seq_along(feats$features)){
-          
+        if (is.null(frame_data$componente) || is.null(frame_data$componente[[1]])) return()
+
+        df <- frame_data$componente[[1]]
+
+        for (i in seq_along(feats$features)) {
           feat <- feats$features[[i]]
-          #if (!identical(feat$geometry$type, "Polygon")) return()
-          id_    <- feat$properties$`_leaflet_id`
-          
-          if(!is.null(feat$properties$layerId)){
-            id_ <- feat$properties$layerId
-          }
+          id_  <- feat$properties$`_leaflet_id`
+          if (!is.null(feat$properties$layerId)) id_ <- feat$properties$layerId
+
           coords <- feat$geometry$coordinates[[1]]
           lng  <- vapply(coords, function(x) x[[1]], numeric(1))
           lat  <- vapply(coords, function(x) x[[2]], numeric(1))
-          poly <- tibble(x = lng, y = lat)
-          if (nrow(poly) >= 2 && isTRUE(all(poly[1, ] == poly[nrow(poly), ]))) {
-            poly <- poly[-nrow(poly), ]
-          }
-          frame_data$componente[[1]]$POLIGNO_COMPONENTE[[which(frame_data$componente[[1]]$CD_ID_COMPONENTE == id_)]] <<- poly
-        }
-        
-      },ignoreInit = T))
-      
-      obs2$add(observeEvent(input$mapFrame_draw_deleted_features, {
-        
-        feats <- input$mapFrame_draw_deleted_features
-        
-        for(i in seq_along(feats$features)){
-          
-          feat <- feats$features[[i]]
-          #if (!identical(feat$geometry$type, "Polygon")) return()
-          id_    <- feat$properties$`_leaflet_id`
-          
-          if(!is.null(feat$properties$layerId)){
-            id_ <- feat$properties$layerId
-          }
-          frame_data$componente[[1]] <<- frame_data$componente[[1]][-which(frame_data$componente[[1]]$CD_ID_COMPONENTE == id_),]
-        }
-        
-      },ignoreInit = TRUE))
-      
-      obs2$add(observeEvent(input$mapFrame_shape_draw_click, {
-        
-        req(!deleting())  # não processa se está deletando
-        ev <- input$mapFrame_shape_draw_click
-        
-        #if (is.null(ev$latlngs) || length(ev$latlngs) < 1) return()
+          poly <- .drop_dup_last(tibble::tibble(x = lng, y = lat))
 
-        target <- frame_data$componente[[1]] |> filter(CD_ID_COMPONENTE == ev$id)
-        componenteReactive(target)
-        swiperSlideNext(idSwiper)
-        
-      },ignoreNULL = T,ignoreInit = T))
-      
+          idx <- match(id_, df$CD_ID_COMPONENTE)  # CHANGE: match() é mais seguro
+          if (!is.na(idx)) {
+            df$POLIGNO_COMPONENTE[[idx]] <- poly
+          } # se não achar, ignora silenciosamente
+        }
+
+        frame_data$componente[[1]] <<- df
+      }, ignoreInit = TRUE))
+
+      # --- deleções ---
+      obs2$add(observeEvent(input$mapFrame_draw_deleted_features, {
+        feats <- input$mapFrame_draw_deleted_features
+        if (is.null(feats$features) || length(feats$features) == 0) return()
+        if (is.null(frame_data$componente) || is.null(frame_data$componente[[1]])) return()
+
+        df <- frame_data$componente[[1]]
+        for (i in seq_along(feats$features)) {
+          feat <- feats$features[[i]]
+          id_  <- feat$properties$`_leaflet_id`
+          if (!is.null(feat$properties$layerId)) id_ <- feat$properties$layerId
+
+          # CHANGE: filtro seguro (evita [-which()] quando não encontra)
+          df <- filter(df, .data$CD_ID_COMPONENTE != id_)
+        }
+        frame_data$componente[[1]] <<- df
+      }, ignoreInit = TRUE))
+
+      # --- clique nos shapes (mantidos exatamente seus inputs) ---
+      obs2$add(observeEvent(input$mapFrame_shape_draw_click, {
+        req(!deleting())  # mantido
+        ev <- input$mapFrame_shape_draw_click
+
+        if (is.null(frame_data$componente) || is.null(frame_data$componente[[1]])) return()
+        target <- frame_data$componente[[1]] |> filter(.data$CD_ID_COMPONENTE == ev$id)
+
+        if (nrow(target) == 1) {  # CHANGE: evita passar df vazio
+          componenteReactive(target)
+          swiperSlideNext(idSwiper)
+        }
+      }, ignoreNULL = TRUE, ignoreInit = TRUE))
+
       obs2$add(observeEvent(input$mapFrame_shape_click, {
-        
-        req(!deleting())  # não processa se está deletando
+        req(!deleting())  # mantido
         ev <- input$mapFrame_shape_click
-        
-        #if (is.null(ev$latlngs) || length(ev$latlngs) < 1) return()
-        target <- frame_data$componente[[1]] |> filter(CD_ID_COMPONENTE == ev$id)
-        componenteReactive(target)
-        swiperSlideNext(idSwiper)
-        
-      },ignoreNULL = T,ignoreInit = T))
-      
-      # liga quando entra no modo delete
+
+        if (is.null(frame_data$componente) || is.null(frame_data$componente[[1]])) return()
+        target <- frame_data$componente[[1]] |> filter(.data$CD_ID_COMPONENTE == ev$id)
+
+        if (nrow(target) == 1) {  # CHANGE: idem
+          componenteReactive(target)
+          swiperSlideNext(idSwiper)
+        }
+      }, ignoreNULL = TRUE, ignoreInit = TRUE))
+
+      # --- estados de delete (mantidos seus inputs) ---
       obs2$add(observeEvent(input$mapFrame_draw_deletestart, {
         deleting(TRUE)
       }, ignoreInit = TRUE))
-      
-      # desliga quando sair do modo delete
+      obs2$add(observeEvent(input$mapFrame_draw_deletestop, {
+        deleting(FALSE)
+      }, ignoreInit = TRUE))
+
       obs2$add(observeEvent(input$mapFrame_draw_stop, {
         if (identical(input$mapFrame_draw_stop$mode, "remove")) {
           deleting(FALSE)
         }
       }, ignoreInit = TRUE))
+
       
       output$mapFrame <- renderLeaflet({
         
@@ -833,7 +837,7 @@ uiEditObjeto <- function(ns,input,output,session,callback = NULL){
         leafletOutput(ns("mapFrame"), height = "512px", width = "100%")
       )
       
-    })
+   })
 
        # ---- CASCA SUPERIOR (apenas UI) ----
       output$slider4 <- renderUI({
@@ -931,9 +935,10 @@ uiEditObjeto <- function(ns,input,output,session,callback = NULL){
             if(!is.null(frame_data)) unlink(frame_data$img_path)
             objeto(NULL)
           }
-
+          deleting(FALSE)
+          editing(FALSE)
           swiperSlidePrevious(idSwiper)
- 
+
         }
       
     },ignoreInit = T))
@@ -1034,6 +1039,8 @@ uiEditObjeto <- function(ns,input,output,session,callback = NULL){
             # volta para init
             swiperSlideTo(idSwiper,0)
             sliderPosition(1L)
+            deleting(FALSE)
+            editing(FALSE)
             showNotification("objeto atualizado com sucesso!", type = "warning")
             
           })){
@@ -1205,7 +1212,7 @@ uiMapa <-function(ns,camera,cameras,frame_data,componentes = NULL){
 # 2) Atualiza os componentes via PROXY (chame sempre que 'componentes' mudar)
 proxy_update_componentes <- function(session,ns,map_id,camera, componentes){
   # Filtra só os componentes da câmera atual
-  comps <- componentes |> dplyr::filter(.data$CD_ID_CAMERA == camera$CD_ID_CAMERA)
+  comps <- componentes |> filter(.data$CD_ID_CAMERA == camera$CD_ID_CAMERA)
   if (nrow(comps) == 0) return(invisible())
 
   # IDs (como string) para ficarem estáveis
@@ -1287,4 +1294,11 @@ uiEstrutura <- function(ns,nameComp,estruturas,estrutura){
       closeAfterSelect = TRUE
     ))
   )
+}
+
+# --- util: checa se polígono fechado repete o 1º ponto no final ---
+.drop_dup_last <- function(poly) {
+  if (nrow(poly) >= 2 && isTRUE(all(poly[1, ] == poly[nrow(poly), ]))) {
+    poly[-nrow(poly), ]
+  } else poly
 }

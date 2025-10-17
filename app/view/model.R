@@ -1,5 +1,5 @@
 box::use(shinyWidgets[confirmSweetAlert],
-   shiny[observeEvent,modalDialog],
+   shiny[observeEvent,modalDialog,tagAppendAttributes],
    htmltools[tags],
    shinyjs[...],
    ./global[play_sound])
@@ -12,7 +12,7 @@ dialogModal <- function(title,size = 'm',...,footer){
       ...,
       size = size,
       footer = footer
-   )
+   )  |> tagAppendAttributes(style = '; overflow: hidden;')
 }
 
 #' @export
