@@ -41,8 +41,8 @@ tryResetConnection <- function(callback,con = newConnection(),is.debug = F,auto.
         if(is.debug)
           debug(callback)
         
-         if(auto.remove)
-           global$removeProgressLoader(0)
+        #  if(auto.remove)
+        #    global$removeProgressLoader(0)
 
         callback(con)
       } else{
@@ -54,7 +54,7 @@ tryResetConnection <- function(callback,con = newConnection(),is.debug = F,auto.
   {
     if(!DBI$dbIsValid(con))
     {
-      global$newProgressLoader()
+      #global$newProgressLoader()
       fu()
     }
     else{
@@ -62,8 +62,8 @@ tryResetConnection <- function(callback,con = newConnection(),is.debug = F,auto.
       if(is.debug)
         debug(callback)
       
-       if(auto.remove)
-        global$removeProgressLoader(0)
+      #  if(auto.remove)
+      #   global$removeProgressLoader(0)
       
       callback(con)
       if(auto.close){
@@ -73,7 +73,7 @@ tryResetConnection <- function(callback,con = newConnection(),is.debug = F,auto.
     }
   }
   else{
-    global$newProgressLoader()
+    #global$newProgressLoader()
     fu()
   }
 }

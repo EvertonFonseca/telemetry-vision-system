@@ -375,7 +375,7 @@ actionWebUser <- function(callback,auto.remove = TRUE,new.progess = TRUE,delay =
   {
     newProgressLoader()
     
-    delay(500,{
+    delay(delay,{
       try(callback,silent = TRUE)
       if(auto.remove)
         removeProgressLoader(delay)

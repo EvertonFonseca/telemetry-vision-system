@@ -6,13 +6,13 @@ box::use(
   vov[...],
   #waiter[use_waiter],
   ../logic/time[format_br],
-  ./setor,
   ./model[...],
   ./themes[...],
-  ./global[...],
-  ./objeto,
-  ./plot,
-  ./estrutura
+  ./global[...]
+  # ./objeto,
+  # ./plot,
+  # ./estrutura,
+  #   ./setor
 )
 
 #' @export
@@ -31,7 +31,7 @@ ui <- function(id) {
         fixed = T,
         controlbarIcon  = "gears",
         title = tagList(
-          span(class = "logo-lg",'Telemetry Vision'),
+          span(class = "logo-lg",style="font-size: 17px;",img(src = "static/favicon.png",height = '20px',width = '20px'),'Telemetry Vision'),
           img(src = "static/favicon.png",height = '20px',width = '20px')),
           uiOutput(ns('containerPlay'),class = 'dropdown-toggle',style = 'position: absolute; left: 50px; margin-top: 10px;'),
           uiOutput(ns('containerHeader')),
@@ -61,11 +61,11 @@ ui <- function(id) {
   
          /* $(function() {
            $(this).bind("contextmenu", function(e) {
-            e.preventDefault();
-            Shiny.setInputValue("onMouseRightClicked","", {priority: "event"});
-            return false;
-          });
-       });*/ \n
+                e.preventDefault();
+                Shiny.setInputValue("onMouseRightClicked","", {priority: "event"});
+                return false;
+              });
+          });*/ \n
 
       ')),
         tags$style(
@@ -183,9 +183,9 @@ server <- function(id) {
     # ---- Obsevent Menu Camera
       observeEvent(input$camera, {
 
-        box::use(./camera,)
+        box::use(./camera)
         sel <- input$camera
-
+      
         if (identical(sel, "cameraNew")) {
           camera$uiNewCamera(ns,input,output,session,function(){
             box::unload(camera)
@@ -205,12 +205,20 @@ server <- function(id) {
 
       # ---- Obsevent Menu Setor
       observeEvent(input$setor, {
+        
+        box::use(./setor)
         sel <- input$setor
 
         if (identical(sel, "setorNew")) {
-          setor$uiNewSetor(ns,input,output,session)
+          setor$uiNewSetor(ns,input,output,session,function(){
+            box::unload(setor)
+            gc()
+          })
         } else if (identical(sel, "setorTable")) {
-          setor$uiEditSetor(ns,input,output,session)
+          setor$uiEditSetor(ns,input,output,session,function(){
+            box::unload(setor)
+            gc()
+          })
         }
         # reset da seleção para permitir clicar no mesmo item novamente
         if (!is.null(sel) && sel %in% c("setorNew", "setorTable"))
@@ -220,12 +228,19 @@ server <- function(id) {
       # ---- Obsevent Menu Objeto
       observeEvent(input$objeto, {
 
+        box::use(./objeto)
         sel <- input$objeto
 
         if (identical(sel, "objetoNew")) {
-          objeto$uiNewObjeto(ns,input,output,session)
+          objeto$uiNewObjeto(ns,input,output,session,function(){
+            box::unload(objeto)
+            gc()
+          })
         } else if (identical(sel, "objetoTable")) {
-          objeto$uiEditObjeto(ns,input,output,session)
+          objeto$uiEditObjeto(ns,input,output,session,function(){
+            box::unload(objeto)
+            gc()
+          })
         }
         # reset da seleção para permitir clicar no mesmo item novamente
         if (!is.null(sel) && sel %in% c("objetoNew", "objetoTable"))
@@ -235,12 +250,19 @@ server <- function(id) {
               # ---- Obsevent Menu Objeto
       observeEvent(input$estrutura, {
 
+        box::use(./estrutura)
         sel <- input$estrutura
     
         if (identical(sel, "estruturaNew")) {
-          estrutura$uiNewEstrutura(ns,input,output,session)
+          estrutura$uiNewEstrutura(ns,input,output,session,function(){
+            box::unload(estrutura)
+            gc()
+          })
         } else if (identical(sel, "estruturaTable")) {
-          estrutura$uiEditEstrutura(ns,input,output,session)
+          estrutura$uiEditEstrutura(ns,input,output,session,function(){
+            box::unload(estrutura)
+            gc()
+          })
         }
         # reset da seleção para permitir clicar no mesmo item novamente
         if (!is.null(sel) && sel %in% c("estruturaNew", "estruturaTable"))
@@ -250,12 +272,19 @@ server <- function(id) {
       # ---- Obsevent Menu Plot
       observeEvent(input$plot, {
 
+        box::use(./plot)
         sel <- input$plot
 
         if (identical(sel, "plotNew")) {
-          plot$uiNewPlot(ns,input,output,session)
+          plot$uiNewPlot(ns,input,output,session,function(){
+            box::unload(plot)
+            gc()
+          })
         } else if (identical(sel, "plotTable")) {
-          plot$uiEditPlot(ns,input,output,session)
+          plot$uiEditPlot(ns,input,output,session,function(){
+            box::unload(plot)
+            gc()
+          })
         }
         # reset da seleção para permitir clicar no mesmo item novamente
         if (!is.null(sel) && sel %in% c("plotNew", "plotTable"))
@@ -265,7 +294,7 @@ server <- function(id) {
       # ---- Obsevent Menu Camera
       observeEvent(input$treinar, {
 
-        box::use(./treinar,)
+        box::use(./treinar)
         sel <- input$treinar
 
         if (identical(sel, "treinarNew")) {
@@ -432,4 +461,10 @@ renderMenuSideBarMain <- function(ns){
         )
       )
     })
+}
+
+calbackUnload <- function(pacote) {
+  box::unload(pacote)
+  gc()
+  return(invisible(NULL))
 }

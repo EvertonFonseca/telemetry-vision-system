@@ -52,7 +52,7 @@ box::use(
 )
 
 #' @export
- uiNewSetor <- function(ns,input,output,session){
+ uiNewSetor <- function(ns,input,output,session,callback){
 
   obs <- newObserve()
  
@@ -70,6 +70,7 @@ box::use(
    obs$add(observeEvent(input$btSair,{
         obs$destroy()
         removeModal(session)
+        callback()
    },ignoreInit = T,ignoreNULL = T))
    
    ## Clear
@@ -132,6 +133,7 @@ box::use(
         if(!status){
             obs$destroy()
             removeModal(session)
+            callback()
         }
         
       },ignoreInit = TRUE,once = TRUE)
@@ -143,7 +145,7 @@ box::use(
  }
  
 #' @export
-uiEditSetor <- function(ns,input,output,session,callback = NULL){
+uiEditSetor <- function(ns,input,output,session,callback){
 
    db$tryResetConnection(function(con){
   
@@ -196,7 +198,7 @@ uiEditSetor <- function(ns,input,output,session,callback = NULL){
     
       output$slider1 <- renderUI({
         
-        output$tableDinamica <- DT$renderDataTable({
+        output$tableDinamicaSetor <- DT$renderDataTable({
       
           dataset  <- setores()
 
@@ -261,7 +263,7 @@ uiEditSetor <- function(ns,input,output,session,callback = NULL){
         
         div(
           style = 'border-style: solid; border-color: white; border-width: 1px; overflow-x: auto;',
-          DT$dataTableOutput(outputId = ns('tableDinamica'))
+          DT$dataTableOutput(outputId = ns('tableDinamicaSetor'))
         )
         
       })
@@ -314,7 +316,7 @@ uiEditSetor <- function(ns,input,output,session,callback = NULL){
                           obs$destroy()
                           removeModal(session)
                           swiperDestroy(idSwiper)
-                          callback(NULL)
+                          callback()
                         }else{
                           setores(setores.aux)
                         }
@@ -335,6 +337,7 @@ uiEditSetor <- function(ns,input,output,session,callback = NULL){
         obs$destroy()
         swiperDestroy(idSwiper)
         removeModal(session)
+        callback()
       }
       else{
         setor(NULL)

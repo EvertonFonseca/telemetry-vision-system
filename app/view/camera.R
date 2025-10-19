@@ -201,7 +201,7 @@ uiEditCamera <- function(ns,input,output,session,callback = NULL){
   
     output$slider1 <- renderUI({
       
-      output$tableDinamica <- DT$renderDataTable({
+      output$tableDinamicaCamera <- DT$renderDataTable({
      
         dataset  <- cameras()
 
@@ -267,7 +267,7 @@ uiEditCamera <- function(ns,input,output,session,callback = NULL){
       
       div(
         style = 'border-style: solid; border-color: white; border-width: 1px; overflow-x: auto;',
-        DT$dataTableOutput(outputId = ns('tableDinamica'))
+        DT$dataTableOutput(outputId = ns('tableDinamicaCamera'))
       )
       
     })
@@ -316,7 +316,6 @@ uiEditCamera <- function(ns,input,output,session,callback = NULL){
                         obs$destroy()
                         removeModal(session)
                         swiperDestroy(idSwiper)
-                        callback(NULL)
                       }else{
                         cameras(cameras.aux)
                       }

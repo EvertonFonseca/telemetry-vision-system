@@ -42,7 +42,7 @@ box::use(
 )
 
 #' @export
- uiNewPlot <- function(ns,input,output,session){
+ uiNewPlot <- function(ns,input,output,session,callback){
    
   db$tryResetConnection(function(con){
 

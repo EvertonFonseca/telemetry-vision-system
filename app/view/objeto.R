@@ -1,5 +1,5 @@
 box::use(
-  shinyjs[inlineCSS],
+  shinyjs[inlineCSS,disable],
   shiny[...],
   stringi,
   . / model[...],
@@ -46,7 +46,7 @@ box::use(
 initMap <- FALSE
 
 #' @export
- uiNewObjeto <- function(ns,input,output,session){
+ uiNewObjeto <- function(ns,input,output,session,callback){
    
   db$tryResetConnection(function(con){
 
@@ -75,7 +75,7 @@ initMap <- FALSE
       div(
        id = paste0('parent', id),
        style = paste0("height: 90%;"),
-       shinyjs::inlineCSS(cssStyle),
+       inlineCSS(cssStyle),
       dialogModal(
         title = textOutput(ns("titleTexto")),
         size = 'm',
@@ -331,6 +331,7 @@ initMap <- FALSE
           obs2$destroy()
           if(!is.null(frame_data)) unlink(frame_data$img_path)
           removeModal(session)
+          callback()
           swiperDestroy(idSwiper)
         }else{
           status   <- is.null(isolate(componenteReactive()))
@@ -480,6 +481,7 @@ initMap <- FALSE
         if(!status){
             obs$destroy()
             removeModal(session)
+            callback()
             swiperDestroy(idSwiper)
         }else{
           deleting(FALSE)
@@ -502,7 +504,7 @@ initMap <- FALSE
  }
  
 #' @export
-uiEditObjeto <- function(ns,input,output,session,callback = NULL){
+uiEditObjeto <- function(ns,input,output,session,callback){
 
   #open database
   db$tryResetConnection(function(con){
@@ -534,7 +536,7 @@ uiEditObjeto <- function(ns,input,output,session,callback = NULL){
       div(
        id = paste0('parent', id),
        style = paste0("height: 90%;"),
-       shinyjs::inlineCSS(cssStyle),
+       inlineCSS(cssStyle),
       dialogModal(
         title = textOutput(ns("titleTexto")),
         size = 'm',
@@ -605,7 +607,7 @@ uiEditObjeto <- function(ns,input,output,session,callback = NULL){
           return(div_tmp)
         }
 
-        output$tableDinamica <- DT$renderDataTable({
+        output$tableDinamicaObjeto <- DT$renderDataTable({
      
           colunaNames <- c('LINHA','OBJETO','VISUALIZAR / EDITAR','REMOVER')
         
@@ -666,7 +668,7 @@ uiEditObjeto <- function(ns,input,output,session,callback = NULL){
         
         div(
           style = 'border-style: solid; border-color: white; border-width: 1px; overflow-x: auto;',
-          DT$dataTableOutput(outputId = ns('tableDinamica'))
+          DT$dataTableOutput(outputId = ns('tableDinamicaObjeto'))
         )
         
       })
@@ -679,7 +681,7 @@ uiEditObjeto <- function(ns,input,output,session,callback = NULL){
       cameraComponetes <- unique(unlist(map(objetoSelect$CONFIG[[1]]$COMPONENTES,~ map(.x$CAMERAS,~ .x$NAME_CAMERA))))
 
       session$onFlushed(function(){
-        shinyjs::disable(ns("comboTipoObjeto"))
+        disable(ns("comboTipoObjeto"))
       }, once = TRUE)
 
       uiMain(ns,
@@ -884,8 +886,8 @@ uiEditObjeto <- function(ns,input,output,session,callback = NULL){
                           obs$destroy()
                           obs2$destroy()
                           removeModal(session)
+                          callback()
                           swiperDestroy(idSwiper)
-                          callback(NULL)
                         }else{
                           objetos(objetos.aux)
                         }
@@ -906,6 +908,7 @@ uiEditObjeto <- function(ns,input,output,session,callback = NULL){
           obs2$destroy()
           if(!is.null(frame_data)) unlink(frame_data$img_path)
           removeModal(session)
+          callback()
           swiperDestroy(idSwiper)
         }else{
           status   <- is.null(isolate(componenteReactive()))

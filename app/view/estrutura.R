@@ -35,7 +35,7 @@ box::use(
 )
 
 #' @export
-uiNewEstrutura <- function(ns,input,output,session){
+uiNewEstrutura <- function(ns,input,output,session,callback){
   
   db$tryResetConnection(function(con){
     
@@ -201,6 +201,7 @@ uiNewEstrutura <- function(ns,input,output,session){
                 obs$destroy()
                 obs2$destroy()
                 removeModal(session)
+                callback()
                 
               },ignoreInit = T))
               
@@ -272,6 +273,7 @@ uiNewEstrutura <- function(ns,input,output,session){
                             obs$destroy()
                             obs2$destroy()
                             removeModal(session)
+                            callback()
                           }
                           
                         },ignoreInit = TRUE,once = TRUE)
@@ -287,7 +289,7 @@ uiNewEstrutura <- function(ns,input,output,session){
 
 
 #' @export
-uiEditEstrutura <- function(ns,input,output,session,callback = NULL){
+uiEditEstrutura <- function(ns,input,output,session,callback){
 
   db$tryResetConnection(function(con){
     
@@ -356,7 +358,7 @@ uiEditEstrutura <- function(ns,input,output,session,callback = NULL){
       
       output$slider1 <- renderUI({
         
-        output$tableDinamica <- DT$renderDataTable({
+        output$tableDinamicaEstrutura <- DT$renderDataTable({
           
           dataset  <- estruturas()
           
@@ -421,7 +423,7 @@ uiEditEstrutura <- function(ns,input,output,session,callback = NULL){
       
       div(
         style = 'border-style: solid; border-color: white; border-width: 1px; overflow-x: auto;',
-        DT$dataTableOutput(outputId = ns('tableDinamica'))
+        DT$dataTableOutput(outputId = ns('tableDinamicaEstrutura'))
       )
       
     })
@@ -598,7 +600,7 @@ uiEditEstrutura <- function(ns,input,output,session,callback = NULL){
               obs$destroy()
               removeModal(session)
               swiperDestroy(idSwiper)
-              callback(NULL)
+              callback()
             }else{
               estruturas(estruturas.aux)
             }
@@ -619,6 +621,7 @@ uiEditEstrutura <- function(ns,input,output,session,callback = NULL){
           obs$destroy()
           swiperDestroy(idSwiper)
           removeModal(session)
+          callback()
         }
         else{
           estrutura(NULL)
