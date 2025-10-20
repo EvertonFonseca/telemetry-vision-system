@@ -1,2 +1,2 @@
-# Rhino / shinyApp entrypoint. Do not edit.
-rhino::app()
+# Entrypoint
+shiny::runApp(rhino::app(), host = "127.0.0.1", port = 5000)

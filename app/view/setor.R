@@ -44,11 +44,12 @@ box::use(
   .. / model / swiper[...],
   DT,
   shinycssloaders,
-  db = .. / logic / database,
   .. / logic / setor_dao[...],
   stringr,
   dplyr[...],
-  lubridate[...]
+  lubridate[...],
+  dbp  = ../infra/db_pool,
+  db   = ../infra/database
 )
 
 #' @export
@@ -88,14 +89,14 @@ box::use(
     nomeSetor <- isolate(toupper(input$textNameSetor))
 
     #open database
-    db$tryResetConnection(function(con){
+    db$tryTransaction(function(conn){
 
       if(stringi$stri_isempty(stringr$str_trim(nomeSetor))){
         showNotification("O nome do Setor não foi preenchido!", type = "warning")
         return()
       }
       
-      if(checkifExistNameSetor(con = con,name = nomeSetor)){
+      if(checkifExistNameSetor(conn,name = nomeSetor)){
         showNotification("O nome do Setor já possui nos registros!", type = "warning")
       }
 
@@ -106,9 +107,9 @@ box::use(
       obj$TEMPO_REATIVAR_UNIDADE_SETOR <- isolate(input$comboUnit)
       obj$TEMPO_PASSADO_SETOR          <- isolate(input$comboTimerLook)
       obj$TEMPO_PASSADO_UNIDADE_SETOR  <- isolate(input$comboUnitLook)
-      id                               <- db$nextSequenciaID(con,'SETOR')
+      id                               <- db$nextSequenciaID('SETOR')
       
-      insertNewSetor(con,id,obj)
+      insertNewSetor(conn,id,obj)
 
       dialogConfirm(
         session = session,
@@ -146,13 +147,11 @@ box::use(
  
 #' @export
 uiEditSetor <- function(ns,input,output,session,callback){
-
-   db$tryResetConnection(function(con){
   
     obs            <- newObserve()
     sliderPosition <- reactiveVal(1L)
     idSwiper       <- ns('swiperMain')
-    setores        <- reactiveVal(selectAllSetors(con))
+    setores        <- reactiveVal(selectAllSetors(dbp$get_pool()))
     setor          <- reactiveVal(NULL)
 
     showModal(
@@ -306,11 +305,10 @@ uiEditSetor <- function(ns,input,output,session,callback){
                     },
                     callback.yes = function(){
                       
-                      db$tryResetConnection(con,function(conn){
+                       db$tryTransaction(function(conn){
                         
-                        con <<- conn
-                        deleteSetor(con,setor$CD_ID_SETOR)
-                        setores.aux <- selectAllSetors(con)
+                        deleteSetor(conn,setor$CD_ID_SETOR)
+                        setores.aux <- selectAllSetors(conn)
                         if(nrow(setores.aux) == 0){
                           #destroy all observe events
                           obs$destroy()
@@ -351,7 +349,7 @@ uiEditSetor <- function(ns,input,output,session,callback){
       
       req(setor())
       
-      db$tryResetConnection(function(con){
+      db$tryTransaction(function(conn){
 
         id        <- isolate(setor()$CD_ID_SETOR)
         nomeSetor <- isolate(toupper(input$textNameSetor))
@@ -361,7 +359,7 @@ uiEditSetor <- function(ns,input,output,session,callback){
           return()
         }
         
-        if(checkifExistNameSetorEdit(con = con,id,name = nomeSetor)){
+        if(checkifExistNameSetorEdit(conn,id,name = nomeSetor)){
           showNotification("O nome do Setor já possui nos registros!", type = "warning")
         }
 
@@ -374,12 +372,12 @@ uiEditSetor <- function(ns,input,output,session,callback){
         obj$TEMPO_PASSADO_SETOR          <- isolate(input$comboTimerLook)
         obj$TEMPO_PASSADO_UNIDADE_SETOR  <- isolate(input$comboUnitLook)
 
-        if(!updateSetor(con,obj)){
+        if(!updateSetor(conn,obj)){
           showNotification("setor não foi atualizado com sucesso erro durante processo!", type = "warning")
           return()
         }
         #load todos os setores
-        setores(selectAllSetors(con))
+        setores(selectAllSetors(conn))
         
         swiperSlidePrevious(idSwiper)
         sliderPosition(isolate(sliderPosition()) - 1L)
@@ -388,7 +386,7 @@ uiEditSetor <- function(ns,input,output,session,callback){
       })
 
     },ignoreInit = T))
-  })
+
 }
 
 

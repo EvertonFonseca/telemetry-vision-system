@@ -29,52 +29,48 @@ checkifExistUrlSetorEdit <- function(con,id,url){
 #' @export
 insertNewSetor <- function(con,id,setor){
   
-  .run_tx_bool(con,{
-    query <- 'INSERT INTO SETOR (CD_ID_SETOR,NAME_SETOR,TEMPO_REATIVAR_SETOR,TEMPO_REATIVAR_UNIDADE_SETOR,TEMPO_PASSADO_SETOR,TEMPO_PASSADO_UNIDADE_SETOR) VALUES (?,?,?,?,?,?)'
-    result <-  DBI$dbSendStatement(con,query)
-    DBI$dbBind(result, c(
-      as.integer(id),
-      setor$NAME_SETOR,
-      setor$TEMPO_REATIVAR_SETOR,
-      setor$TEMPO_REATIVAR_UNIDADE_SETOR,
-      setor$TEMPO_PASSADO_SETOR,
-      setor$TEMPO_PASSADO_UNIDADE_SETOR
-    ))
-    DBI$dbClearResult(result)
-    
-  })
+  query <- 'INSERT INTO SETOR (CD_ID_SETOR,NAME_SETOR,TEMPO_REATIVAR_SETOR,TEMPO_REATIVAR_UNIDADE_SETOR,TEMPO_PASSADO_SETOR,TEMPO_PASSADO_UNIDADE_SETOR) VALUES (?,?,?,?,?,?)'
+  result <-  DBI$dbSendStatement(con,query)
+  DBI$dbBind(result, c(
+    as.integer(id),
+    setor$NAME_SETOR,
+    setor$TEMPO_REATIVAR_SETOR,
+    setor$TEMPO_REATIVAR_UNIDADE_SETOR,
+    setor$TEMPO_PASSADO_SETOR,
+    setor$TEMPO_PASSADO_UNIDADE_SETOR
+  ))
+  DBI$dbClearResult(result)
   
   return(as.integer(id))
 }
 #' @export
 updateSetor <- function(con,setor){
   
-   .run_tx_bool(con,{
-    
-    query <- 'UPDATE SETOR SET NAME_SETOR = ?,
+  
+  query <- 'UPDATE SETOR SET NAME_SETOR = ?,
                               TEMPO_REATIVAR_SETOR = ?,
                               TEMPO_REATIVAR_UNIDADE_SETOR = ?,
                               TEMPO_PASSADO_SETOR = ?,
                               TEMPO_PASSADO_UNIDADE_SETOR = ? 
                               WHERE CD_ID_SETOR = ?'
-    result <-  DBI::dbSendStatement(con,query)
-    DBI$dbBind(result, c(
-      setor$NAME_SETOR,
-      setor$TEMPO_REATIVAR_SETOR,
-      setor$TEMPO_REATIVAR_UNIDADE_SETOR,
-      setor$TEMPO_PASSADO_SETOR,
-      setor$TEMPO_PASSADO_UNIDADE_SETOR,
-      setor$CD_ID_SETOR
-    ))
-    DBI$dbClearResult(result)
-  })
+  result <-  DBI::dbSendStatement(con,query)
+  DBI$dbBind(result, c(
+    setor$NAME_SETOR,
+    setor$TEMPO_REATIVAR_SETOR,
+    setor$TEMPO_REATIVAR_UNIDADE_SETOR,
+    setor$TEMPO_PASSADO_SETOR,
+    setor$TEMPO_PASSADO_UNIDADE_SETOR,
+    setor$CD_ID_SETOR
+  ))
+  DBI$dbClearResult(result)
+  
 }
 
 #' @export
 selectAllSetors <- function(con){
   
   DBI$dbGetQuery(con,'SELECT * FROM SETOR')
-
+  
 }
 
 #' @export

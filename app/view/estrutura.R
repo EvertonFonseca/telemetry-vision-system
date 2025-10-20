@@ -23,7 +23,6 @@ box::use(
   .. / model / swiper[...],
   DT,
   shinycssloaders,
-  db = .. / logic / database,
   ../ logic/estrutura_dao[...],
   stringr,
   dplyr[...],
@@ -32,305 +31,300 @@ box::use(
   htmlwidgets,
   ../logic/utils[...],
   purrr[map,map_df,map_chr],
+  dbp  = ../infra/db_pool,
+  db   = ../infra/database
 )
 
 #' @export
 uiNewEstrutura <- function(ns,input,output,session,callback){
   
-  db$tryResetConnection(function(con){
-    
-    obs                <- newObserve()
-    obs2               <- newObserve()
-    tipoDatas          <- selectAllTipoDados(con)
-    attributoReactive  <- reactiveVal(modelAtributo())
-    
-    id       <- ns('dialogObj')
-    cssStyle <- list()
-    cssStyle[[paste0(' #parent',id,' .modal-dialog')]]  <- paste0('height: 80% !important;')
-    cssStyle[[paste0(' #parent',id,' .modal-content')]] <- paste0('width: 100% !important; height: 100% !important;')
-    cssStyle[[paste0(' #parent',id,' .modal-body')]]    <- paste0('width: 100% !important; height: calc(100% - 57px - 65px) !important; overflow-y: auto;')
-    
-    showModal(
-      session = session,
-      div(
-        id = paste0('parent', id),
-        style = paste0("height: 90%;"),
-        shinyjs::inlineCSS(cssStyle),
-        dialogModal(
-          title = "Nova Estrutura",
-          size = 'm',
-          uiAtributos(ns),  
-          footer = uiOutput(ns('uiFooter')))))
+  obs                <- newObserve()
+  obs2               <- newObserve()
+  tipoDatas          <- selectAllTipoDados(dbp$get_pool())
+  attributoReactive  <- reactiveVal(modelAtributo())
+  
+  id       <- ns('dialogObj')
+  cssStyle <- list()
+  cssStyle[[paste0(' #parent',id,' .modal-dialog')]]  <- paste0('height: 80% !important;')
+  cssStyle[[paste0(' #parent',id,' .modal-content')]] <- paste0('width: 100% !important; height: 100% !important;')
+  cssStyle[[paste0(' #parent',id,' .modal-body')]]    <- paste0('width: 100% !important; height: calc(100% - 57px - 65px) !important; overflow-y: auto;')
+  
+  showModal(
+    session = session,
+    div(
+      id = paste0('parent', id),
+      style = paste0("height: 90%;"),
+      shinyjs::inlineCSS(cssStyle),
+      dialogModal(
+        title = "Nova Estrutura",
+        size = 'm',
+        uiAtributos(ns),  
+        footer = uiOutput(ns('uiFooter')))))
+        
+        output$uiFooter <- renderUI({
           
-          output$uiFooter <- renderUI({
-            
-            tagList(actionButton(ns("btSair"), label = "Voltar",icon = icon("arrow-left")),
-            actionButton(ns('btSalvar'),'Salvar',class = "btn-primary",icon = icon("save")))
-            
-          })
+          tagList(actionButton(ns("btSair"), label = "Voltar",icon = icon("arrow-left")),
+          actionButton(ns('btSalvar'),'Salvar',class = "btn-primary",icon = icon("save")))
           
-          # ---- (Re)CONSTRUÇÃO DE UI + OBSERVERS DINÂMICOS ----
-          obs$add(observeEvent(attributoReactive(), {
+        })
+        
+        # ---- (Re)CONSTRUÇÃO DE UI + OBSERVERS DINÂMICOS ----
+        obs$add(observeEvent(attributoReactive(), {
+          
+          req(attributoReactive())
+          
+          atributos <- attributoReactive()
+          obs2$clear()  # limpa observers antigos
+          len  <- nrow(atributos)
+          
+          output$containerAtributo <- renderUI({
             
-            req(attributoReactive())
-            
-            atributos <- attributoReactive()
-            obs2$clear()  # limpa observers antigos
-            len  <- nrow(atributos)
-            
-            output$containerAtributo <- renderUI({
+            divLista <- div()
+            for (i in 1:len) {
               
-              divLista <- div()
-              for (i in 1:len) {
-                
-                attributo  <- atributos[i,]
-                attAtivo   <- attributo$FG_ATIVO
-                attNome    <- attributo$NAME_ATRIBUTO
-                attTipo    <- attributo$NAME_DATA
-                attClasses <- attributo$CLASSE_ATRIBUTO
-                
-                local({
-                  ii <- i
+              attributo  <- atributos[i,]
+              attAtivo   <- attributo$FG_ATIVO
+              attNome    <- attributo$NAME_ATRIBUTO
+              attTipo    <- attributo$NAME_DATA
+              attClasses <- attributo$CLASSE_ATRIBUTO
+              
+              local({
+                ii <- i
+                obs2$add(
+                  observeEvent(input[[sprintf("atributoDel_%d", ii)]], ignoreInit = TRUE, {
+                    atributos <- isolate(removerAtributo(input,attributoReactive()))
+                    attributoReactive(atributos[-ii,])
+                  }))
+                  
                   obs2$add(
-                    observeEvent(input[[sprintf("atributoDel_%d", ii)]], ignoreInit = TRUE, {
-                      atributos <- isolate(removerAtributo(input,attributoReactive()))
-                      attributoReactive(atributos[-ii,])
+                    observeEvent(input[[sprintf("comboTipodados_%d", ii)]], ignoreInit = TRUE, {
+                      comboTipo <- input[[sprintf("comboTipodados_%d", ii)]]
+                      visible   <- comboTipo == "QUALITATIVE"
+                      elemento  <- sprintf("textoClasse_%d", ii)
+                      if(visible){
+                        set_readonly_js(elemento,FALSE,session)
+                        updateTextAreaInput(session,elemento,placeholder = "Digite as classes separadas por vírgula.")
+                      }else{
+                        set_readonly_js(elemento,TRUE,session)
+                        updateTextAreaInput(session,elemento,value = "",placeholder = "")
+                      }
                     }))
                     
-                    obs2$add(
-                      observeEvent(input[[sprintf("comboTipodados_%d", ii)]], ignoreInit = TRUE, {
-                        comboTipo <- input[[sprintf("comboTipodados_%d", ii)]]
-                        visible   <- comboTipo == "QUALITATIVE"
-                        elemento  <- sprintf("textoClasse_%d", ii)
-                        if(visible){
-                          set_readonly_js(elemento,FALSE,session)
-                          updateTextAreaInput(session,elemento,placeholder = "Digite as classes separadas por vírgula.")
-                        }else{
-                          set_readonly_js(elemento,TRUE,session)
-                          updateTextAreaInput(session,elemento,value = "",placeholder = "")
-                        }
-                      }))
-                      
-                    })
-                    
-                    atributoElement <- panelTitle(
-                      title = paste0("Atributo: ", i),
-                      background.color.title = "white",
-                      title.color  = "black",
-                      border.color = "lightgray",
-                      children = div(
-                        style = "margin-top: 10px; margin-left: 10px;",
-                        inlineCSS(paste0("#",ns(sprintf("atributo_%d", i)), " {text-transform: uppercase;}")),
-                        inlineCSS(paste0("#",ns(sprintf("textoClasse_%d", i)), " {text-transform: uppercase;}")),
-                        br(),
-                        splitLayout(
-                          style = "overflow-x: auto",
-                          tagList(
-                            tags$label("Ativar", style = "font-size: 15px;"),
-                            div( style = "margin-top: 5px;",
-                            prettyToggle(
-                              inputId   = ns(sprintf("checkboxAtributoAtivo_%d", i)), 
-                              label_on  = "Sim",
-                              label_off = "Não",
-                              outline   = TRUE, plain = TRUE, value = attAtivo,
-                              icon_on   = icon("thumbs-up"),
-                              icon_off  = icon("thumbs-down"),
-                              bigger    = TRUE, width = "auto",
-                            ))
-                          ),
-                          textInput(
-                            inputId = ns(sprintf("atributo_%d", i)),
-                            label   = "Nome", width = "100%",
-                            value = attNome,
-                            placeholder = "Nome para atributo"
-                          ),
-                          selectizeInput(
-                            ns(sprintf("comboTipodados_%d", i)),
-                            label   = "Tipo",
-                            selected = attTipo,
-                            choices = tipoDatas$NAME_DATA,
-                            options  = list(
-                              dropdownParent = 'body',
-                              openOnFocus = TRUE,
-                              closeAfterSelect = TRUE
-                            )
-                          ),
-                          actionButton(
-                            ns(sprintf("atributoDel_%d", i)),
-                            label = "", icon = icon("trash"),
-                            style = paste0("margin-top: 25px;",ifelse(i == 1," visibility: hidden;",""))
-                          ),
-                          cellWidths = c("50px", "200px", "150px", "50px")
-                        ),
-                        textAreaInput(ns(sprintf("textoClasse_%d", i)),
-                        label = "Classes",
-                        value = attClasses,
-                        resize = "none",
-                        placeholder = "Digite as classes separadas por vírgula.",
-                        width = '98%')
-                      )
-                    )
-                    divLista <- tagAppendChildren(divLista, br(), atributoElement)
-                  }
-                  divLista
-                })
-                
-              },ignoreInit = FALSE))
-    
-              # Observer do botão "Clear"
-              obs$add(
-                observeEvent(input$atributoClearAll, ignoreInit = TRUE, {
-                  actionWebUser({
-                    attributoReactive(modelAtributo())
                   })
-                })
-              )
-              
-              # Observer do botão "Adicionar"
-              obs$add(
-                observeEvent(input$atributoAdd, ignoreInit = TRUE, {
-                  actionWebUser({
-                    atributos <- isolate(adicionarNewAtributo(input,attributoReactive()))
-                    attributoReactive(atributos)
-                  })
-                })
-              )
-    
-              obs$add(observeEvent(input$btSair,{
-                
-                obs$destroy()
-                obs2$destroy()
-                removeModal(session)
-                callback()
-                
-              },ignoreInit = T))
-              
-              ## Salvar Estrutrua
-              obs$add(observeEvent(input$btSalvar,{
-                
-                db$tryResetConnection(function(con){
                   
-                    nomeEstrutura <- isolate(toupper(input$textNameEstrutura))
-                    
-                    if(stringi$stri_isempty(stringr$str_trim(nomeEstrutura))){
-                      showNotification("O nome do Estrutura não foi preenchido!", type = "warning")
-                      return()
-                    }
-                    
-                    if(checkifExistNameEstrutura(con = con,name = nomeEstrutura)){
-                      showNotification("O nome da Estrutura já possui nos registros!", type = "warning")
-                      return()
-                    }
-                                      
-                    atributos <- isolate(obterAllAtributos(input,attributoReactive()))
-
-                    if(!checkAtributoValidadao(atributos)){
-                        return()
-                    }
+                  atributoElement <- panelTitle(
+                    title = paste0("Atributo: ", i),
+                    background.color.title = "white",
+                    title.color  = "black",
+                    border.color = "lightgray",
+                    children = div(
+                      style = "margin-top: 10px; margin-left: 10px;",
+                      inlineCSS(paste0("#",ns(sprintf("atributo_%d", i)), " {text-transform: uppercase;}")),
+                      inlineCSS(paste0("#",ns(sprintf("textoClasse_%d", i)), " {text-transform: uppercase;}")),
+                      br(),
+                      splitLayout(
+                        style = "overflow-x: auto",
+                        tagList(
+                          tags$label("Ativar", style = "font-size: 15px;"),
+                          div( style = "margin-top: 5px;",
+                          prettyToggle(
+                            inputId   = ns(sprintf("checkboxAtributoAtivo_%d", i)), 
+                            label_on  = "Sim",
+                            label_off = "Não",
+                            outline   = TRUE, plain = TRUE, value = attAtivo,
+                            icon_on   = icon("thumbs-up"),
+                            icon_off  = icon("thumbs-down"),
+                            bigger    = TRUE, width = "auto",
+                          ))
+                        ),
+                        textInput(
+                          inputId = ns(sprintf("atributo_%d", i)),
+                          label   = "Nome", width = "100%",
+                          value = attNome,
+                          placeholder = "Nome para atributo"
+                        ),
+                        selectizeInput(
+                          ns(sprintf("comboTipodados_%d", i)),
+                          label   = "Tipo",
+                          selected = attTipo,
+                          choices = tipoDatas$NAME_DATA,
+                          options  = list(
+                            dropdownParent = 'body',
+                            openOnFocus = TRUE,
+                            closeAfterSelect = TRUE
+                          )
+                        ),
+                        actionButton(
+                          ns(sprintf("atributoDel_%d", i)),
+                          label = "", icon = icon("trash"),
+                          style = paste0("margin-top: 25px;",ifelse(i == 1," visibility: hidden;",""))
+                        ),
+                        cellWidths = c("50px", "200px", "150px", "50px")
+                      ),
+                      textAreaInput(ns(sprintf("textoClasse_%d", i)),
+                      label = "Classes",
+                      value = attClasses,
+                      resize = "none",
+                      placeholder = "Digite as classes separadas por vírgula.",
+                      width = '98%')
+                    )
+                  )
+                  divLista <- tagAppendChildren(divLista, br(), atributoElement)
+                }
+                divLista
+              })
+              
+            },ignoreInit = FALSE))
+            
+            # Observer do botão "Clear"
+            obs$add(
+              observeEvent(input$atributoClearAll, ignoreInit = TRUE, {
+                actionWebUser({
+                  attributoReactive(modelAtributo())
+                })
+              })
+            )
+            
+            # Observer do botão "Adicionar"
+            obs$add(
+              observeEvent(input$atributoAdd, ignoreInit = TRUE, {
+                actionWebUser({
+                  atributos <- isolate(adicionarNewAtributo(input,attributoReactive()))
+                  attributoReactive(atributos)
+                })
+              })
+            )
+            
+            obs$add(observeEvent(input$btSair,{
+              
+              obs$destroy()
+              obs2$destroy()
+              removeModal(session)
+              callback()
+              
+            },ignoreInit = T))
+            
+            ## Salvar Estrutrua
+            obs$add(observeEvent(input$btSalvar,{
+              
+                nomeEstrutura <- isolate(toupper(input$textNameEstrutura))
+                
+                if(stringi$stri_isempty(stringr$str_trim(nomeEstrutura))){
+                  showNotification("O nome do Estrutura não foi preenchido!", type = "warning")
+                  return()
+                }
+                
+                if(checkifExistNameEstrutura(dbp$get_pool(),name = nomeEstrutura)){
+                  showNotification("O nome da Estrutura já possui nos registros!", type = "warning")
+                  return()
+                }
+                
+                atributos <- isolate(obterAllAtributos(input,attributoReactive()))
+                
+                if(!checkAtributoValidadao(atributos)){
+                  return()
+                }
+   
+                # try insert or roolback
+                if(!db$tryTransaction(function(conn){
+             
+                  #check if it has already data of Câmera
+                  obj <- list()
+                  obj$NAME_ESTRUTURA   <- nomeEstrutura
+                  obj$CD_ID_ESTRUTURA  <- db$nextSequenciaID(conn,'ESTRUTURA')
+                  db$insertTable(conn,"ESTRUTURA",obj)
                  
-                    # try insert or roolback
-                    if(!.run_tx_bool(con,{
+                  #Estrutura Config
+                  config <- list()
+                  config$CD_ID_ESTRUTURA         <- obj$CD_ID_ESTRUTURA
+                  config$CD_ID_ESTRUTURA_CONFIG  <- db$nextSequenciaID(conn,'ESTRUTURA_CONFIG')
+                  db$insertTable(conn,"ESTRUTURA_CONFIG",config)
+                 
+                  #insert atributos do compnente
+                  for(k in 1:nrow(atributos)){
+                    
+                    tipo_data <- tipoDatas |> filter(NAME_DATA == atributos$NAME_DATA[k])
+                    objAtt    <- list()
+                    objAtt$NAME_ATRIBUTO    <- atributos$NAME_ATRIBUTO[k] 
+                    objAtt$CLASSE_ATRIBUTO  <- atributos$CLASSE_ATRIBUTO[k] 
+                    objAtt$FG_ATIVO         <- as.integer(atributos$FG_ATIVO[k])
+                    objAtt$CD_ID_ESTRUTURA_CONFIG  <- config$CD_ID_ESTRUTURA_CONFIG
+                    objAtt$CD_ID_DATA              <- tipo_data$CD_ID_DATA
+                    
+                    db$insertTable(conn,"ATRIBUTO",objAtt)
+                  }
+                  
+                  dialogConfirm(
+                    session = session,
+                    id    = ns('dialogConfirm'),
+                    title = 'Estrutura criado com sucesso!',
+                    text  = 'Deseja criar novamente um nova Estrutura?')
+                    
+                    #crie so uma vez
+                    observeEvent(input$dialogConfirm,{
                       
-                      #check if it has already data of Câmera
-                      obj <- list()
-                      obj$NAME_ESTRUTURA   <- nomeEstrutura
-                      obj$CD_ID_ESTRUTURA  <- db$nextSequenciaID(con,'ESTRUTURA')
-                      db$insertTable(con,"ESTRUTURA",obj)
-
-                      #Estrutura Config
-                      config <- list()
-                      config$CD_ID_ESTRUTURA         <- obj$CD_ID_ESTRUTURA
-                      config$CD_ID_ESTRUTURA_CONFIG  <- db$nextSequenciaID(con,'ESTRUTURA_CONFIG')
-                      db$insertTable(con,"ESTRUTURA_CONFIG",config)
-                 
-                      #insert atributos do compnente
-                      for(k in 1:nrow(atributos)){
-
-                        tipo_data <- tipoDatas |> filter(NAME_DATA == atributos$NAME_DATA[k])
-                        objAtt    <- list()
-                        objAtt$NAME_ATRIBUTO    <- atributos$NAME_ATRIBUTO[k] 
-                        objAtt$CLASSE_ATRIBUTO  <- atributos$CLASSE_ATRIBUTO[k] 
-                        objAtt$FG_ATIVO         <- as.integer(atributos$FG_ATIVO[k])
-                        objAtt$CD_ID_ESTRUTURA_CONFIG  <- config$CD_ID_ESTRUTURA_CONFIG
-                        objAtt$CD_ID_DATA              <- tipo_data$CD_ID_DATA
-                        
-                        db$insertTable(con,"ATRIBUTO",objAtt)
+                      status <- input$dialogConfirm
+                      clearPanel(session,attributoReactive)
+                      
+                      if(!status){
+                        obs$destroy()
+                        obs2$destroy()
+                        removeModal(session)
+                        callback()
                       }
                       
-                      dialogConfirm(
-                        session = session,
-                        id    = ns('dialogConfirm'),
-                        title = 'Estrutura criado com sucesso!',
-                        text  = 'Deseja criar novamente um nova Estrutura?')
-                        
-                        #crie so uma vez
-                        observeEvent(input$dialogConfirm,{
-                          
-                          status <- input$dialogConfirm
-                          clearPanel(session,attributoReactive)
-                          
-                          if(!status){
-                            obs$destroy()
-                            obs2$destroy()
-                            removeModal(session)
-                            callback()
-                          }
-                          
-                        },ignoreInit = TRUE,once = TRUE)
-                         
-                    })){
-                     showNotification("Não foi possivel salvar a Estrutura, durante o processo houve falha!", type = "error")
-                    }
-                }) # end
-                  
-              },ignoreInit = T,ignoreNULL = T))          
-   })
+                    },ignoreInit = TRUE,once = TRUE)
+                    
+                  })){
+                    showNotification("Não foi possivel salvar a Estrutura, durante o processo houve falha!", type = "error")
+                  }
+               
+            },ignoreInit = T,ignoreNULL = T))          
+   
  }
 
 
 #' @export
 uiEditEstrutura <- function(ns,input,output,session,callback){
-
-  db$tryResetConnection(function(con){
-    
-    sliderPosition <- reactiveVal(1L)
-    idSwiper       <- ns('swiperMain')
-    
-    estruturas     <- reactiveVal(selectAllEstrutura(con))
-    estrutura      <- reactiveVal(NULL)
-    obs            <- newObserve()
-    obs2           <- newObserve()
-    obs3           <- newObserve()
-    tipoDatas          <- selectAllTipoDados(con)
-    attributoReactive  <- reactiveVal(modelAtributo())
-    
-   id       <- ns('dialogObj')
-    cssStyle <- list()
-    cssStyle[[paste0(' #parent',id,' .modal-dialog')]]  <- paste0('height: 80% !important;')
-    cssStyle[[paste0(' #parent',id,' .modal-content')]] <- paste0('width: 100% !important; height: 100% !important;')
-    cssStyle[[paste0(' #parent',id,' .modal-body')]]    <- paste0('width: 100% !important; height: calc(100% - 57px - 65px) !important; overflow-y: auto;')
-    
-    showModal(
-      session = session,
-      div(
-        id = paste0('parent', id),
-        style = paste0("height: 90%;"),
-        shinyjs::inlineCSS(cssStyle),
-        dialogModal(
-          title = textOutput(ns("titleTexto")),
-          size = 'm',
-          swiper(id = idSwiper,width = '100%',height = '100%',
-          parent.style = "min-height: 350px !important;",
-          swiperSlide(
-            style = 'height: 100%; width: 100%; overflow: hidden; padding: 1px;',
-            uiOutput(ns('slider1')) |> shinycssloaders$withSpinner(color = 'lightblue')
-          ),
-          swiperSlide(
-            style = 'height: 100%; width: 100%; overflow-y: hidden; overflow-x: hidden; padding: 1px;',
-            uiOutput(ns('slider2')) |> shinycssloaders$withSpinner(color = 'lightblue')
-          )
-        ),  
-        footer = uiOutput(ns('uiFooter')))))
+  
+  sliderPosition <- reactiveVal(1L)
+  idSwiper       <- ns('swiperMain')
+  
+  estruturas     <- reactiveVal(selectAllEstrutura(dbp$get_pool()))
+  estrutura      <- reactiveVal(NULL)
+  obs            <- newObserve()
+  obs2           <- newObserve()
+  obs3           <- newObserve()
+  tipoDatas          <- selectAllTipoDados(dbp$get_pool())
+  attributoReactive  <- reactiveVal(modelAtributo())
+  
+  id       <- ns('dialogObj')
+  cssStyle <- list()
+  cssStyle[[paste0(' #parent',id,' .modal-dialog')]]  <- paste0('height: 80% !important;')
+  cssStyle[[paste0(' #parent',id,' .modal-content')]] <- paste0('width: 100% !important; height: 100% !important;')
+  cssStyle[[paste0(' #parent',id,' .modal-body')]]    <- paste0('width: 100% !important; height: calc(100% - 57px - 65px) !important; overflow-y: auto;')
+  
+  showModal(
+    session = session,
+    div(
+      id = paste0('parent', id),
+      style = paste0("height: 90%;"),
+      shinyjs::inlineCSS(cssStyle),
+      dialogModal(
+        title = textOutput(ns("titleTexto")),
+        size = 'm',
+        swiper(id = idSwiper,width = '100%',height = '100%',
+        parent.style = "min-height: 350px !important;",
+        swiperSlide(
+          style = 'height: 100%; width: 100%; overflow: hidden; padding: 1px;',
+          uiOutput(ns('slider1')) |> shinycssloaders$withSpinner(color = 'lightblue')
+        ),
+        swiperSlide(
+          style = 'height: 100%; width: 100%; overflow-y: hidden; overflow-x: hidden; padding: 1px;',
+          uiOutput(ns('slider2')) |> shinycssloaders$withSpinner(color = 'lightblue')
+        )
+      ),  
+      footer = uiOutput(ns('uiFooter')))))
       
       output$uiFooter <- renderUI({
         
@@ -433,14 +427,14 @@ uiEditEstrutura <- function(ns,input,output,session,callback){
       req(estrutura())
       estruturaSelect <- estrutura()
       attributoReactive(estruturaSelect$CONFIGS[[1]]$ATRIBUTOS[[1]] |> select(NAME_ATRIBUTO,NAME_DATA,CLASSE_ATRIBUTO,FG_ATIVO))
-
+      
       obs2$clear()  # limpa observers antigos
       
       # ---- (Re)CONSTRUÇÃO DE UI + OBSERVERS DINÂMICOS ----
       obs2$add(observeEvent(attributoReactive(),{
         
         req(attributoReactive())
-
+        
         obs3$clear()  # limpa observers antigos
         atributos <- attributoReactive()
         
@@ -544,7 +538,7 @@ uiEditEstrutura <- function(ns,input,output,session,callback){
               divLista
             }) 
             
-        },ignoreInit = FALSE))
+          },ignoreInit = FALSE))
           
           # Observer do botão "Clear"
           obs2$add(
@@ -565,131 +559,131 @@ uiEditEstrutura <- function(ns,input,output,session,callback){
             })
           )
           
-       uiAtributos(ns,estruturaSelect$NAME_ESTRUTURA)
-     })
-    
-    obs$add(observeEvent(input$editPressedRow,{
-      
-      estrutura(isolate(estruturas()) %>% filter(CD_ID_ESTRUTURA == input$editPressedRow))
-      
-      swiperSlideNext(idSwiper)
-      sliderPosition(isolate(sliderPosition()) + 1L)
-      
-    },ignoreInit = T))
-    
-    obs$add(observeEvent(input$deletePressedRow,{
-      
-      estrutura <- isolate(estruturas()) |> filter(CD_ID_ESTRUTURA == input$deletePressedRow)
-      
-      messageAlerta(
-        input,
-        ns,
-        title   = paste0('Todos os objetos ligado a esse câmera será excluido'),
-        message = paste0('Deseja realmente excluir a câmera ',estrutura$NAME_ESTRUTURA,"?"),
-        callback.no = function(){
+          uiAtributos(ns,estruturaSelect$NAME_ESTRUTURA)
+        })
+        
+        obs$add(observeEvent(input$editPressedRow,{
           
-        },
-        callback.yes = function(){
+          estrutura(isolate(estruturas()) %>% filter(CD_ID_ESTRUTURA == input$editPressedRow))
           
-          db$tryResetConnection(function(con){
+          swiperSlideNext(idSwiper)
+          sliderPosition(isolate(sliderPosition()) + 1L)
+          
+        },ignoreInit = T))
+        
+        obs$add(observeEvent(input$deletePressedRow,{
+          
+          estrutura <- isolate(estruturas()) |> filter(CD_ID_ESTRUTURA == input$deletePressedRow)
+          
+          messageAlerta(
+            input,
+            ns,
+            title   = paste0('Todos os objetos ligado a essa estrutura será excluido'),
+            message = paste0('Deseja realmente excluir a estrutura ',estrutura$NAME_ESTRUTURA,"?"),
+            callback.no = function(){
+              
+            },
+            callback.yes = function(){
+              
+              db$tryTransaction(function(conn){
+                
+                db$deleteTable(conn,"ESTRUTURA",where_cols = "CD_ID_ESTRUTURA", where_vals = estrutura$CD_ID_ESTRUTURA)
+
+                estruturas.aux <- selectAllEstrutura(conn)
+                if(nrow(estruturas.aux) == 0){
+                  #destroy all observe events
+                  obs$destroy()
+                  obs2$destroy()
+                  obs3$destroy()
+                  removeModal(session)
+                  swiperDestroy(idSwiper)
+                  callback()
+                }else{
+                  estruturas(estruturas.aux)
+                }
+                
+              })
+              
+            })
             
-            deleteCamera(con,estrutura$CD_ID_ESTRUTURA)
-            estruturas.aux <- selectAllCameras(con)
-            if(nrow(estruturas.aux) == 0){
+          },ignoreInit = T))
+          
+          
+          obs$add(observeEvent(input$btSair,{
+            
+            current <- isolate(sliderPosition())
+            
+            if(current == 1){
               #destroy all observe events
               obs$destroy()
-              removeModal(session)
               swiperDestroy(idSwiper)
+              removeModal(session)
               callback()
-            }else{
-              estruturas(estruturas.aux)
+            }
+            else{
+              estrutura(NULL)
+              swiperSlidePrevious(idSwiper)
+              sliderPosition(current - 1L)
             }
             
-          })
+          },ignoreInit = T))
           
-        })
-        
-      },ignoreInit = T))
-      
-      
-      obs$add(observeEvent(input$btSair,{
-        
-        current <- isolate(sliderPosition())
-        
-        if(current == 1){
-          #destroy all observe events
-          obs$destroy()
-          swiperDestroy(idSwiper)
-          removeModal(session)
-          callback()
-        }
-        else{
-          estrutura(NULL)
-          swiperSlidePrevious(idSwiper)
-          sliderPosition(current - 1L)
-        }
-        
-      },ignoreInit = T))
-      
-      obs$add(observeEvent(input$btActionUpdate,{
-        
-        req(estrutura())
-        
-        db$tryResetConnection(function(con){
-          
-          nomeEstrutura <- isolate(toupper(input$textNameEstrutura))
-          
-          if(stringi$stri_isempty(stringr$str_trim(nomeEstrutura))){
-            showNotification("O nome do Estrutura não foi preenchido!", type = "warning")
-            return()
-          }
-          
-          if(checkifExistNameEstruturaEdit(con = con,name = nomeEstrutura)){
-            showNotification("O nome da Estrutura já possui nos registros!", type = "warning")
-            return()
-          }
-          
-          atributos <- isolate(obterAllAtributos(input,attributoReactive()))
-          
-          if(!checkAtributoValidadao(atributos)){
-            return()
-          }
-                               #check if it has already data of Câmera
-           obj <- list()
-           obj$NAME_ESTRUTURA   <- nomeEstrutura
-           obj$CD_ID_ESTRUTURA  <- db$nextSequenciaID(con,'ESTRUTURA')
-           db$insertTable(con,"ESTRUTURA",obj)
-
-           #Estrutura Config
-           config <- list()
-           config$CD_ID_ESTRUTURA         <- obj$CD_ID_ESTRUTURA
-           config$CD_ID_ESTRUTURA_CONFIG  <- db$nextSequenciaID(con,'ESTRUTURA_CONFIG')
-           db$insertTable(con,"ESTRUTURA_CONFIG",config)
-                 
-           #insert atributos do compnente
-           for(k in 1:nrow(atributos)){
-
-             tipo_data <- tipoDatas |> filter(NAME_DATA == atributos$NAME_DATA[k])
-             objAtt    <- list()
-             objAtt$NAME_ATRIBUTO    <- atributos$NAME_ATRIBUTO[k] 
-             objAtt$CLASSE_ATRIBUTO  <- atributos$CLASSE_ATRIBUTO[k] 
-             objAtt$FG_ATIVO         <- as.integer(atributos$FG_ATIVO[k])
-             objAtt$CD_ID_ESTRUTURA_CONFIG  <- config$CD_ID_ESTRUTURA_CONFIG
-             objAtt$CD_ID_DATA              <- tipo_data$CD_ID_DATA
-             
-             db$insertTable(con,"ATRIBUTO",objAtt)
-          }
-          #load todos os setores
-          estruturas(selectAllEstrutura(con))
-          
-          swiperSlidePrevious(idSwiper)
-          sliderPosition(isolate(sliderPosition()) - 1L)
-          showNotification("Estrutura atualizado com sucesso!", type = "warning")
-        })
-        
-      },ignoreInit = T))
-  })
-
+          obs$add(observeEvent(input$btActionUpdate,{
+            
+            estruturaSelect <- isolate(estrutura())
+            nomeEstrutura   <- isolate(toupper(input$textNameEstrutura))
+            
+            if(stringi$stri_isempty(stringr$str_trim(nomeEstrutura))){
+              showNotification("O nome do Estrutura não foi preenchido!", type = "warning")
+              return()
+            }
+            
+            if(checkifExistNameEstruturaEdit(dbp$get_pool(),estruturaSelect$CD_ID_ESTRUTURA,name = nomeEstrutura)){
+              showNotification("O nome da Estrutura já possui nos registros!", type = "warning")
+              return()
+            }
+            
+            atributos <- isolate(obterAllAtributos(input,attributoReactive()))
+            
+            if(!checkAtributoValidadao(atributos)){
+              return()
+            }
+            
+            db$tryTransaction(function(conn){
+              
+              #check if it has already data of Câmera
+              obj <- list()
+              obj$NAME_ESTRUTURA   <- nomeEstrutura
+              db$updateTable(conn,"ESTRUTURA",obj, where_cols = "CD_ID_ESTRUTURA", where_vals = estruturaSelect$CD_ID_ESTRUTURA)
+              
+              #Estrutura Config
+              config <- list()
+              config$CD_ID_ESTRUTURA         <- estruturaSelect$CD_ID_ESTRUTURA
+              config$CD_ID_ESTRUTURA_CONFIG  <- db$nextSequenciaID(conn,'ESTRUTURA_CONFIG')
+              db$insertTable(conn,"ESTRUTURA_CONFIG",config)
+              
+              #insert atributos do compnente
+              for(k in 1:nrow(atributos)){
+                
+                tipo_data <- tipoDatas |> filter(NAME_DATA == atributos$NAME_DATA[k])
+                objAtt    <- list()
+                objAtt$NAME_ATRIBUTO    <- atributos$NAME_ATRIBUTO[k] 
+                objAtt$CLASSE_ATRIBUTO  <- atributos$CLASSE_ATRIBUTO[k] 
+                objAtt$FG_ATIVO         <- as.integer(atributos$FG_ATIVO[k])
+                objAtt$CD_ID_ESTRUTURA_CONFIG  <- config$CD_ID_ESTRUTURA_CONFIG
+                objAtt$CD_ID_DATA              <- tipo_data$CD_ID_DATA
+                
+                db$insertTable(conn,"ATRIBUTO",objAtt)
+              }
+              #load todos os setores
+              estruturas(selectAllEstrutura(conn))
+              
+              swiperSlidePrevious(idSwiper)
+              sliderPosition(isolate(sliderPosition()) - 1L)
+              showNotification("Estrutura atualizado com sucesso!", type = "warning")
+            })
+            
+          },ignoreInit = T))
 }
             
  uiAtributos <- function(ns,valueTextoNameEstrutura = NULL){

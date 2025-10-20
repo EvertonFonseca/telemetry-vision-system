@@ -23,7 +23,6 @@ box::use(
   .. / model / swiper[...],
   DT,
   shinycssloaders,
-  db = .. / logic / database,
   .. / logic/objeto_dao[...],
   .. / logic/camera_dao[...],
   .. / logic/setor_dao[...],
@@ -40,66 +39,66 @@ box::use(
   jsonlite,
   ../logic/utils[...],
   purrr[map,map_df,map_chr],
-  sf[st_as_sf]
+  sf[st_as_sf],
+  dbp  = ../infra/db_pool,
+  db   = ../infra/database
 )
 
 initMap <- FALSE
 
 #' @export
  uiNewObjeto <- function(ns,input,output,session,callback){
-   
-  db$tryResetConnection(function(con){
-
-    obs       <- newObserve()
-    obs2      <- newObserve()
-    setores   <- selectAllSetors(con)
-    cameras   <- selectAllCameras(con)
-    camerasSelected <- reactiveVal(NULL)
-    tiposObjeto     <- selectTipoObjeto(con)
-    deleting <- reactiveVal(FALSE)
-    editing  <- reactiveVal(FALSE)
-    sliderPosition  <- reactiveVal(1L)
-    idSwiper        <- ns('swiperMain')
-    frame_data         <- NULL
-    componenteReactive <- reactiveVal(NULL)
-    estruturas         <- selectAllEstrutura(con)
-
-    id       <- ns('dialogObj')
-    cssStyle <- list()
-    cssStyle[[paste0(' #parent',id,' .modal-dialog')]]  <- paste0('height: 80% !important;')
-    cssStyle[[paste0(' #parent',id,' .modal-content')]] <- paste0('width: 100% !important; height: 100% !important;')
-    cssStyle[[paste0(' #parent',id,' .modal-body')]]    <- paste0('width: 100% !important; height: calc(100% - 57px - 65px) !important; overflow-y: auto;')
-   
-    showModal(
-      session = session,
-      div(
-       id = paste0('parent', id),
-       style = paste0("height: 90%;"),
-       inlineCSS(cssStyle),
+  
+  obs       <- newObserve()
+  obs2      <- newObserve()
+  setores   <- selectAllSetors(dbp$get_pool())
+  cameras   <- selectAllCameras(dbp$get_pool())
+  camerasSelected <- reactiveVal(NULL)
+  tiposObjeto     <- selectTipoObjeto(dbp$get_pool())
+  deleting <- reactiveVal(FALSE)
+  editing  <- reactiveVal(FALSE)
+  sliderPosition  <- reactiveVal(1L)
+  idSwiper        <- ns('swiperMain')
+  frame_data         <- NULL
+  componenteReactive <- reactiveVal(NULL)
+  estruturas         <- selectAllEstrutura(dbp$get_pool())
+  
+  id       <- ns('dialogObj')
+  cssStyle <- list()
+  cssStyle[[paste0(' #parent',id,' .modal-dialog')]]  <- paste0('height: 80% !important;')
+  cssStyle[[paste0(' #parent',id,' .modal-content')]] <- paste0('width: 100% !important; height: 100% !important;')
+  cssStyle[[paste0(' #parent',id,' .modal-body')]]    <- paste0('width: 100% !important; height: calc(100% - 57px - 65px) !important; overflow-y: auto;')
+  
+  showModal(
+    session = session,
+    div(
+      id = paste0('parent', id),
+      style = paste0("height: 90%;"),
+      inlineCSS(cssStyle),
       dialogModal(
         title = textOutput(ns("titleTexto")),
         size = 'm',
         swiper(id = idSwiper,width = '100%',height = '100%',
-              parent.style = "min-height: 350px !important;",
-              swiperSlide(
-                style = 'height: 100%; width: 100%; overflow: hidden; padding: 1px;',
-                uiOutput(ns('slider1')) |> shinycssloaders$withSpinner(color = 'lightblue')
-              ),
-              swiperSlide(
-                style = 'height: 100%; width: 100%; overflow-y: hidden; overflow-x: hidden; padding: 1px;',
-                uiOutput(ns('slider2')) |> shinycssloaders$withSpinner(color = 'lightblue')
-              ),
-              swiperSlide(
-                style = 'height: 100%; width: 100%; overflow-x: hidden; overflow-y: hidden;  padding: 1px;',
-                uiOutput(ns('slider3')) |> shinycssloaders$withSpinner(color = 'lightblue')
-              )
-        ),  
-        footer = uiOutput(ns('uiFooter')))))
+        parent.style = "min-height: 350px !important;",
+        swiperSlide(
+          style = 'height: 100%; width: 100%; overflow: hidden; padding: 1px;',
+          uiOutput(ns('slider1')) |> shinycssloaders$withSpinner(color = 'lightblue')
+        ),
+        swiperSlide(
+          style = 'height: 100%; width: 100%; overflow-y: hidden; overflow-x: hidden; padding: 1px;',
+          uiOutput(ns('slider2')) |> shinycssloaders$withSpinner(color = 'lightblue')
+        ),
+        swiperSlide(
+          style = 'height: 100%; width: 100%; overflow-x: hidden; overflow-y: hidden;  padding: 1px;',
+          uiOutput(ns('slider3')) |> shinycssloaders$withSpinner(color = 'lightblue')
+        )
+      ),  
+      footer = uiOutput(ns('uiFooter')))))
       
       output$uiFooter <- renderUI({
         
         current <- sliderPosition()
-
+        
         if(!is.null(componenteReactive())){
           tagList(actionButton(ns("btSair"), label = "Selecionar",icon = icon("arrow-left")))
         }
@@ -114,7 +113,7 @@ initMap <- FALSE
         }
         
       })
-    
+      
       output$titleTexto <- renderText({
         
         if(!is.null(componenteReactive())){
@@ -125,207 +124,207 @@ initMap <- FALSE
         }else{
           'Novos Componentes'
         }
-
+        
       })
-    
-    output$slider1 <- renderUI({
       
-      uiMain(ns,setores,cameras,tiposObjeto)
-    })
-
-    output$slider2 <- renderUI({
+      output$slider1 <- renderUI({
+        
+        uiMain(ns,setores,cameras,tiposObjeto)
+      })
       
+      output$slider2 <- renderUI({
+        
         req(sliderPosition() == 2L)
         camerasTargets <- isolate(input$multiCameras) 
         
-          obs2$clear()
-            
-          # -------------------------------------------------------------------
-          # BLOQUEAR / LIBERAR CLIQUES durante DELETE e EDIT
-          # -------------------------------------------------------------------
-          obs2$add(observeEvent(input$mapFrame_draw_deletestart, {
-            deleting(TRUE)
-          }, ignoreInit = TRUE))
-
-          # Alguns fluxos disparam draw_stop, outros deletestop; trate os dois.
-          obs2$add(observeEvent(input$mapFrame_draw_deletestop, {
-            deleting(FALSE)
-          }, ignoreInit = TRUE))
-
-          obs2$add(observeEvent(input$mapFrame_draw_stop, {
-            # Só libera se o modo stop era "remove"
-            if (identical(input$mapFrame_draw_stop$mode, "remove")) deleting(FALSE)
-          }, ignoreInit = TRUE))
-
-          obs2$add(observeEvent(input$mapFrame_draw_editstart, {
-            editing(TRUE)
-          }, ignoreInit = TRUE))
-
-          obs2$add(observeEvent(input$mapFrame_draw_editstop, {
-            editing(FALSE)
-          }, ignoreInit = TRUE))
-
-          # -------------------------------------------------------------------
-          # CRIAÇÃO DE POLÍGONO
-          # -------------------------------------------------------------------
-          obs2$add(observeEvent(input$mapFrame_draw_new_feature, {
-            req(sliderPosition() == 2L)
-
-            feat <- input$mapFrame_draw_new_feature
-            if (is.null(feat) || !identical(feat$geometry$type, "Polygon")) return()
-
-            cameraTarget <- cameras |> filter(NAME_CAMERA == input$comboCameras)
-            req(nrow(cameraTarget) == 1)  # garante correspondência única
-
-            coords <- feat$geometry$coordinates[[1]]
-            lng    <- vapply(coords, function(x) x[[1]], numeric(1))
-            lat    <- vapply(coords, function(x) x[[2]], numeric(1))
-            poly   <- .drop_dup_last(tibble::tibble(x = lng, y = lat))
-
-            if (is.null(frame_data$componente)) {
-              frame_data$componente[[1]] <<- tibble::tibble(
+        obs2$clear()
+        
+        # -------------------------------------------------------------------
+        # BLOQUEAR / LIBERAR CLIQUES durante DELETE e EDIT
+        # -------------------------------------------------------------------
+        obs2$add(observeEvent(input$mapFrame_draw_deletestart, {
+          deleting(TRUE)
+        }, ignoreInit = TRUE))
+        
+        # Alguns fluxos disparam draw_stop, outros deletestop; trate os dois.
+        obs2$add(observeEvent(input$mapFrame_draw_deletestop, {
+          deleting(FALSE)
+        }, ignoreInit = TRUE))
+        
+        obs2$add(observeEvent(input$mapFrame_draw_stop, {
+          # Só libera se o modo stop era "remove"
+          if (identical(input$mapFrame_draw_stop$mode, "remove")) deleting(FALSE)
+        }, ignoreInit = TRUE))
+        
+        obs2$add(observeEvent(input$mapFrame_draw_editstart, {
+          editing(TRUE)
+        }, ignoreInit = TRUE))
+        
+        obs2$add(observeEvent(input$mapFrame_draw_editstop, {
+          editing(FALSE)
+        }, ignoreInit = TRUE))
+        
+        # -------------------------------------------------------------------
+        # CRIAÇÃO DE POLÍGONO
+        # -------------------------------------------------------------------
+        obs2$add(observeEvent(input$mapFrame_draw_new_feature, {
+          req(sliderPosition() == 2L)
+          
+          feat <- input$mapFrame_draw_new_feature
+          if (is.null(feat) || !identical(feat$geometry$type, "Polygon")) return()
+          
+          cameraTarget <- cameras |> filter(NAME_CAMERA == input$comboCameras)
+          req(nrow(cameraTarget) == 1)  # garante correspondência única
+          
+          coords <- feat$geometry$coordinates[[1]]
+          lng    <- vapply(coords, function(x) x[[1]], numeric(1))
+          lat    <- vapply(coords, function(x) x[[2]], numeric(1))
+          poly   <- .drop_dup_last(tibble::tibble(x = lng, y = lat))
+          
+          if (is.null(frame_data$componente)) {
+            frame_data$componente[[1]] <<- tibble::tibble(
+              CD_ID_COMPONENTE    = feat$properties$`_leaflet_id`,
+              NAME_COMPONENTE     = "",
+              CD_ID_CAMERA        = cameraTarget$CD_ID_CAMERA,
+              POLIGNO_COMPONENTE  = list(poly),
+              ESTRUTURA           = list(NULL)
+            )
+          } else {
+            frame_data$componente[[1]] <<- bind_rows(
+              frame_data$componente[[1]],
+              tibble::tibble(
                 CD_ID_COMPONENTE    = feat$properties$`_leaflet_id`,
                 NAME_COMPONENTE     = "",
                 CD_ID_CAMERA        = cameraTarget$CD_ID_CAMERA,
                 POLIGNO_COMPONENTE  = list(poly),
                 ESTRUTURA           = list(NULL)
               )
-            } else {
-              frame_data$componente[[1]] <<- bind_rows(
-                frame_data$componente[[1]],
-                tibble::tibble(
-                  CD_ID_COMPONENTE    = feat$properties$`_leaflet_id`,
-                  NAME_COMPONENTE     = "",
-                  CD_ID_CAMERA        = cameraTarget$CD_ID_CAMERA,
-                  POLIGNO_COMPONENTE  = list(poly),
-                  ESTRUTURA           = list(NULL)
-                )
-              )
-            }
-          }, ignoreInit = TRUE))
-
-          # -------------------------------------------------------------------
-          # EDIÇÃO DE POLÍGONOS (mover vértices, etc.)
-          # -------------------------------------------------------------------
-          obs2$add(observeEvent(input$mapFrame_draw_edited_features, {
-            req(sliderPosition() == 2L)
-
-            feats <- input$mapFrame_draw_edited_features
-            if (is.null(feats$features) || length(feats$features) == 0) return()
-            if (is.null(frame_data$componente) || is.null(frame_data$componente[[1]])) return()
-
-            df <- frame_data$componente[[1]]
-
-            for (feat in feats$features) {
-              # aceita Polygon/MultiPolygon com 1 anel
-              if (is.null(feat$geometry$type) || !(feat$geometry$type %in% c("Polygon","MultiPolygon"))) next
-
-              id_ <- feat$properties$`_leaflet_id`
-              if (!is.null(feat$properties$layerId)) id_ <- feat$properties$layerId
-
-              coords <- feat$geometry$coordinates[[1]]
-              if (is.null(coords) || length(coords) < 3) next
-
-              lng  <- vapply(coords, function(x) x[[1]], numeric(1))
-              lat  <- vapply(coords, function(x) x[[2]], numeric(1))
-              poly <- .drop_dup_last(tibble::tibble(x = lng, y = lat))
-
-              idx <- which(df$CD_ID_COMPONENTE == id_)
-              if (length(idx) != 1L) next  # evita sobrescrita incorreta
-
-              df$POLIGNO_COMPONENTE[[idx]] <- poly
-            }
-
-            frame_data$componente[[1]] <<- df
-          }, ignoreInit = TRUE))
-
-          # -------------------------------------------------------------------
-          # REMOÇÃO DE POLÍGONOS
-          # -------------------------------------------------------------------
-          obs2$add(observeEvent(input$mapFrame_draw_deleted_features, {
-            req(sliderPosition() == 2L)
-
-            feats <- input$mapFrame_draw_deleted_features
-            if (is.null(feats$features) || length(feats$features) == 0) return()
-            if (is.null(frame_data$componente) || is.null(frame_data$componente[[1]])) return()
-
-            df <- frame_data$componente[[1]]
-
-            for (feat in feats$features) {
-              id_ <- feat$properties$`_leaflet_id`
-              if (!is.null(feat$properties$layerId)) id_ <- feat$properties$layerId
-
-              # Remoção segura (mantém list-cols inteiras)
-              df <- filter(df, .data$CD_ID_COMPONENTE != id_)
-            }
-
-            frame_data$componente[[1]] <<- df
-          }, ignoreInit = TRUE))
-
-          # -------------------------------------------------------------------
-          # CLICKS EM SHAPES (somente se NÃO estiver editando nem deletando)
-          # -------------------------------------------------------------------
-          obs2$add(observeEvent(input$mapFrame_shape_draw_click, {
-            req(sliderPosition() == 2L, !isTRUE(deleting()), !isTRUE(editing()))
-            ev <- input$mapFrame_shape_draw_click
-            if (is.null(frame_data$componente) || is.null(frame_data$componente[[1]])) return()
-
-            target <- frame_data$componente[[1]] |> filter(.data$CD_ID_COMPONENTE == ev$id)
-            if (nrow(target) == 1) {
-              componenteReactive(target)
-              swiperSlideNext(idSwiper)
-            }
-          }, ignoreNULL = TRUE, ignoreInit = TRUE))
-
-          # Se você já tem shape_draw_click, pode dispensar o shape_click
-          # para evitar "duplo disparo". Se quiser manter, mantenha o mesmo req().
-          obs2$add(observeEvent(input$mapFrame_shape_click, {
-            req(sliderPosition() == 2L, !isTRUE(deleting()), !isTRUE(editing()))
-            ev <- input$mapFrame_shape_click
-            if (is.null(frame_data$componente) || is.null(frame_data$componente[[1]])) return()
-
-            target <- frame_data$componente[[1]] |> filter(.data$CD_ID_COMPONENTE == ev$id)
-            if (nrow(target) == 1) {
-              componenteReactive(target)
-              swiperSlideNext(idSwiper)
-            }
-          }, ignoreNULL = TRUE, ignoreInit = TRUE))
-
+            )
+          }
+        }, ignoreInit = TRUE))
+        
+        # -------------------------------------------------------------------
+        # EDIÇÃO DE POLÍGONOS (mover vértices, etc.)
+        # -------------------------------------------------------------------
+        obs2$add(observeEvent(input$mapFrame_draw_edited_features, {
+          req(sliderPosition() == 2L)
+          
+          feats <- input$mapFrame_draw_edited_features
+          if (is.null(feats$features) || length(feats$features) == 0) return()
+          if (is.null(frame_data$componente) || is.null(frame_data$componente[[1]])) return()
+          
+          df <- frame_data$componente[[1]]
+          
+          for (feat in feats$features) {
+            # aceita Polygon/MultiPolygon com 1 anel
+            if (is.null(feat$geometry$type) || !(feat$geometry$type %in% c("Polygon","MultiPolygon"))) next
+            
+            id_ <- feat$properties$`_leaflet_id`
+            if (!is.null(feat$properties$layerId)) id_ <- feat$properties$layerId
+            
+            coords <- feat$geometry$coordinates[[1]]
+            if (is.null(coords) || length(coords) < 3) next
+            
+            lng  <- vapply(coords, function(x) x[[1]], numeric(1))
+            lat  <- vapply(coords, function(x) x[[2]], numeric(1))
+            poly <- .drop_dup_last(tibble::tibble(x = lng, y = lat))
+            
+            idx <- which(df$CD_ID_COMPONENTE == id_)
+            if (length(idx) != 1L) next  # evita sobrescrita incorreta
+            
+            df$POLIGNO_COMPONENTE[[idx]] <- poly
+          }
+          
+          frame_data$componente[[1]] <<- df
+        }, ignoreInit = TRUE))
+        
+        # -------------------------------------------------------------------
+        # REMOÇÃO DE POLÍGONOS
+        # -------------------------------------------------------------------
+        obs2$add(observeEvent(input$mapFrame_draw_deleted_features, {
+          req(sliderPosition() == 2L)
+          
+          feats <- input$mapFrame_draw_deleted_features
+          if (is.null(feats$features) || length(feats$features) == 0) return()
+          if (is.null(frame_data$componente) || is.null(frame_data$componente[[1]])) return()
+          
+          df <- frame_data$componente[[1]]
+          
+          for (feat in feats$features) {
+            id_ <- feat$properties$`_leaflet_id`
+            if (!is.null(feat$properties$layerId)) id_ <- feat$properties$layerId
+            
+            # Remoção segura (mantém list-cols inteiras)
+            df <- filter(df, .data$CD_ID_COMPONENTE != id_)
+          }
+          
+          frame_data$componente[[1]] <<- df
+        }, ignoreInit = TRUE))
+        
+        # -------------------------------------------------------------------
+        # CLICKS EM SHAPES (somente se NÃO estiver editando nem deletando)
+        # -------------------------------------------------------------------
+        obs2$add(observeEvent(input$mapFrame_shape_draw_click, {
+          req(sliderPosition() == 2L, !isTRUE(deleting()), !isTRUE(editing()))
+          ev <- input$mapFrame_shape_draw_click
+          if (is.null(frame_data$componente) || is.null(frame_data$componente[[1]])) return()
+          
+          target <- frame_data$componente[[1]] |> filter(.data$CD_ID_COMPONENTE == ev$id)
+          if (nrow(target) == 1) {
+            componenteReactive(target)
+            swiperSlideNext(idSwiper)
+          }
+        }, ignoreNULL = TRUE, ignoreInit = TRUE))
+        
+        # Se você já tem shape_draw_click, pode dispensar o shape_click
+        # para evitar "duplo disparo". Se quiser manter, mantenha o mesmo req().
+        obs2$add(observeEvent(input$mapFrame_shape_click, {
+          req(sliderPosition() == 2L, !isTRUE(deleting()), !isTRUE(editing()))
+          ev <- input$mapFrame_shape_click
+          if (is.null(frame_data$componente) || is.null(frame_data$componente[[1]])) return()
+          
+          target <- frame_data$componente[[1]] |> filter(.data$CD_ID_COMPONENTE == ev$id)
+          if (nrow(target) == 1) {
+            componenteReactive(target)
+            swiperSlideNext(idSwiper)
+          }
+        }, ignoreNULL = TRUE, ignoreInit = TRUE))
+        
         output$mapFrame <- renderLeaflet({
-
-            req(input$comboCameras)
-            camera   <- cameras |> filter(NAME_CAMERA == input$comboCameras)
-            uiMapa(ns,camera,cameras,frame_data)
-          })
-    
+          
+          req(input$comboCameras)
+          camera   <- cameras |> filter(NAME_CAMERA == input$comboCameras)
+          uiMapa(ns,camera,cameras,frame_data)
+        })
+        
         tagList(
           selectizeInput(ns('comboCameras'),label = 'Câmera',choices = camerasTargets,options  = list(
-                      dropdownParent = 'body',
-                      openOnFocus = TRUE,
-                      closeAfterSelect = TRUE
-                    )),
-            leafletOutput(ns("mapFrame"), height = "512px", width = "100%")
+            dropdownParent = 'body',
+            openOnFocus = TRUE,
+            closeAfterSelect = TRUE
+          )),
+          leafletOutput(ns("mapFrame"), height = "512px", width = "100%")
         )
+        
+      })
       
-    })
-
-    # ---- CASCA SUPERIOR (apenas UI) ----
-    output$slider3 <- renderUI({
-
+      # ---- CASCA SUPERIOR (apenas UI) ----
+      output$slider3 <- renderUI({
+        
         req(componenteReactive())
-      
+        
         componente <- componenteReactive()
         estrutura  <- componente$ESTRUTURA[[1]]
-    
+        
         uiEstrutura(ns,componente$NAME_COMPONENTE,estruturas,estrutura)
-    })
-    
- 
-    # Sair 
-    obs$add(observeEvent(input$btSair,{
+      })
+      
+      
+      # Sair 
+      obs$add(observeEvent(input$btSair,{
         
         current <- isolate(sliderPosition())
-      
+        
         if(current == 1L){
           obs$destroy()
           obs2$destroy()
@@ -344,7 +343,7 @@ initMap <- FALSE
             estrutura  <- isolate(estruturas |> filter(NAME_ESTRUTURA == input$comboEstrutura))
             df_p$ESTRUTURA[[1]] <- estrutura
             frame_data$componente[[1]][index,] <<- df_p
-
+            
             camera      <- cameras |> filter(NAME_CAMERA == isolate(input$comboCameras))
             componentes <- frame_data$componente[[1]] 
             #update mapa
@@ -353,223 +352,213 @@ initMap <- FALSE
             output$mapFrame <- renderLeaflet({uiMapa(ns,camera,cameras,frame_data,componentes = componentes)})
             componenteReactive(NULL)
           }else{
-           if(!is.null(frame_data)) unlink(frame_data$img_path)
-           sliderPosition(isolate(sliderPosition()) - 1L)
+            if(!is.null(frame_data)) unlink(frame_data$img_path)
+            sliderPosition(isolate(sliderPosition()) - 1L)
           }
           deleting(FALSE)
           editing(FALSE)
           swiperSlidePrevious(idSwiper)    
         }
         
-    },ignoreInit = T,ignoreNULL = T))
-    
-    ## Clear
-    obs$add(observeEvent(input$btClear, {
-      updateTextInput(session,'textNameObjeto', value = '')
-      updateMultiInput(session,'multiCameras',choices = '')
-    }, ignoreInit = TRUE))
-
-    ## Salvar Objeto
-    obs$add(observeEvent(input$btSalvar,{
-
-      current <- isolate(sliderPosition())
-
-      if(current == 1L){
-        nomeObjeto     <- isolate(toupper(input$textNameObjeto))
-        camerasTargets <- isolate(input$multiCameras) 
-    
-        if(stringi$stri_isempty(stringr$str_trim(nomeObjeto))){
-          showNotification("O nome do Objeto não foi preenchido!", type = "warning")
-          return()
-        }
-                
-        if(length(camerasTargets) == 0){
-          showNotification("Nenhuma câmera foi selecionada para objeto!", type = "warning")
-          return()
-        }
-
-        db$tryResetConnection(function(con){
-
-          if(checkifExistNameObjeto(con,nomeObjeto)){
+      },ignoreInit = T,ignoreNULL = T))
+      
+      ## Clear
+      obs$add(observeEvent(input$btClear, {
+        updateTextInput(session,'textNameObjeto', value = '')
+        updateMultiInput(session,'multiCameras',choices = '')
+      }, ignoreInit = TRUE))
+      
+      ## Salvar Objeto
+      obs$add(observeEvent(input$btSalvar,{
+        
+        current <- isolate(sliderPosition())
+        
+        if(current == 1L){
+          nomeObjeto     <- isolate(toupper(input$textNameObjeto))
+          camerasTargets <- isolate(input$multiCameras) 
+          
+          if(stringi$stri_isempty(stringr$str_trim(nomeObjeto))){
+            showNotification("O nome do Objeto não foi preenchido!", type = "warning")
+            return()
+          }
+          
+          if(length(camerasTargets) == 0){
+            showNotification("Nenhuma câmera foi selecionada para objeto!", type = "warning")
+            return()
+          }
+          
+          if(checkifExistNameObjeto(dbp$get_pool(),nomeObjeto)){
             showNotification("O nome do Objeto já possui nos registros!", type = "warning")
             return()
           }
-
-          frame_data <<- searchFramesByCamerasSelected(con,camerasTargets,cameras)
-      
+          
+          frame_data <<- searchFramesByCamerasSelected(dbp$get_pool(),camerasTargets,cameras)
+          
           sliderPosition(isolate(sliderPosition()) + 1L)
           swiperSlideNext(idSwiper)
-        })
-      
-    }else if(current == 2L){
-
-      componentes <- frame_data$componente[[1]]
-
-      if(is.null(componentes)){
-          showNotification("Nenhum desenho de poligno foi encontrado!", type = "warning")
-          return()
-      }else if(nrow(componentes) == 0){
-          showNotification("Nenhum desenho de poligno foi encontrado!", type = "warning")
-          return()
-      }
-    
-     db$tryResetConnection(function(con){
-
-      if(any(stringi$stri_isempty(componentes$NAME_COMPONENTE))){
-        showNotification("Existe componente com nomes vazios!", type = "warning")
-        return()
-      }else if(any(duplicated(componentes$NAME_COMPONENTE))){
-        showNotification("Existe componente com nomes duplicados!", type = "warning")
-        return()
-      }
-  
-      #check if it has already data of Câmera
-      nomeObjeto     <- isolate(toupper(input$textNameObjeto))
-      ativoObjeto    <- isolate(input$checkboxAtivoObjeto)  
-      tipoObjeto     <- tiposObjeto |> filter(NAME_OBJETO_TIPO == isolate(input$comboTipoObjeto))
-      setor          <- setores |> filter(NAME_SETOR == isolate(input$comboSetor))
-      
-      # try insert or roolback
-    if(!.run_tx_bool(con,{
-
-        obj               <- list()
-        obj$NAME_OBJETO   <- nomeObjeto
-        obj$FG_ATIVO      <- as.integer(ativoObjeto)
-        obj$CD_ID_SETOR   <- setor$CD_ID_SETOR
-        obj$CD_ID_OBJETO_TIPO <- tipoObjeto$CD_ID_OBJETO_TIPO
-        id_obj             <- db$nextSequenciaID(con,'OBJETO')
-        obj$CD_ID_OBJETO   <- insertNewObjeto(con,id_obj,obj)
-      
-        id_obj_config      <- db$nextSequenciaID(con,'OBJETO_CONFIG')
-        insertNewObjetoConfig(con,id_obj_config,obj)
-      
-        for(i in 1:nrow(componentes)){
-          #insert componente do objeto
-          comp      <- componentes[i,]
-          estrutura <- comp$ESTRUTURA[[1]]
-          poligno   <- jsonlite$toJSON(comp$POLIGNO_COMPONENTE[[1]],auto_unbox = T)
-    
-          objComp <- list()
-          objComp$NAME_COMPONENTE    <- comp$NAME_COMPONENTE
-          objComp$POLIGNO_COMPONENTE <- poligno
-          objComp$CD_ID_OBJ_CONF     <- id_obj_config
-          objComp$CD_ID_CAMERA       <- comp$CD_ID_CAMERA
-          objComp$CD_ID_COMPONENTE   <- db$nextSequenciaID(con,'COMPONENTE')
-          objComp$CD_ID_ESTRUTURA    <- estrutura$CD_ID_ESTRUTURA
-
-          db$insertTable(con,"COMPONENTE",objComp)
-        }
-   
-      dialogConfirm(
-        session = session,
-        id    = ns('dialogConfirm'),
-        title = 'Objeto criado com sucesso!',
-        text  = 'Deseja criar novamente um novo Objeto?')
-      
-      #crie so uma vez
-      observeEvent(input$dialogConfirm,{
+          
+        }else if(current == 2L){
+          
+          componentes <- frame_data$componente[[1]]
+          
+          if(is.null(componentes)){
+            showNotification("Nenhum desenho de poligno foi encontrado!", type = "warning")
+            return()
+          }else if(nrow(componentes) == 0){
+            showNotification("Nenhum desenho de poligno foi encontrado!", type = "warning")
+            return()
+          }
+          
+          if(!db$tryTransaction(function(conn){
+            
+            if(any(stringi$stri_isempty(componentes$NAME_COMPONENTE))){
+              showNotification("Existe componente com nomes vazios!", type = "warning")
+              return()
+            }else if(any(duplicated(componentes$NAME_COMPONENTE))){
+              showNotification("Existe componente com nomes duplicados!", type = "warning")
+              return()
+            }
+            
+            #check if it has already data of Câmera
+            nomeObjeto     <- isolate(toupper(input$textNameObjeto))
+            ativoObjeto    <- isolate(input$checkboxAtivoObjeto)  
+            tipoObjeto     <- tiposObjeto |> filter(NAME_OBJETO_TIPO == isolate(input$comboTipoObjeto))
+            setor          <- setores |> filter(NAME_SETOR == isolate(input$comboSetor))
+            
+            # try insert or roolback
+            obj               <- list()
+            obj$NAME_OBJETO   <- nomeObjeto
+            obj$FG_ATIVO      <- as.integer(ativoObjeto)
+            obj$CD_ID_SETOR   <- setor$CD_ID_SETOR
+            obj$CD_ID_OBJETO_TIPO <- tipoObjeto$CD_ID_OBJETO_TIPO
+            id_obj             <- db$nextSequenciaID(conn,'OBJETO')
+            obj$CD_ID_OBJETO   <- insertNewObjeto(conn,id_obj,obj)
+            
+            id_obj_config      <- db$nextSequenciaID(conn,'OBJETO_CONFIG')
+            insertNewObjetoConfig(conn,id_obj_config,obj)
+            
+            for(i in 1:nrow(componentes)){
+              #insert componente do objeto
+              comp      <- componentes[i,]
+              estrutura <- comp$ESTRUTURA[[1]]
+              poligno   <- jsonlite$toJSON(comp$POLIGNO_COMPONENTE[[1]],auto_unbox = T)
+              
+              objComp <- list()
+              objComp$NAME_COMPONENTE    <- comp$NAME_COMPONENTE
+              objComp$POLIGNO_COMPONENTE <- poligno
+              objComp$CD_ID_OBJ_CONF     <- id_obj_config
+              objComp$CD_ID_CAMERA       <- comp$CD_ID_CAMERA
+              objComp$CD_ID_COMPONENTE   <- db$nextSequenciaID(conn,'COMPONENTE')
+              objComp$CD_ID_ESTRUTURA    <- estrutura$CD_ID_ESTRUTURA
+              
+              db$insertTable(conn,"COMPONENTE",objComp)
+            }
+            
+            dialogConfirm(
+              session = session,
+              id    = ns('dialogConfirm'),
+              title = 'Objeto criado com sucesso!',
+              text  = 'Deseja criar novamente um novo Objeto?')
+              
+              #crie so uma vez
+              observeEvent(input$dialogConfirm,{
+                
+                status <- input$dialogConfirm
+                
+                # Limpar os campos APÓS o flush/render — garante que os inputs existam no DOM
+                session$onFlushed(function() {
+                  updateTextInput(session,'textNameObjeto', value = '')
+                  updateMultiInput(session,'multiCameras',selected = NULL)
+                  updateSelectizeInput(session,'comboTipoObjeto',selected = NULL)
+                },once = TRUE)
+                
+                if(!status){
+                  obs$destroy()
+                  removeModal(session)
+                  callback()
+                  swiperDestroy(idSwiper)
+                }else{
+                  deleting(FALSE)
+                  editing(FALSE)
+                  sliderPosition(isolate(sliderPosition()) - 1L)
+                  swiperSlidePrevious(idSwiper)
+                }
+                
+              },ignoreInit = TRUE,once = TRUE)
+              
+            })){
+              showNotification("Não foi possivel salvar o objeto, durante o processo houve falha!", type = "error")
+            }
+          }
+          
+        },ignoreInit = T,ignoreNULL = T))
         
-        status <- input$dialogConfirm
-
-        # Limpar os campos APÓS o flush/render — garante que os inputs existam no DOM
-        session$onFlushed(function() {
-        updateTextInput(session,'textNameObjeto', value = '')
-        updateMultiInput(session,'multiCameras',selected = NULL)
-        updateSelectizeInput(session,'comboTipoObjeto',selected = NULL)
-        },once = TRUE)
-  
-        if(!status){
-            obs$destroy()
-            removeModal(session)
-            callback()
-            swiperDestroy(idSwiper)
-        }else{
-          deleting(FALSE)
-          editing(FALSE)
-          sliderPosition(isolate(sliderPosition()) - 1L)
-          swiperSlidePrevious(idSwiper)
-        }
-        
-      },ignoreInit = TRUE,once = TRUE)
-
-    })) {
-        showNotification("Não foi possivel salvar o objeto, durante o processo houve falha!", type = "error")
-      } # end
-        
-     })
-    }
-
-    },ignoreInit = T,ignoreNULL = T))
-  })
- }
+}
  
 #' @export
 uiEditObjeto <- function(ns,input,output,session,callback){
-
-  #open database
-  db$tryResetConnection(function(con){
-
-    objetos        <- reactiveVal(selectAllObjetos(con))
-    objeto         <- reactiveVal(NULL)
-    obs             <- newObserve()
-    obs2            <- newObserve()
-    setores         <- selectAllSetors(con)
-    cameras         <- selectAllCameras(con)
-    camerasSelected <- reactiveVal(NULL)
-    tiposObjeto     <- selectTipoObjeto(con)
-    deleting        <- reactiveVal(FALSE)
-    editing         <- reactiveVal(FALSE)
-    sliderPosition  <- reactiveVal(1L)
-    idSwiper        <- ns('swiperMain')
-    frame_data         <- NULL
-    componenteReactive <- reactiveVal(NULL)
-    estruturas         <- selectAllEstrutura(con)  
-    
-    id       <- ns('dialogObj')
-    cssStyle <- list()
-    cssStyle[[paste0(' #parent',id,' .modal-dialog')]]  <- paste0('height: 80% !important;')
-    cssStyle[[paste0(' #parent',id,' .modal-content')]] <- paste0('width: 100% !important; height: 100% !important;')
-    cssStyle[[paste0(' #parent',id,' .modal-body')]]    <- paste0('width: 100% !important; height: calc(100% - 57px - 65px) !important; overflow-y: auto;')
-
-    showModal(
-      session = session,
-      div(
-       id = paste0('parent', id),
-       style = paste0("height: 90%;"),
-       inlineCSS(cssStyle),
+  
+  objetos         <- reactiveVal(selectAllObjetos(dbp$get_pool()))
+  objeto          <- reactiveVal(NULL)
+  obs             <- newObserve()
+  obs2            <- newObserve()
+  setores         <- selectAllSetors(dbp$get_pool())
+  cameras         <- selectAllCameras(dbp$get_pool())
+  camerasSelected <- reactiveVal(NULL)
+  tiposObjeto     <- selectTipoObjeto(dbp$get_pool())
+  deleting        <- reactiveVal(FALSE)
+  editing         <- reactiveVal(FALSE)
+  sliderPosition  <- reactiveVal(1L)
+  idSwiper        <- ns('swiperMain')
+  frame_data         <- NULL
+  componenteReactive <- reactiveVal(NULL)
+  estruturas         <- selectAllEstrutura(dbp$get_pool())  
+  
+  id       <- ns('dialogObj')
+  cssStyle <- list()
+  cssStyle[[paste0(' #parent',id,' .modal-dialog')]]  <- paste0('height: 80% !important;')
+  cssStyle[[paste0(' #parent',id,' .modal-content')]] <- paste0('width: 100% !important; height: 100% !important;')
+  cssStyle[[paste0(' #parent',id,' .modal-body')]]    <- paste0('width: 100% !important; height: calc(100% - 57px - 65px) !important; overflow-y: auto;')
+  
+  showModal(
+    session = session,
+    div(
+      id = paste0('parent', id),
+      style = paste0("height: 90%;"),
+      inlineCSS(cssStyle),
       dialogModal(
         title = textOutput(ns("titleTexto")),
         size = 'm',
-          swiper(id = idSwiper,width = '100%',height = '100%',
-              parent.style = "min-height: 350px !important;",
-              swiperSlide(
-                style = 'height: 100%; width: 100%; overflow: hidden; padding: 1px;',
-                selectizeInput(ns('comboSetor'),label = 'Setor',choices = setores$NAME_SETOR),
-                uiOutput(ns('slider1')) |> shinycssloaders$withSpinner(color = 'lightblue')
-              ),
-              swiperSlide(
-                style = 'height: 100%; width: 100%; overflow: hidden; padding: 1px;',
-                uiOutput(ns('slider2')) |> shinycssloaders$withSpinner(color = 'lightblue')
-              ),
-               swiperSlide(
-                style = 'height: 100%; width: 100%; overflow: hidden; padding: 1px;',
-                uiOutput(ns('slider3')) |> shinycssloaders$withSpinner(color = 'lightblue')
-              ),
-              swiperSlide(
-                style = 'height: 100%; width: 100%; overflow: hidden; padding: 1px;',
-                uiOutput(ns('slider4')) |> shinycssloaders$withSpinner(color = 'lightblue')
-              )
-        ),  
-        footer = uiOutput(ns('uiFooter')))))
+        swiper(id = idSwiper,width = '100%',height = '100%',
+        parent.style = "min-height: 350px !important;",
+        swiperSlide(
+          style = 'height: 100%; width: 100%; overflow: hidden; padding: 1px;',
+          selectizeInput(ns('comboSetor'),label = 'Setor',choices = setores$NAME_SETOR),
+          uiOutput(ns('slider1')) |> shinycssloaders$withSpinner(color = 'lightblue')
+        ),
+        swiperSlide(
+          style = 'height: 100%; width: 100%; overflow: hidden; padding: 1px;',
+          uiOutput(ns('slider2')) |> shinycssloaders$withSpinner(color = 'lightblue')
+        ),
+        swiperSlide(
+          style = 'height: 100%; width: 100%; overflow: hidden; padding: 1px;',
+          uiOutput(ns('slider3')) |> shinycssloaders$withSpinner(color = 'lightblue')
+        ),
+        swiperSlide(
+          style = 'height: 100%; width: 100%; overflow: hidden; padding: 1px;',
+          uiOutput(ns('slider4')) |> shinycssloaders$withSpinner(color = 'lightblue')
+        )
+      ),  
+      footer = uiOutput(ns('uiFooter')))))
       
       output$uiFooter <- renderUI({
         
         current <- sliderPosition()
-
-       if(!is.null(componenteReactive())){
-         tagList(actionButton(ns("btSair"), label = "Selecionar",icon = icon("arrow-left")))
-       }
-       else if(current == 1){
+        
+        if(!is.null(componenteReactive())){
+          tagList(actionButton(ns("btSair"), label = "Selecionar",icon = icon("arrow-left")))
+        }
+        else if(current == 1){
           tagList(actionButton(ns("btSair"), label = "Sair",icon = icon("arrow-left")))
         }
         else if(current == 2){
@@ -582,7 +571,7 @@ uiEditObjeto <- function(ns,input,output,session,callback){
         }
         
       })
-    
+      
       output$titleTexto <- renderText({
         
         if(sliderPosition() == 1L){
@@ -590,62 +579,62 @@ uiEditObjeto <- function(ns,input,output,session,callback){
         }else{
           'Edição do Objeto'
         }
-
+        
       })
-    
+      
       output$slider1 <- renderUI({
-     
+        
         dataset  <- objetos()
- 
+        
         setor    <- setores |> filter(NAME_SETOR == input$comboSetor)
         dataset  <- dataset |> filter(CD_ID_SETOR == setor$CD_ID_SETOR)
         if(nrow(dataset) == 0){
           div_tmp <- div(
-                  style = "margin-top: 50px;display: flex; justify-content: center; align-items: center; height: 100%; width: 100%;",
-                  "Não há registro de objetos"
-                )
+            style = "margin-top: 50px;display: flex; justify-content: center; align-items: center; height: 100%; width: 100%;",
+            "Não há registro de objetos"
+          )
           return(div_tmp)
         }
-
-        output$tableDinamicaObjeto <- DT$renderDataTable({
-     
-          colunaNames <- c('LINHA','OBJETO','VISUALIZAR / EDITAR','REMOVER')
         
+        output$tableDinamicaObjeto <- DT$renderDataTable({
+          
+          colunaNames <- c('LINHA','OBJETO','VISUALIZAR / EDITAR','REMOVER')
+          
           DT$datatable({
             
             dataset |> 
-              mutate_if(is.POSIXct,function(x){ format(x,'%d/%m/%Y %H:%M:%S')})  |> 
-              mutate_if(is.Date,function(x){ format(x,'%d/%m/%Y')}) |> 
-              mutate_if(is.character,toupper) |> 
-              mutate(
-                    !!colunaNames[1] := 1:nrow(dataset),
-                    !!colunaNames[2] :=  dataset$NAME_OBJETO,
-                    !!colunaNames[3] :=  sapply(dataset$CD_ID_OBJETO, function (x) {
-                      
-                    as.character(
-                        actionButton(
-                          paste0(ns('btEdit')),
-                          label = '',
-                          icon = icon('eye'),
-                          onclick = paste0('Shiny.setInputValue(\"',ns("editPressedRow"),'\","',x,'",{priority: "event"})'),
-                          #style = 'background-color: transparent; color: lightblue; border-solid: none;'
-                        )
-                      )
-                    }),
-                    !!colunaNames[4] :=  sapply(dataset$CD_ID_OBJETO,function (x) {
-                      
-                    as.character(
-                        actionButton(
-                          paste0(ns('btRemove')),
-                          label = '',
-                          icon = icon('trash'),
-                          onclick = paste0('Shiny.setInputValue(\"',ns("deletePressedRow"),'\","',x,'",{priority: "event"})'),
-                          #style = 'background-color: transparent; color: lightblue; border-solid: none;'
-                        )
-                      )
-                    })
-                    
-              ) |> select(colunaNames) |> arrange(colunaNames[2])
+            mutate_if(is.POSIXct,function(x){ format(x,'%d/%m/%Y %H:%M:%S')})  |> 
+            mutate_if(is.Date,function(x){ format(x,'%d/%m/%Y')}) |> 
+            mutate_if(is.character,toupper) |> 
+            mutate(
+              !!colunaNames[1] := 1:nrow(dataset),
+              !!colunaNames[2] :=  dataset$NAME_OBJETO,
+              !!colunaNames[3] :=  sapply(dataset$CD_ID_OBJETO, function (x) {
+                
+                as.character(
+                  actionButton(
+                    paste0(ns('btEdit')),
+                    label = '',
+                    icon = icon('eye'),
+                    onclick = paste0('Shiny.setInputValue(\"',ns("editPressedRow"),'\","',x,'",{priority: "event"})'),
+                    #style = 'background-color: transparent; color: lightblue; border-solid: none;'
+                  )
+                )
+              }),
+              !!colunaNames[4] :=  sapply(dataset$CD_ID_OBJETO,function (x) {
+                
+                as.character(
+                  actionButton(
+                    paste0(ns('btRemove')),
+                    label = '',
+                    icon = icon('trash'),
+                    onclick = paste0('Shiny.setInputValue(\"',ns("deletePressedRow"),'\","',x,'",{priority: "event"})'),
+                    #style = 'background-color: transparent; color: lightblue; border-solid: none;'
+                  )
+                )
+              })
+              
+            ) |> select(colunaNames) |> arrange(colunaNames[2])
           },  
           class = 'cell-border stripe',
           extensions = 'Scroller',
@@ -662,63 +651,63 @@ uiEditObjeto <- function(ns,input,output,session,callback){
           ),
           escape = F,
           selection = 'none',
-          ) |> DT$formatStyle(colunaNames, cursor = 'pointer')
-          
-        })
-        
-        div(
-          style = 'border-style: solid; border-color: white; border-width: 1px; overflow-x: auto;',
-          DT$dataTableOutput(outputId = ns('tableDinamicaObjeto'))
-        )
+        ) |> DT$formatStyle(colunaNames, cursor = 'pointer')
         
       })
+      
+      div(
+        style = 'border-style: solid; border-color: white; border-width: 1px; overflow-x: auto;',
+        DT$dataTableOutput(outputId = ns('tableDinamicaObjeto'))
+      )
+      
+    })
     
     output$slider2 <- renderUI({
-
+      
       req(objeto())
       objetoSelect <- objeto()
-
+      
       cameraComponetes <- unique(unlist(map(objetoSelect$CONFIG[[1]]$COMPONENTES,~ map(.x$CAMERAS,~ .x$NAME_CAMERA))))
-
+      
       session$onFlushed(function(){
         disable(ns("comboTipoObjeto"))
       }, once = TRUE)
-
+      
       uiMain(ns,
-             setores,
-             cameras,
-             tiposObjeto,
-             valueComboSetor  = objetoSelect$NAME_SETOR,
-             valueAtivo       = as.logical(objetoSelect$FG_ATIVO),
-             valueTextName    = objetoSelect$NAME_OBJETO,
-             valueTipoObjeto  = objetoSelect$NAME_OBJETO_TIPO,
-             valueMultiCamera = cameraComponetes
-            )
-
+        setores,
+        cameras,
+        tiposObjeto,
+        valueComboSetor  = objetoSelect$NAME_SETOR,
+        valueAtivo       = as.logical(objetoSelect$FG_ATIVO),
+        valueTextName    = objetoSelect$NAME_OBJETO,
+        valueTipoObjeto  = objetoSelect$NAME_OBJETO_TIPO,
+        valueMultiCamera = cameraComponetes
+      )
+      
     })
-
-   output$slider3 <- renderUI({
-  
+    
+    output$slider3 <- renderUI({
+      
       req(sliderPosition() == 3L)
       
       camerasTargets <- isolate(input$multiCameras) 
       objetoSelect   <- isolate(objeto())
       
       obs2$clear()
-
+      
       # --- novo polígono ---
       obs2$add(observeEvent(input$mapFrame_draw_new_feature, {
         feat <- input$mapFrame_draw_new_feature
         if (is.null(feat) || !identical(feat$geometry$type, "Polygon")) return()
-
+        
         cameraTarget <- cameras |> filter(NAME_CAMERA == input$comboCameras)
         req(nrow(cameraTarget) == 1)  # CHANGE: garante 1 camera
-
+        
         coords <- feat$geometry$coordinates[[1]]
         lng    <- vapply(coords, function(x) x[[1]], numeric(1))
         lat    <- vapply(coords, function(x) x[[2]], numeric(1))
         poly   <- .drop_dup_last(tibble::tibble(x = lng, y = lat))  # CHANGE: helper
-
+        
         row_new <- tibble::tibble(
           CD_ID_COMPONENTE    = feat$properties$`_leaflet_id`,
           NAME_COMPONENTE     = "",
@@ -726,87 +715,87 @@ uiEditObjeto <- function(ns,input,output,session,callback){
           POLIGNO_COMPONENTE  = list(poly),
           ESTRUTURA           = list(NULL)
         )
-
+        
         if (is.null(frame_data$componente)) {
           frame_data$componente[[1]] <<- row_new
         } else {
           frame_data$componente[[1]] <<- bind_rows(frame_data$componente[[1]], row_new)  # CHANGE: bind_rows()
         }
       }, ignoreInit = TRUE))
-
+      
       # --- edições (mover vértices etc.) ---
       obs2$add(observeEvent(input$mapFrame_draw_edited_features, {
         feats        <- input$mapFrame_draw_edited_features
         cameraTarget <- cameras |> filter(NAME_CAMERA == input$comboCameras)  # mantido
         if (is.null(feats$features) || length(feats$features) == 0) return()
         if (is.null(frame_data$componente) || is.null(frame_data$componente[[1]])) return()
-
+        
         df <- frame_data$componente[[1]]
-
+        
         for (i in seq_along(feats$features)) {
           feat <- feats$features[[i]]
           id_  <- feat$properties$`_leaflet_id`
           if (!is.null(feat$properties$layerId)) id_ <- feat$properties$layerId
-
+          
           coords <- feat$geometry$coordinates[[1]]
           lng  <- vapply(coords, function(x) x[[1]], numeric(1))
           lat  <- vapply(coords, function(x) x[[2]], numeric(1))
           poly <- .drop_dup_last(tibble::tibble(x = lng, y = lat))
-
+          
           idx <- match(id_, df$CD_ID_COMPONENTE)  # CHANGE: match() é mais seguro
           if (!is.na(idx)) {
             df$POLIGNO_COMPONENTE[[idx]] <- poly
           } # se não achar, ignora silenciosamente
         }
-
+        
         frame_data$componente[[1]] <<- df
       }, ignoreInit = TRUE))
-
+      
       # --- deleções ---
       obs2$add(observeEvent(input$mapFrame_draw_deleted_features, {
         feats <- input$mapFrame_draw_deleted_features
         if (is.null(feats$features) || length(feats$features) == 0) return()
         if (is.null(frame_data$componente) || is.null(frame_data$componente[[1]])) return()
-
+        
         df <- frame_data$componente[[1]]
         for (i in seq_along(feats$features)) {
           feat <- feats$features[[i]]
           id_  <- feat$properties$`_leaflet_id`
           if (!is.null(feat$properties$layerId)) id_ <- feat$properties$layerId
-
+          
           # CHANGE: filtro seguro (evita [-which()] quando não encontra)
           df <- filter(df, .data$CD_ID_COMPONENTE != id_)
         }
         frame_data$componente[[1]] <<- df
       }, ignoreInit = TRUE))
-
+      
       # --- clique nos shapes (mantidos exatamente seus inputs) ---
       obs2$add(observeEvent(input$mapFrame_shape_draw_click, {
         req(!deleting())  # mantido
         ev <- input$mapFrame_shape_draw_click
-
+        
         if (is.null(frame_data$componente) || is.null(frame_data$componente[[1]])) return()
         target <- frame_data$componente[[1]] |> filter(.data$CD_ID_COMPONENTE == ev$id)
-
+        
         if (nrow(target) == 1) {  # CHANGE: evita passar df vazio
           componenteReactive(target)
           swiperSlideNext(idSwiper)
         }
       }, ignoreNULL = TRUE, ignoreInit = TRUE))
-
+      
       obs2$add(observeEvent(input$mapFrame_shape_click, {
         req(!deleting())  # mantido
         ev <- input$mapFrame_shape_click
-
+        
         if (is.null(frame_data$componente) || is.null(frame_data$componente[[1]])) return()
         target <- frame_data$componente[[1]] |> filter(.data$CD_ID_COMPONENTE == ev$id)
-
+        
         if (nrow(target) == 1) {  # CHANGE: idem
           componenteReactive(target)
           swiperSlideNext(idSwiper)
         }
       }, ignoreNULL = TRUE, ignoreInit = TRUE))
-
+      
       # --- estados de delete (mantidos seus inputs) ---
       obs2$add(observeEvent(input$mapFrame_draw_deletestart, {
         deleting(TRUE)
@@ -814,13 +803,13 @@ uiEditObjeto <- function(ns,input,output,session,callback){
       obs2$add(observeEvent(input$mapFrame_draw_deletestop, {
         deleting(FALSE)
       }, ignoreInit = TRUE))
-
+      
       obs2$add(observeEvent(input$mapFrame_draw_stop, {
         if (identical(input$mapFrame_draw_stop$mode, "remove")) {
           deleting(FALSE)
         }
       }, ignoreInit = TRUE))
-
+      
       
       output$mapFrame <- renderLeaflet({
         
@@ -839,23 +828,23 @@ uiEditObjeto <- function(ns,input,output,session,callback){
         leafletOutput(ns("mapFrame"), height = "512px", width = "100%")
       )
       
-   })
-
-       # ---- CASCA SUPERIOR (apenas UI) ----
-      output$slider4 <- renderUI({
-        
-        req(componenteReactive())
-
-        componente <- componenteReactive()
-        estrutura  <- componente$ESTRUTURA[[1]]
+    })
     
-        uiEstrutura(ns,componente$NAME_COMPONENTE,estruturas,estrutura)
-        })
-
+    # ---- CASCA SUPERIOR (apenas UI) ----
+    output$slider4 <- renderUI({
+      
+      req(componenteReactive())
+      
+      componente <- componenteReactive()
+      estrutura  <- componente$ESTRUTURA[[1]]
+      
+      uiEstrutura(ns,componente$NAME_COMPONENTE,estruturas,estrutura)
+    })
+    
     obs$add(observeEvent(input$editPressedRow,{
       
       objeto(isolate(objetos()) |> filter(CD_ID_OBJETO == input$editPressedRow))
-  
+      
       swiperSlideNext(idSwiper)
       sliderPosition(isolate(sliderPosition()) + 1L)
       
@@ -864,45 +853,45 @@ uiEditObjeto <- function(ns,input,output,session,callback){
     obs$add(observeEvent(input$deletePressedRow,{
       
       objeto <- isolate(objetos()) |> filter(CD_ID_OBJETO == input$deletePressedRow)
-
+      
       messageAlerta(
-                    input,
-                    ns,
-                    title   = paste0('Todos os objetos ligado a esse camerâ será excluido'),
-                    message = paste0('Deseja realmente excluir a camerâ ',objeto$NAME_CAMERA,"?"),
-                    callback.no = function(){
-                      
-                    },
-                    callback.yes = function(){
-                    
-                      db$tryResetConnection(function(con){
-                        
-                        db$deleteTable(con,"OBJETO",paste0("CD_ID_OBJETO = ",objeto$CD_ID_OBJETO))
-                  
-                        objetos.aux <- selectAllObjetos(con)
-                 
-                        if(nrow(objetos.aux) == 0){
-                          #destroy all observe events
-                          obs$destroy()
-                          obs2$destroy()
-                          removeModal(session)
-                          callback()
-                          swiperDestroy(idSwiper)
-                        }else{
-                          objetos(objetos.aux)
-                        }
-                        
-                      })
-
-                    })
+        input,
+        ns,
+        title   = paste0('Todos os objetos ligado a esse camerâ será excluido'),
+        message = paste0('Deseja realmente excluir a camerâ ',objeto$NAME_CAMERA,"?"),
+        callback.no = function(){
+          
+        },
+        callback.yes = function(){
+          
+           db$tryTransaction(function(conn){
+            
+            db$deleteTable(conn,"OBJETO","CD_ID_OBJETO",objeto$CD_ID_OBJETO)
+            
+            objetos.aux <- selectAllObjetos(conn)
+            
+            if(nrow(objetos.aux) == 0){
+              #destroy all observe events
+              obs$destroy()
+              obs2$destroy()
+              removeModal(session)
+              callback()
+              swiperDestroy(idSwiper)
+            }else{
+              objetos(objetos.aux)
+            }
+            
+          })
+          
+        })
+        
+      },ignoreInit = T))
       
-    },ignoreInit = T))
-    
-
-    obs$add(observeEvent(input$btSair,{
       
-      current <- isolate(sliderPosition())
-
+      obs$add(observeEvent(input$btSair,{
+        
+        current <- isolate(sliderPosition())
+        
         if(current == 1L){
           obs$destroy()
           obs2$destroy()
@@ -922,7 +911,7 @@ uiEditObjeto <- function(ns,input,output,session,callback){
             estrutura  <- isolate(estruturas |> filter(NAME_ESTRUTURA == input$comboEstrutura))
             df_p$ESTRUTURA[[1]] <- estrutura
             frame_data$componente[[1]][index,] <<- df_p
-
+            
             camera      <- cameras |> filter(NAME_CAMERA == isolate(input$comboCameras))
             componentes <- frame_data$componente[[1]] 
             #update mapa
@@ -931,9 +920,9 @@ uiEditObjeto <- function(ns,input,output,session,callback){
             output$mapFrame <- renderLeaflet({uiMapa(ns,camera,cameras,frame_data,componentes = componentes)})
             componenteReactive(NULL)
           }else{
-           sliderPosition(isolate(sliderPosition()) - 1L)
+            sliderPosition(isolate(sliderPosition()) - 1L)
           }
- 
+          
           if(current == 2L){
             if(!is.null(frame_data)) unlink(frame_data$img_path)
             objeto(NULL)
@@ -941,84 +930,78 @@ uiEditObjeto <- function(ns,input,output,session,callback){
           deleting(FALSE)
           editing(FALSE)
           swiperSlidePrevious(idSwiper)
-
-        }
-      
-    },ignoreInit = T))
-
-    ## Clear
-    obs$add(observeEvent(input$btClear, {
-      updateTextInput(session,'textNameObjeto', value = '')
-      updateMultiInput(session,'multiCameras',choices = '')
-    },ignoreInit = TRUE))
-    
-    obs$add(observeEvent(input$btSalvar,{
-
-      req(objeto())
-
-      objetoSelect <- isolate(objeto())
-      current      <- isolate(sliderPosition())
-
-      if(current == 2L){
-        
-        nomeObjeto     <- isolate(toupper(input$textNameObjeto))
-        camerasTargets <- isolate(input$multiCameras) 
-        
-        if(stringi$stri_isempty(stringr$str_trim(nomeObjeto))){
-          showNotification("O nome do Objeto não foi preenchido!", type = "warning")
-          return()
-        }
-        
-        if(length(camerasTargets) == 0){
-          showNotification("Nenhuma câmera foi selecionada para objeto!", type = "warning")
-          return()
-        }
-        
-        db$tryResetConnection(function(con){
           
-          if(checkifExistNameObjetoEdit(con,objetoSelect$CD_ID_OBJETO,nomeObjeto)){
+        }
+        
+      },ignoreInit = T))
+      
+      ## Clear
+      obs$add(observeEvent(input$btClear, {
+        updateTextInput(session,'textNameObjeto', value = '')
+        updateMultiInput(session,'multiCameras',choices = '')
+      },ignoreInit = TRUE))
+      
+      obs$add(observeEvent(input$btSalvar,{
+        
+        req(objeto())
+        
+        objetoSelect <- isolate(objeto())
+        current      <- isolate(sliderPosition())
+        
+        if(current == 2L){
+          
+          nomeObjeto     <- isolate(toupper(input$textNameObjeto))
+          camerasTargets <- isolate(input$multiCameras) 
+          
+          if(stringi$stri_isempty(stringr$str_trim(nomeObjeto))){
+            showNotification("O nome do Objeto não foi preenchido!", type = "warning")
+            return()
+          }
+          
+          if(length(camerasTargets) == 0){
+            showNotification("Nenhuma câmera foi selecionada para objeto!", type = "warning")
+            return()
+          }
+          
+          if(checkifExistNameObjetoEdit(dbp$get_pool(),objetoSelect$CD_ID_OBJETO,nomeObjeto)){
             showNotification("O nome do Objeto já possui nos registros!", type = "warning")
             return()
           }
           
-          frame_data   <<- searchFramesByCamerasSelected(con,camerasTargets,cameras,objetoSelect)
+          frame_data   <<- searchFramesByCamerasSelected(dbp$get_pool(),camerasTargets,cameras,objetoSelect)
           
           sliderPosition(isolate(sliderPosition()) + 1L)
           swiperSlideNext(idSwiper)
-        })
-        
-      }else if(current == 3L){
-            
-        componentes <- frame_data$componente[[1]]
-  
-        if(is.null(componentes)){
-          showNotification("Nenhum desenho de poligno foi encontrado!", type = "warning")
-          return()
-        }else if(nrow(componentes) == 0){
-          showNotification("Nenhum desenho de poligno foi encontrado!", type = "warning")
-          return()
-        }
-        
-        db$tryResetConnection(function(con){
-          
-          #check if it has already data of Câmera
-          nomeObjeto     <- isolate(toupper(input$textNameObjeto))
-          ativoObjeto    <- isolate(input$checkboxAtivoObjeto)  
-          tipoObjeto     <- tiposObjeto |> filter(NAME_OBJETO_TIPO == isolate(input$comboTipoObjeto))
-          setor          <- setores |> filter(NAME_SETOR == isolate(input$comboSetor))
        
-          # try insert or roolback
-          if(!.run_tx_bool(con,{
+        }else if(current == 3L){
+          
+          componentes <- frame_data$componente[[1]]
+          
+          if(is.null(componentes)){
+            showNotification("Nenhum desenho de poligno foi encontrado!", type = "warning")
+            return()
+          }else if(nrow(componentes) == 0){
+            showNotification("Nenhum desenho de poligno foi encontrado!", type = "warning")
+            return()
+          }
+          
+          if(!db$tryTransaction(function(conn){
+            
+            #check if it has already data of Câmera
+            nomeObjeto     <- isolate(toupper(input$textNameObjeto))
+            ativoObjeto    <- isolate(input$checkboxAtivoObjeto)  
+            tipoObjeto     <- tiposObjeto |> filter(NAME_OBJETO_TIPO == isolate(input$comboTipoObjeto))
+            setor          <- setores |> filter(NAME_SETOR == isolate(input$comboSetor))
             
             obj                   <- list()
             obj$NAME_OBJETO       <- nomeObjeto
             obj$FG_ATIVO          <- as.integer(ativoObjeto)
             obj$CD_ID_SETOR       <- setor$CD_ID_SETOR
-        
-            db$updateTable(con,"OBJETO",paste0("CD_ID_OBJETO = ",objetoSelect$CD_ID_OBJETO),obj)
-   
-            id_obj_config      <- db$nextSequenciaID(con,'OBJETO_CONFIG')
-            insertNewObjetoConfig(con,id_obj_config,objetoSelect)
+            
+            db$updateTable(conn,"OBJETO",obj,"CD_ID_OBJETO",objetoSelect$CD_ID_OBJETO)
+            
+            id_obj_config      <- db$nextSequenciaID(conn,'OBJETO_CONFIG')
+            insertNewObjetoConfig(conn,id_obj_config,objetoSelect)
             
             for(i in 1:nrow(componentes)){
               #insert componente do objeto
@@ -1031,14 +1014,14 @@ uiEditObjeto <- function(ns,input,output,session,callback){
               objComp$POLIGNO_COMPONENTE <- poligno
               objComp$CD_ID_OBJ_CONF     <- id_obj_config
               objComp$CD_ID_CAMERA       <- comp$CD_ID_CAMERA
-              objComp$CD_ID_COMPONENTE   <- db$nextSequenciaID(con,'COMPONENTE')
+              objComp$CD_ID_COMPONENTE   <- db$nextSequenciaID(conn,'COMPONENTE')
               objComp$CD_ID_ESTRUTURA    <- estrutura$CD_ID_ESTRUTURA
               
-              db$insertTable(con,"COMPONENTE",objComp)
+              db$insertTable(conn,"COMPONENTE",objComp)
             }
             
             #load todos os setores
-            objetos(selectAllObjetos(con))
+            objetos(selectAllObjetos(conn))
             # volta para init
             swiperSlideTo(idSwiper,0)
             sliderPosition(1L)
@@ -1048,12 +1031,10 @@ uiEditObjeto <- function(ns,input,output,session,callback){
             
           })){
             showNotification("Não foi possivel salvar o objeto, durante o processo houve falha!", type = "error")
-          } # end
-          
-        })
-      }
-    },ignoreInit = T))
-  })
+          }
+        }
+      },ignoreInit = T))
+
 }
 
 
@@ -1244,12 +1225,12 @@ proxy_update_componentes <- function(session,ns,map_id,camera, componentes){
   invisible(TRUE)
 }
 
-searchFramesByCamerasSelected <- function(con,camerasTargets,cameras,objeto = NULL){
+searchFramesByCamerasSelected <- function(conn,camerasTargets,cameras,objeto = NULL){
 
     map_df(camerasTargets,function(camera){
 
        cam_id <- cameras |> filter(NAME_CAMERA == camera)
-       frame  <- selectLastFrameById(con,cam_id$CD_ID_CAMERA)
+       frame  <- selectLastFrameById(conn,cam_id$CD_ID_CAMERA)
 
        if(nrow(frame) == 0) return(NULL)
 

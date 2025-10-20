@@ -44,11 +44,12 @@ box::use(
   .. / model / swiper[...],
   DT,
   shinycssloaders,
-  db = .. / logic / database,
   .. / logic / camera_dao[...],
   stringr,
   dplyr[...],
-  lubridate[...]
+  lubridate[...],
+  dbp  = ../infra/db_pool,
+  db   = ../infra/database
 )
 
 #' @export
@@ -82,18 +83,17 @@ box::use(
 
    ## Salvar Camera
    obs$add(observeEvent(input$btSalvar,{
-    
-   db$tryResetConnection(function(con){
-
+ 
+   db$tryTransaction(function(conn){
+     
       nomeCamera <- isolate(toupper(input$textNameCamera))
       urlCamera  <- isolate(input$textUrlCamera)
-      
+ 
       if(stringi$stri_isempty(stringr$str_trim(nomeCamera))){
         showNotification("O nome do Câmera não foi preenchido!", type = "warning")
         return()
       }
-      
-      if(checkifExistNameCamera(con = con,name = nomeCamera)){
+      if(checkifExistNameCamera(conn,name = nomeCamera)){
         showNotification("O nome do Câmera já possui nos registros!", type = "warning")
         return()
       }
@@ -101,19 +101,18 @@ box::use(
         showNotification("O url da Câmera não foi preenchido!", type = "warning")
         return()
       }
-      if(checkifExistUrlCamera(con = con,urlCamera)){
+      if(checkifExistUrlCamera(conn,urlCamera)){
         showNotification("O url da Câmera já possui nos registros!", type = "warning")
         return()
       }
 
-      #check if it has already data of Câmera
       obj <- list()
       obj$NAME_CAMERA   <- nomeCamera
       obj$URL_CAMERA    <- urlCamera
       obj$FPS_CAMERA    <- isolate(input$comboFps)
-      id                <- db$nextSequenciaID(con,'CAMERA_VIEW')
-      obj$CD_ID_CAMERA  <- insertNewCamera(con,id,obj)
-   
+      id                <- db$nextSequenciaID('CAMERA_VIEW')
+      obj$CD_ID_CAMERA  <- insertNewCamera(conn,id,obj)
+     
       dialogConfirm(
         session = session,
         id    = ns('dialogConfirm'),
@@ -140,7 +139,7 @@ box::use(
         
       },ignoreInit = TRUE,once = TRUE)
 
-    })
+   })
 
    },ignoreInit = T,ignoreNULL = T))
    
@@ -150,13 +149,11 @@ box::use(
 uiEditCamera <- function(ns,input,output,session,callback = NULL){
 
   #open database
-  con <- db$newConnection()
-
   obs <- newObserve()
   sliderPosition <- reactiveVal(1L)
   idSwiper       <- ns('swiperMain')
 
-  cameras        <- reactiveVal(selectAllCameras(con))
+  cameras        <- reactiveVal(selectAllCameras(dbp$get_pool()))
   camera         <- reactiveVal(NULL)
 
   showModal(
@@ -307,10 +304,10 @@ uiEditCamera <- function(ns,input,output,session,callback = NULL){
                   },
                   callback.yes = function(){
                     
-                    db$tryResetConnection(function(con){
+                    db$tryTransaction(function(conn){
                       
-                      deleteCamera(con,camera$CD_ID_CAMERA)
-                      cameras.aux <- selectAllCameras(con)
+                      deleteCamera(conn,camera$CD_ID_CAMERA)
+                      cameras.aux <- selectAllCameras(conn)
                       if(nrow(cameras.aux) == 0){
                         #destroy all observe events
                         obs$destroy()
@@ -349,7 +346,7 @@ uiEditCamera <- function(ns,input,output,session,callback = NULL){
     
     req(camera())
     
-    db$tryResetConnection(function(con){
+    db$tryTransaction(function(conn){
       
       id         <- isolate(camera()$CD_ID_CAMERA)
       nomeCamera <- isolate(toupper(input$textNameCamera))
@@ -360,14 +357,14 @@ uiEditCamera <- function(ns,input,output,session,callback = NULL){
         return()
       }
       
-      if(checkifExistNameCameraEdit(con = con,id,name = nomeCamera)){
+      if(checkifExistNameCameraEdit(conn,id,name = nomeCamera)){
         showNotification("O nome do Câmera já possui nos registros!", type = "warning")
       }
       if(stringi$stri_isempty(stringr$str_trim(urlCamera))){
         showNotification("O url da Câmera não foi preenchido!", type = "warning")
         return()
       }
-      if(checkifExistUrlCameraEdit (con = con,id,urlCamera)){
+      if(checkifExistUrlCameraEdit(conn,id,urlCamera)){
         showNotification("O url da Câmera já possui nos registros!", type = "warning")
         return()
       }
@@ -378,10 +375,9 @@ uiEditCamera <- function(ns,input,output,session,callback = NULL){
       obj$URL_CAMERA    <- urlCamera
       obj$FPS_CAMERA    <- isolate(input$comboFps)
 
-    
-      updateCamera(con,obj)
+      updateCamera(conn,obj)
       #load todos os setores
-      cameras(selectAllCameras(con))
+      cameras(selectAllCameras(conn))
   
       swiperSlidePrevious(idSwiper)
       sliderPosition(isolate(sliderPosition()) - 1L)
