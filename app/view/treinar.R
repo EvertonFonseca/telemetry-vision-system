@@ -8,7 +8,7 @@
 # ============================================
 box::use(
   shiny[...],
-  shinyjs[inlineCSS],
+  shinyjs[inlineCSS,delay],
   stringi,
   . / model[...],
   . /
@@ -30,6 +30,7 @@ box::use(
   .. / logic/objeto_dao[...],
   .. / logic/camera_dao[...],
   .. / logic/setor_dao[...],
+  .. / logic/treinar_dao[...],
   base64enc[...],
   dbp  = ../infra/db_pool,
   db   = ../infra/database,
@@ -83,30 +84,6 @@ img_dims <- function(raw) {
   if (identical(mime, "image/png"))  return(png_dims(raw))
   if (identical(mime, "image/jpeg")) return(jpeg_dims(raw))
   c(NA_integer_, NA_integer_)
-}
-
-# ==================================================
-# Query de frames: parametrizada, com UTC consistente
-# ==================================================
-fetch_frames <- function(time_begin, time_end, camera_id_vec) {
-  stopifnot(length(camera_id_vec) >= 1)
-  tb <- as.POSIXct(time_begin, tz = "UTC")
-  te <- as.POSIXct(time_end,   tz = "UTC")
-
-  placeholders <- paste(rep("?", length(camera_id_vec)), collapse = ",")
-  sql <- paste0(
-    "SELECT DT_HR_LOCAL, CD_ID_CAMERA
-     FROM FRAME_CAMERA
-     WHERE DT_HR_LOCAL BETWEEN ? AND ?
-       AND CD_ID_CAMERA IN (", placeholders, ")
-     ORDER BY DT_HR_LOCAL ASC"
-  )
-
-  params <- c(list(tb, te), as.list(as.integer(camera_id_vec)))
-  df <- DBI::dbGetQuery(dbp$get_pool(), sql, params = params)
-  if (!nrow(df)) return(df)
-  df$DT_HR_LOCAL <- as.POSIXct(df$DT_HR_LOCAL, tz = "UTC")
-  df
 }
 
 # ==================================================
@@ -209,14 +186,6 @@ uiMain <- function(ns, setores, objetos, valueComboSetor = NULL, valueObjeto = N
       )
     ),
     br(),
-    div(class="controls",
-      actionButton(ns("play"),  "▶️ Play"),
-      actionButton(ns("pause"), "⏸ Pause"),
-      actionButton(ns("prevFrame"),  "⟵ Prev"),
-      actionButton(ns("nextFrame"),  "Next ⟶"),
-      numericInput(ns("step_ms"), "Intervalo (ms)", value = 120, min = 1, step = 1)
-    ),
-    br(),
     uiOutput(ns('uiCamerasFrames')) |> shinycssloaders$withSpinner(color = 'lightblue')
   )
 }
@@ -228,27 +197,49 @@ uiCamerasComponentes <- function(ns, input, output, componentes){
   cameras  <- purrr::map_df(componentes$CAMERA, ~ .x) |>
               dplyr::distinct(CD_ID_CAMERA, NAME_CAMERA)
 
+  componentes <- readRDS("comp.rds")
   id_by_cam <- cameras$CD_ID_CAMERA
   divLista <- fluidRow()
 
   for (i in seq_len(nrow(cameras))) {
     local({
-      cam_id    <- cameras$CD_ID_CAMERA[i]
+      cam_id       <- cameras$CD_ID_CAMERA[i]
+      comps_by_cam <- componentes[which(componentes$CD_ID_CAMERA == cam_id),]
+    
       cam_name  <- cameras$NAME_CAMERA[i]
       out_id    <- paste0("map_", cam_id)   # id interno (sem ns)
       dom_id    <- ns(out_id)               # id com namespace
       id_by_cam[[as.character(cam_id)]] <<- dom_id
 
       output[[out_id]] <- renderLeaflet({
-        leaflet(options = leafletOptions(
+        map_cam <- leaflet(options = leafletOptions(
           crs = leafletCRS(crsClass = "L.CRS.Simple"),
           zoomSnap  = 0,
           zoomDelta = 0.25
-        ))
+        )) 
+        
+        for(k in 1:nrow(comps_by_cam)){
+          comp      <- comps_by_cam[k,]
+          poligno   <- comp$POLIGNO_COMPONENTE[[1]]
+          estrutura <- comp$ESTRUTURA[[1]]
+          label <-  HTML(paste0("<strong>COMPONENTE:</strong> ", comp$NAME_COMPONENTE, "<br><strong>ESTRUTURA:</strong> ", estrutura$NAME_ESTRUTURA))
+          
+          map_cam <- map_cam |> addPolygons(
+            group   = "comp",
+            lng = poligno$x,
+            lat = poligno$y,
+            layerId = comp$CD_ID_COMPONENTE,
+            weight  = 2,
+            fillOpacity = 0.1,
+            label = label
+          )
+        }
+        
+        map_cam
       })
 
       cameraElement <- panelTitle(
-        title = paste0("Câmera: ", cam_name, " (", cam_id, ")"),
+        title = paste0("Câmera: ", cam_name),
         background.color.title = "white",
         title.color  = "black",
         border.color = "lightgray",
@@ -371,7 +362,7 @@ uiNewTreinar <- function(ns, input, output, session, callback){
       if (is.finite(wh[1]) && is.finite(wh[2]) && !any(is.na(wh))) {
         rv$w <- as.integer(wh[1]); rv$h <- as.integer(wh[2])
       } else {
-        rv$w <- 512L; rv$h <- 512L
+        rv$w <- 512L; rv$h <- 256L
       }
     }
 
@@ -382,6 +373,7 @@ uiNewTreinar <- function(ns, input, output, session, callback){
 
   # ---------- Prefetch em batch por câmera ----------
   prefetch_ahead_batch <- function(N = PREFETCH_AHEAD) {
+
     if (is.null(rv$seq) || nrow(rv$seq) == 0) return(invisible())
     if (rv$i >= nrow(rv$seq)) return(invisible())
 
@@ -407,8 +399,7 @@ uiNewTreinar <- function(ns, input, output, session, callback){
       )
 
       params <- c(list(cam), as.list(ts_vec))
-      res <- tryCatch(DBI::dbGetQuery(dbp$get_pool(), sql, params = params),
-                      error = function(e) NULL)
+      res <- tryCatch(DBI::dbGetQuery(dbp$get_pool(), sql, params = params), error = function(e) NULL)
 
       if (!is.null(res) && nrow(res)) {
         res$DT_HR_LOCAL <- as.POSIXct(res$DT_HR_LOCAL, tz = "UTC")
@@ -474,6 +465,7 @@ uiNewTreinar <- function(ns, input, output, session, callback){
 
   # ---------- Buscar frames + montar UIs das câmeras ----------
   obs$add(observeEvent(input$btBuscar, {
+
     objeto      <<- objetos |> dplyr::filter(NAME_OBJETO == isolate(input$comboObjeto))
     if (!nrow(objeto)) {
       showNotification("Selecione um objeto válido.", type = "warning")
@@ -487,6 +479,7 @@ uiNewTreinar <- function(ns, input, output, session, callback){
     cameras_ids <- unique(purrr::map_int(componentes$CAMERA, "CD_ID_CAMERA"))
 
     frames_idx  <- fetch_frames(
+      dbp$get_pool(),
       time_begin    = time_begin,
       time_end      = time_end,
       camera_id_vec = cameras_ids
@@ -495,8 +488,14 @@ uiNewTreinar <- function(ns, input, output, session, callback){
     # Monta UI das câmeras e salva mapeamento cam -> DOM id
     res_cam <- uiCamerasComponentes(ns, input, output, componentes)
     rv$id_by_cam <- res_cam$id_by_cam
-
-    output$uiCamerasFrames <- renderUI({ res_cam$ui })
+    
+    output$uiCamerasFrames <- renderUI({ 
+      tagList(
+        br(),
+        uiComponenteVideo(ns),
+        res_cam$ui
+      )    
+    })
 
     if (!nrow(frames_idx)) {
       showNotification("Nenhum frame no intervalo/câmeras selecionados.", type = "warning")
@@ -514,29 +513,79 @@ uiNewTreinar <- function(ns, input, output, session, callback){
 
     render_current(fit_bounds = TRUE)
     prefetch_ahead_batch(PREFETCH_AHEAD)
-  }, ignoreInit = TRUE))
 
+  }, ignoreInit = TRUE))
+  
+  play_dir <- reactiveVal(+1L)
   # ---------- Loop de Play (later::later) ----------
+  
   play_step <- function() {
     withReactiveDomain(session, {
       isolate({
         if (!isTRUE(playing())) { loop_on <<- FALSE; return(invisible()) }
-        if (is.null(rv$seq) || nrow(rv$seq) == 0) { playing(FALSE); loop_on <<- FALSE; return(invisible()) }
-        if (rv$i >= nrow(rv$seq)) { playing(FALSE); loop_on <<- FALSE; return(invisible()) }
-
-        step_frame(+1L)
+        if (is.null(rv$seq) || nrow(rv$seq) == 0L) { playing(FALSE); loop_on <<- FALSE; return(invisible()) }
+        
+        # limites conforme direção
+        n <- nrow(rv$seq)
+        dir <- play_dir()
+        
+        if ((dir > 0L && rv$i >= n) ||
+        (dir < 0L && rv$i <= 1L)) {
+          playing(FALSE); loop_on <<- FALSE; return(invisible())
+        }
+        
+        step_frame(dir)                # avança/retrocede 1
         prefetch_ahead_batch(PREFETCH_AHEAD)
-
+        
         delay <- as.numeric(input$step_ms) / 1000
         if (!is.finite(delay) || delay <= 0) delay <- 0.001
-        later$later(function(){ play_step() }, delay)
+        
+        later::later(function(){ play_step() }, delay)
       })
     })
   }
-  obs$add(observeEvent(input$play,  { playing(TRUE);  if (!loop_on) { loop_on <<- TRUE; play_step() } }, ignoreInit = TRUE))
-  obs$add(observeEvent(input$pause, { playing(FALSE) }, ignoreInit = TRUE))
+  
+  # Botões
+  obs$add(observeEvent(input$play, {
+    play_dir(+1L); playing(TRUE)
+    if (!loop_on) { loop_on <<- TRUE; play_step() }
+  }, ignoreInit = TRUE))
+  
+  # (opcional) reverse play
+  obs$add(observeEvent(input$backPlay, {
+    play_dir(-1L); playing(TRUE)
+    if (!loop_on) { loop_on <<- TRUE; play_step() }
+  }, ignoreInit = TRUE))
+  
+  obs$add(observeEvent(input$pause, {
+    playing(FALSE)   # loop encerra na próxima iteração
+  }, ignoreInit = TRUE))
 
   # ---------- Botões do rodapé (exemplo simples) ----------
   obs$add(observeEvent(input$btSair,  { removeModalClear(session) }, ignoreInit = TRUE))
   obs$add(observeEvent(input$btSalvar, { showNotification("Atualizado!", type = "message") }, ignoreInit = TRUE))
+}
+
+uiComponenteVideo <- function(ns){
+
+splitLayout(
+  cellWidths = c("auto", "auto","auto","auto","auto","auto"),
+  # Reverse Play
+  actionButton(ns("backPlay"),  label = "Reverse", icon = icon("backward"),
+  class = "btn btn-outline-secondary", title = "Reproduzir para trás"),
+  # Prev frame
+  actionButton(ns("prevFrame"), label = "Prev",    icon = icon("step-backward"),
+  class = "btn btn-outline-secondary", title = "Frame anterior"),
+  # Play / Pause
+  actionButton(ns("play"),      label = "Play",  icon = icon("play"),
+  class = "btn btn-outline-secondary", title = "Reproduzir"),
+  actionButton(ns("pause"),     label = "Pause", icon = icon("pause"),
+  class = "btn btn-outline-secondary", title = "Pausar"),
+  # Next frame
+  actionButton(ns("nextFrame"), label = "Next",    icon = icon("step-forward"),
+  class = "btn btn-outline-secondary", title = "Próximo frame"),
+  # Intervalo (ms)
+  numericInput(ns("step_ms"),"Intervalo (ms)", value = 50, min = 1, step = 1,width = "110px") |> tagAppendAttributes(style = ';margin-top: -25px;')
+  
+)
 }
