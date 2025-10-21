@@ -536,7 +536,7 @@ uiEditEstrutura <- function(ns,input,output,session,callback){
                 divLista <- tagAppendChildren(divLista, br(), atributoElement)
               }
               divLista
-            }) 
+            })
             
           },ignoreInit = FALSE))
           
@@ -564,7 +564,7 @@ uiEditEstrutura <- function(ns,input,output,session,callback){
         
         obs$add(observeEvent(input$editPressedRow,{
           
-          estrutura(isolate(estruturas()) %>% filter(CD_ID_ESTRUTURA == input$editPressedRow))
+          estrutura(isolate(estruturas()) |> filter(CD_ID_ESTRUTURA == input$editPressedRow))
           
           swiperSlideNext(idSwiper)
           sliderPosition(isolate(sliderPosition()) + 1L)
