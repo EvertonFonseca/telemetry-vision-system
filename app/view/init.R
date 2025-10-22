@@ -158,7 +158,7 @@ ui <- function(id) {
       ), 
       footer = dashboardFooter(
         left  = "Version 1.0.0",
-        right = tags$i(style = 'color: gray; font-size: 12px;',paste0("Copyright © 2020-",format(Sys.Date(),'%Y')," Big Brain, All Rights Reserved."))
+        right = tags$i(style = 'color: gray; font-size: 12px;',paste0("Copyright © 2020-",format(Sys.Date(),'%Y')," YE, All Rights Reserved."))
       )
     )  #|> tagAppendAttributes(class = 'sidebar-collapse')
 }

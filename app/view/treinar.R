@@ -457,38 +457,38 @@ uiNewTreinar <- function(ns, input, output, session, callback){
   # ---------- CLIP: funções internas (closure com rv/session/input) ----------
    show_clip_summary <- function(ts_start, ts_end, i0, i1, tz_local = Sys.timezone()){
     if (is.null(ts_start) || is.null(ts_end)) return(invisible())
-
+    
     dur_sec <- as.numeric(difftime(ts_end, ts_start, units = "secs"))
     dur_txt <- sprintf("%02d:%02d", floor(dur_sec/60), round(dur_sec %% 60))
-
-    fmt_iso <- "%Y-%m-%d %H:%M:%S"
+    
+    fmt_iso <- "%d/%m/%y %H:%M:%S"
     start_utc <- format(ts_start, tz = "UTC", format = fmt_iso)
     end_utc   <- format(ts_end,   tz = "UTC", format = fmt_iso)
     start_loc <- format(ts_start, tz = tz_local, format = fmt_iso)
     end_loc   <- format(ts_end,   tz = tz_local, format = fmt_iso)
-
+    
     n_frames <- if (is.finite(i0) && is.finite(i1)) abs(i1 - i0) + 1L else NA_integer_
-
+    
     # ids/seletores do overlay
     overlay_id <- ns("clip_summary_overlay")
     parent_sel <- paste0("#parent", ns("dialogObj"), " .modal-content")
-
+    
     # remove overlay anterior, se existir
     try(removeUI(selector = paste0("#", overlay_id), multiple = TRUE, immediate = TRUE), silent = TRUE)
-
+    
     # insere overlay "dentro" do modal principal
     componentes <- objeto$CONFIG[[1]]$COMPONENTES[[1]]
     divLista    <- fluidRow()
     
     for (i in seq_along(componentes$CD_ID_COMPONENTE)) {
-
+      
       local({
-
+        
         comp          <- componentes[i,]
         estrutura     <- comp$ESTRUTURA[[1]]
         atributos     <- estrutura$CONFIGS[[1]]$ATRIBUTOS[[1]]
         listAtributos <- tagList()
-      
+        
         for(k in 1:nrow(atributos)){
           atributo          <- atributos[k,]
           id_html           <- ns(paste0(comp$NAME_COMPONENTE,"_",atributo$NAME_ATRIBUTO,"_",k))
@@ -515,36 +515,80 @@ uiNewTreinar <- function(ns, input, output, session, callback){
         divLista <<- tagAppendChildren(divLista,atributoPainel,br())
       })
     }
-
+    
     insertUI(
       selector = parent_sel,
       where    = "beforeEnd",
       ui = div(
         id = overlay_id,
-        style = "position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 1060;
-                 display: flex; align-items: center; justify-content: center;",
-        div(
-          style = "background: #fff; border-radius: 10px; width: min(560px, 92%); 
-                   padding: 16px 18px; box-shadow: 0 12px 30px rgba(0,0,0,.25);",
-          tags$h4("Clip concluído", style="margin-top:0;"),
-          tags$hr(),
-          tags$p(tags$b("Janela do clip (UTC):")),
-          tags$p(sprintf("De: %s  —  Até: %s", start_utc, end_utc)),
-          tags$hr(),
-          tags$p(tags$b(sprintf("Duração: %s (%.1f s)", dur_txt, dur_sec))),
-          tags$p(tags$b(sprintf("Frames no intervalo: %s", ifelse(is.na(n_frames), "-", as.character(n_frames))))),
-          tags$hr(),
-          tags$p(tags$b("Conversão p/ fuso local")),
-          tags$p(sprintf("Início: %s  —  Fim: %s  (%s)", start_loc, end_loc, tz_local),
-         divLista
+        style = paste(
+          "position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 1060;",
+          "display: flex; align-items: center; justify-content: center;"
         ),
+        # Cartão/modal
+        div(
+          style = paste(
+            "background:#fff; border-radius:10px; width:min(560px,92%);",
+            "height:90vh; min-height:350px; box-shadow:0 12px 30px rgba(0,0,0,.25);",
+            "display:flex; flex-direction:column;"          # <- coluna: header | body | footer
+          ),
+          
+          # ----- HEADER -----
           div(
-            style="text-align: right; margin-top: 12px;",
+            style = "padding:16px 18px; border-bottom:1px solid #eee; flex:0 0 auto;",
+            tags$h4("Clip concluído", style="margin:0;")
+          ),
+          
+          # ----- BODY (rolável) -----
+          div(
+            style = paste(
+              "padding:10px;",
+              "flex:1 1 auto;",               # ocupa o miolo disponível
+              "min-height:0;",                # necessário p/ overflow funcionar em flex
+              "overflow-y:auto; overflow-x:hidden;"
+            ),
+            panelTitle(
+              title = "Atributos",
+              background.color.title = "white",
+              title.color  = "black",
+              border.color = "lightgray",
+              children = div(
+                style = "padding: 20px;",
+                divLista
+              )
+            ),
+            br(),
+            panelTitle(
+              title = "Descrição",
+              background.color.title = "white",
+              title.color  = "black",
+              border.color = "lightgray",
+              children = div(
+                style = "padding: 10px;",
+                tags$p(tags$b("Janela do clip (UTC):")),
+                tags$p(sprintf("De: %s  —  Até: %s", start_utc, end_utc)),
+                tags$hr(),
+                tags$p(tags$b(sprintf("Duração: %s (%.1f s)", dur_txt, dur_sec))),
+                tags$p(tags$b(sprintf(
+                  "Frames no intervalo: %s",
+                  ifelse(is.na(n_frames), "-", as.character(n_frames))
+                ))),
+                tags$hr(),
+                tags$p(tags$b("Conversão p/ fuso local")),
+                tags$p(sprintf("Início: %s  —  Fim: %s  (%s)", start_loc, end_loc, tz_local))
+              )
+            )
+          ),
+          
+          # ----- FOOTER -----
+          div(
+            style = "padding:12px 18px; border-top:1px solid #eee; text-align:right; flex:0 0 auto;",
             actionButton(ns("clipCloseSummary"), "OK", class = "btn btn-primary btn-sm")
           )
         )
       )
     )
+
    }
 
   end_clip <- function(reason = c("limite", "manual")){
