@@ -170,10 +170,10 @@ shinySetInputValue <- function(id,value = NULL){
   if(is.vector(id))
   {
    js <- sapply(id, function(x)  paste0("Shiny.setInputValue('",x,"',",value,",{priority:'event'});"))
-   shinyjs::runjs(paste0(js,collapse = '\n '))
+   runjs(paste0(js,collapse = '\n '))
     
   }else{
-    shinyjs::runjs(paste0("Shiny.setInputValue('",id,"',",value,",{priority:'event'});"))
+    runjs(paste0("Shiny.setInputValue('",id,"',",value,",{priority:'event'});"))
   }
 }
 
@@ -193,7 +193,7 @@ debugLocal <- function(expr) {
 
 #' @export
 console <- function(text){
-  shinyjs::runjs(paste0("console.log('",text,"');"))
+  runjs(paste0("console.log('",text,"');"))
 }
 
 #Cria um dialog dinamico
@@ -321,7 +321,7 @@ set_readonly_js <- function(id, readonly = FALSE, session = shiny::getDefaultRea
         el.off('focus.readonly');
       })();", full_id)
   }
-  shinyjs::runjs(js)
+  runjs(js)
 }
 #' @export
 newProgressLoader <- function(){
@@ -345,12 +345,12 @@ removeProgressLoader <- function(timer = 1000,callback = NULL){
   
   if(timer > 0){
     
-    shinyjs::delay(timer,{
+    delay(timer,{
       
       if(!is.null(callback))
         callback()
       #remove loader
-      shinyjs::runjs("try{document.getElementById('progressoLoader').remove();}catch(e){}")
+      runjs("try{document.getElementById('progressoLoader').remove();}catch(e){}")
       assign('status.loader',value = FALSE,immediate = T,envir = .GlobalEnv)
     })
     
@@ -361,7 +361,7 @@ removeProgressLoader <- function(timer = 1000,callback = NULL){
        callback()
     
     #remove loader
-    shinyjs::runjs("try{document.getElementById('progressoLoader').remove();}catch(e){}")
+    runjs("try{document.getElementById('progressoLoader').remove();}catch(e){}")
     assign('status.loader',value = FALSE,immediate = T,envir = .GlobalEnv)
 
   }

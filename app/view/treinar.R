@@ -216,15 +216,16 @@ uiCamerasComponentes <- function(ns, input, output, componentes){
 
   cameras  <- purrr::map_df(componentes$CAMERA, ~ .x) |>
               dplyr::distinct(CD_ID_CAMERA, NAME_CAMERA)
-
+  
   id_by_cam <- list()   # precisa ser lista
   divLista  <- fluidRow()
+  n_cam     <- nrow(cameras)
 
-  for (i in seq_len(nrow(cameras))) {
+  for (i in seq_len(n_cam)) {
     local({
       cam_id       <- cameras$CD_ID_CAMERA[i]
       comps_by_cam <- componentes[which(componentes$CD_ID_CAMERA == cam_id),]
-    
+
       cam_name  <- cameras$NAME_CAMERA[i]
       out_id    <- paste0("map_", cam_id)   # id interno (sem ns)
       dom_id    <- ns(out_id)               # id com namespace
@@ -235,14 +236,14 @@ uiCamerasComponentes <- function(ns, input, output, componentes){
           crs = leafletCRS(crsClass = "L.CRS.Simple"),
           zoomSnap  = 0,
           zoomDelta = 0.25
-        )) 
-        
+        ))
+
         for(k in 1:nrow(comps_by_cam)){
           comp      <- comps_by_cam[k,]
           poligno   <- comp$POLIGNO_COMPONENTE[[1]]
           estrutura <- comp$ESTRUTURA[[1]]
           label <-  HTML(paste0("<strong>COMPONENTE:</strong> ", comp$NAME_COMPONENTE, "<br><strong>ESTRUTURA:</strong> ", estrutura$NAME_ESTRUTURA))
-          
+
           map_cam <- map_cam |> addPolygons(
             group   = "comp",
             lng = poligno$x,
@@ -263,10 +264,14 @@ uiCamerasComponentes <- function(ns, input, output, componentes){
         border.color = "lightgray",
         children = div(
           style = "padding: 10px;",
-          leafletOutput(dom_id, height = "256px", width = "100%")
+          leafletOutput(dom_id, height = "350px", width = "100%")
         )
       )
-      divLista <<- tagAppendChildren(divLista,column(6,cameraElement))
+
+      # largura: 6 para todas, exceto a última quando n_cam é ímpar -> 12
+      col_w <- if (i == n_cam && (n_cam %% 2L == 1L)) 12L else 6L
+
+      divLista <<- tagAppendChildren(divLista, column(col_w, cameraElement))
     })
   }
   list(ui = divLista, id_by_cam = id_by_cam)
@@ -367,10 +372,11 @@ new_player_ctx <- function(session, cache_get, cache_put, cache_trim, key_of, fe
 #' @export
 uiNewTreinar <- function(ns, input, output, session, callback){
 
-  obs       <- newObserve()
-  setores   <- selectAllSetors(dbp$get_pool())
-  objetos   <- selectAllObjetos(dbp$get_pool())
-  objeto    <- NULL
+  clockupdate <- reactiveVal()
+  obs         <- newObserve()
+  setores     <- selectAllSetors(dbp$get_pool())
+  objetos     <- selectAllObjetos(dbp$get_pool())
+  objeto      <- NULL
 
   # ---------- Estado do player ----------
   rv <- reactiveValues(
@@ -471,6 +477,45 @@ uiNewTreinar <- function(ns, input, output, session, callback){
     try(removeUI(selector = paste0("#", overlay_id), multiple = TRUE, immediate = TRUE), silent = TRUE)
 
     # insere overlay "dentro" do modal principal
+    componentes <- objeto$CONFIG[[1]]$COMPONENTES[[1]]
+    divLista    <- fluidRow()
+    
+    for (i in seq_along(componentes$CD_ID_COMPONENTE)) {
+
+      local({
+
+        comp          <- componentes[i,]
+        estrutura     <- comp$ESTRUTURA[[1]]
+        atributos     <- estrutura$CONFIGS[[1]]$ATRIBUTOS[[1]]
+        listAtributos <- tagList()
+      
+        for(k in 1:nrow(atributos)){
+          atributo          <- atributos[k,]
+          id_html           <- ns(paste0(comp$NAME_COMPONENTE,"_",atributo$NAME_ATRIBUTO,"_",k))
+          htmlComponenteAtt <- NA
+          if(atributo$NAME_DATA == "QUALITATIVE"){
+            classes           <- stringr::str_split(atributo$CLASSE_ATRIBUTO,",")[[1]]
+            htmlComponenteAtt <- selectizeInput(id_html,label = atributo$NAME_ATRIBUTO,choices = classes,options  = list(dropdownParent = 'body',openOnFocus = TRUE,closeAfterSelect = TRUE))
+          }else{
+            htmlComponenteAtt <- textInput(id_html,label = atributo$NAME_ATRIBUTO)
+          }
+          listAtributos <- tagAppendChildren(listAtributos,htmlComponenteAtt)
+        }
+        
+        atributoPainel <- panelTitle(
+          title = comp$NAME_COMPONENTE,
+          background.color.title = "white",
+          title.color  = "black",
+          border.color = "lightgray",
+          children = div(
+            style = "padding: 10px;",
+            listAtributos
+          )
+        )
+        divLista <<- tagAppendChildren(divLista,atributoPainel,br())
+      })
+    }
+
     insertUI(
       selector = parent_sel,
       where    = "beforeEnd",
@@ -490,7 +535,9 @@ uiNewTreinar <- function(ns, input, output, session, callback){
           tags$p(tags$b(sprintf("Frames no intervalo: %s", ifelse(is.na(n_frames), "-", as.character(n_frames))))),
           tags$hr(),
           tags$p(tags$b("Conversão p/ fuso local")),
-          tags$p(sprintf("Início: %s  —  Fim: %s  (%s)", start_loc, end_loc, tz_local)),
+          tags$p(sprintf("Início: %s  —  Fim: %s  (%s)", start_loc, end_loc, tz_local),
+         divLista
+        ),
           div(
             style="text-align: right; margin-top: 12px;",
             actionButton(ns("clipCloseSummary"), "OK", class = "btn btn-primary btn-sm")
@@ -498,7 +545,7 @@ uiNewTreinar <- function(ns, input, output, session, callback){
         )
       )
     )
-  }
+   }
 
   end_clip <- function(reason = c("limite", "manual")){
     reason <- match.arg(reason)
@@ -643,6 +690,12 @@ uiNewTreinar <- function(ns, input, output, session, callback){
       rv$id_by_cam <- res_cam$id_by_cam
       
       output$uiCamerasFrames <- renderUI({ 
+
+        output$titleClock <- renderText({
+          clockupdate()
+          get_current_frame_ts(rv,tz = Sys.timezone(),fmt = "%d/%m/%y %H:%M%:%S")
+        })
+
         tagList(
           br(),
           uiComponenteVideo(ns),
@@ -673,7 +726,7 @@ uiNewTreinar <- function(ns, input, output, session, callback){
         if (is.finite(wh[1]) && is.finite(wh[2]) && !any(is.na(wh))) {
           rv$w <- as.integer(wh[1]); rv$h <- as.integer(wh[2])
         } else {
-          rv$w <- 512L; rv$h <- 256L
+          rv$w <- 512L; rv$h <- 350L
         }
       }
       
@@ -739,7 +792,7 @@ uiNewTreinar <- function(ns, input, output, session, callback){
 
         # >>> CLIP: verifica limite após render
         check_clip_elapsed()
-
+        clockupdate(Sys.time())
         # Intervalo
         delay <- suppressWarnings(as.numeric(input$step_ms) / 1000)
         if (!is.finite(delay) || delay <= 0) delay <- 0.001
@@ -839,7 +892,7 @@ get_current_frame_ts <- function(rv, tz = "UTC", fmt = NULL) {
 uiComponenteVideo <- function(ns){
   splitLayout(
     # 8 filhos → 8 larguras
-    cellWidths = c("auto","auto","auto","auto","auto","110px","auto","120px"),
+    cellWidths = c("auto","auto","auto","auto","auto","110px","auto","120px","auto"),
     actionButton(ns("backPlay"),  label = "Reverse", icon = icon("backward"),
       class = "btn btn-outline-secondary", title = "Reproduzir para trás"),
     actionButton(ns("prevFrame"), label = "Prev",    icon = icon("step-backward"),
@@ -855,6 +908,7 @@ uiComponenteVideo <- function(ns){
     actionButton(ns("clipToggle"), label = "Start Clip", icon = icon("scissors"),
       class = "btn btn-outline-primary", title = "Iniciar/encerrar clip (máx. duração)"),
     numericInput(ns("clip_max_min"), "Máx (min)", value = 5, min = 1, max = 60, step = 1, width = "120px") |>
-      tagAppendAttributes(style = ';margin-top: -25px;')
+      tagAppendAttributes(style = ';margin-top: -25px;'),
+    textOutput(ns("titleClock"))
   )
 }
