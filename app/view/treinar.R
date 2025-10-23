@@ -250,15 +250,18 @@ clip_limit_exceeded <- function(rv, max_min, now_ts = NULL) {
   elapsed <- as.numeric(difftime(now_ts, rv$clip_t0, units = "secs"))
   is.finite(elapsed) && elapsed >= max_sec
 }
+
 clip_summary_overlay <- function(ns, session, objeto, ts_start, ts_end, n_frames,
                                  tz_local = Sys.timezone()) {
+  
   if (is.null(ts_start) || is.null(ts_end)) return(invisible())
 
-  dur_sec <- as.numeric(difftime(ts_end, ts_start, units = "secs"))
-  dur_txt <- sprintf("%02d:%02d", floor(dur_sec / 60), round(dur_sec %% 60))
+  dur_sec   <- as.numeric(difftime(ts_end, ts_start, units = "secs"))
+  dur_txt   <- sprintf("%02d:%02d", floor(dur_sec / 60), round(dur_sec %% 60))
   start_utc <- fmt_pt(ts_start, "UTC"); end_utc <- fmt_pt(ts_end, "UTC")
   start_loc <- fmt_pt(ts_start, tz_local); end_loc <- fmt_pt(ts_end, tz_local)
 
+  codigo_date <- paste0(as.integer(ts_start),"_",as.integer(ts_end),"_")
   overlay_id <- ns("clip_summary_overlay")
   parent_sel <- paste0("#parent", ns("dialogObj"), " .modal-content")
   try(removeUI(selector = paste0("#", overlay_id), multiple = TRUE, immediate = TRUE), silent = TRUE)
@@ -273,7 +276,7 @@ clip_summary_overlay <- function(ns, session, objeto, ts_start, ts_end, n_frames
     listAtributos <- tagList()
     for (k in seq_len(nrow(atributos))) {
       atributo  <- atributos[k,]
-      id_html   <- ns(paste0(comp$NAME_COMPONENTE, "_", atributo$NAME_ATRIBUTO, "_", k))
+      id_html   <- ns(paste0(codigo_date,comp$NAME_COMPONENTE, "_", atributo$NAME_ATRIBUTO, "_", k))
       if (atributo$NAME_DATA == "QUALITATIVE") {
         classes <- stringr::str_split(atributo$CLASSE_ATRIBUTO, ",")[[1]]
         listAtributos <- tagAppendChildren(
@@ -282,7 +285,7 @@ clip_summary_overlay <- function(ns, session, objeto, ts_start, ts_end, n_frames
                          options = list(dropdownParent = 'body', openOnFocus = TRUE, closeAfterSelect = TRUE))
         )
       } else {
-        listAtributos <- tagAppendChildren(listAtributos, textInput(id_html, label = atributo$NAME_ATRIBUTO))
+        listAtributos <- tagAppendChildren(listAtributos,numericInput(id_html, label = atributo$NAME_ATRIBUTO))
       }
     }
     divLista <- tagAppendChildren(
@@ -315,7 +318,7 @@ clip_summary_overlay <- function(ns, session, objeto, ts_start, ts_end, n_frames
         ),
         div(
           style = "padding:16px 18px; border-bottom:1px solid #eee; flex:0 0 auto;",
-          tags$h4("Clip concluído", style = "margin:0;")
+          tags$h4("Comportamento do objeto", style = "margin:0;")
         ),
         div(
           style = paste("padding:10px;", "flex:1 1 auto;", "min-height:0;", "overflow-y:auto; overflow-x:hidden;"),
@@ -326,24 +329,24 @@ clip_summary_overlay <- function(ns, session, objeto, ts_start, ts_end, n_frames
             border.color = "lightgray",
             children = div(style = "padding: 20px;", divLista)
           ),
-          br(),
-          panelTitle(
-            title = "Descrição",
-            background.color.title = "white",
-            title.color  = "black",
-            border.color = "lightgray",
-            children = div(
-              style = "padding: 10px;",
-              tags$p(tags$b("Janela do clip (UTC):")),
-              tags$p(sprintf("De: %s  —  Até: %s", start_utc, end_utc)),
-              tags$hr(),
-              tags$p(tags$b(sprintf("Duração: %s (%.1f s)", dur_txt, dur_sec))),
-              tags$p(tags$b(sprintf("Frames no intervalo: %s", ifelse(is.na(n_frames), "-", as.character(n_frames))))),
-              tags$hr(),
-              tags$p(tags$b("Conversão p/ fuso local")),
-              tags$p(sprintf("Início: %s  —  Fim: %s  (%s)", start_loc, end_loc, tz_local))
-            )
-          )
+          # br(),
+          # panelTitle(
+          #   title = "Descrição",
+          #   background.color.title = "white",
+          #   title.color  = "black",
+          #   border.color = "lightgray",
+          #   children = div(
+          #     style = "padding: 10px;",
+          #     tags$p(tags$b("Janela do clip (UTC):")),
+          #     tags$p(sprintf("De: %s  —  Até: %s", start_utc, end_utc)),
+          #     tags$hr(),
+          #     tags$p(tags$b(sprintf("Duração: %s (%.1f s)", dur_txt, dur_sec))),
+          #     tags$p(tags$b(sprintf("Frames no intervalo: %s", ifelse(is.na(n_frames), "-", as.character(n_frames))))),
+          #     tags$hr(),
+          #     tags$p(tags$b("Conversão p/ fuso local")),
+          #     tags$p(sprintf("Início: %s  —  Fim: %s  (%s)", start_loc, end_loc, tz_local))
+          #   )
+          # )
         ),
         div(
           style = "padding:12px 18px; border-top:1px solid #eee; text-align:right; flex:0 0 auto;",
@@ -829,8 +832,8 @@ uiNewTreinar <- function(ns, input, output, session, callback){
         data.frame(
           Linha  = integer(0),
           Título = character(0),
-          `De (UTC)` = character(0),
-          `Até (UTC)` = character(0),
+          `Data Hora De` = character(0),
+          `Data Hora Até` = character(0),
           Visualizar = character(0),
           Excluir = character(0)
         ),
@@ -848,7 +851,7 @@ uiNewTreinar <- function(ns, input, output, session, callback){
           inputId = paste0("clip_title_", id),
           label = NULL, value = df$title[df$id == id],
           width = "100%", placeholder = "Nome do clip"
-        )
+        ) |> tagAppendAttributes(style = ';margin-top: 10px;')
       )
     }, character(1))
     
@@ -873,8 +876,8 @@ uiNewTreinar <- function(ns, input, output, session, callback){
     out <- data.frame(
       `Linha`     = rownum,
       Título     = titulo,
-      `De (UTC)` = fmt(df$t0),
-      `Até (UTC)`= fmt(df$t1),
+      `Data Hora De` = fmt_pt(df$t0,Sys.timezone()),
+      `Data Hora Até`= fmt_pt(df$t1,Sys.timezone()),
       Visualizar = btn_view,
       Excluir    = btn_del,
       stringsAsFactors = FALSE
@@ -933,6 +936,13 @@ uiNewTreinar <- function(ns, input, output, session, callback){
   obs$add(observeEvent(input$btSalvar, {
     showNotification("Atualizado!", type = "message")
     print(as.POSIXct(get_current_frame_ts(rv), tz = Sys.timezone()))
+    
+    df <- isolate(clips());
+    debugLocal(function(x){ df })
+    if (!nrow(df)) return(invisible())
+   
+    dados <- collect_clip_attributes(input,objeto,df$t0,df$t1)
+ 
   }, ignoreInit = TRUE))
   
   obs$add(observeEvent(input$clipCloseVideo, {
@@ -958,4 +968,107 @@ uiNewTreinar <- function(ns, input, output, session, callback){
     }
     clips_observed_titles(c(already, new_ids))
   }))
+}
+
+# ==================================================
+# Coleta dos valores dos atributos no overlay de clip
+# ==================================================
+# Retorna um data.frame com:
+# CD_ID_COMPONENTE, NAME_COMPONENTE, NAME_ATRIBUTO, NAME_DATA, VALUE
+collect_clip_attributes <- function(input, objeto,t0,t1) {
+  stopifnot(!is.null(objeto), nrow(objeto) >= 1)
+  componentes <- objeto$CONFIG[[1]]$COMPONENTES[[1]]
+  if (is.null(componentes) || !nrow(componentes)) {
+    return(data.frame(
+      CD_ID_COMPONENTE = integer(0),
+      NAME_COMPONENTE  = character(0),
+      NAME_ATRIBUTO    = character(0),
+      NAME_DATA        = character(0),
+      VALUE            = character(0),
+      stringsAsFactors = FALSE
+    ))
+  }
+
+  # helper: normaliza pedaços para um id seguro (caso haja espaços/acentos)
+  normalize_id_piece <- function(x) {
+    x <- as.character(x)
+    x <- gsub("\\s+", "_", x)             # espaços -> _
+    x <- gsub("[^A-Za-z0-9_\\-]", "_", x) # demais -> _
+    x
+  }
+
+ codigo_date <- paste0(as.integer(t0),"_",as.integer(t1),"_")
+
+  # gera id completo exatamente como no builder (com namespace)
+  make_ids <- function(comp_name, attr_name, k) {
+    raw_id   <- paste0(codigo_date,comp_name, "_", attr_name, "_", k)
+    norm_id  <- paste0(codigo_date,normalize_id_piece(comp_name), "_",normalize_id_piece(attr_name), "_", k)
+    # com namespace (ns é uma função)
+    list(
+      raw  = raw_id,
+      norm = norm_id
+    )
+  }
+
+  # tenta ler um input considerando id "raw" e "norm"
+  read_input <- function(id_candidates) {
+    cand <- unlist(id_candidates, use.names = FALSE)
+    for (cid in cand) {
+      if (cid %in% names(input)) {
+        return(input[[cid]])
+      }
+    }
+    NA
+  }
+
+  rows <- list()
+
+  for (i in seq_len(nrow(componentes))) {
+    comp          <- componentes[i, ]
+    estrutura     <- comp$ESTRUTURA[[1]]
+    atributos     <- estrutura$CONFIGS[[1]]$ATRIBUTOS[[1]]
+    if (is.null(atributos) || !nrow(atributos)) next
+
+    comp_id   <- as.integer(comp$CD_ID_COMPONENTE[[1]])
+    comp_name <- as.character(comp$NAME_COMPONENTE[[1]])
+
+    for (k in seq_len(nrow(atributos))) {
+      atributo   <- atributos[k, ]
+      attr_name  <- as.character(atributo$NAME_ATRIBUTO[[1]])
+      attr_type  <- as.character(atributo$NAME_DATA[[1]])      # "QUALITATIVE" | outro
+
+      ids   <- make_ids(comp_name, attr_name, k)
+      value <- read_input(ids)
+
+      # normaliza saída: sempre como character, preservando NA
+      if (isTRUE(is.numeric(value))) {
+        value <- as.character(value)
+      } else if (isTRUE(is.logical(value))) {
+        value <- ifelse(is.na(value), NA_character_, ifelse(value, "TRUE", "FALSE"))
+      } else {
+        value <- if (is.null(value)) NA_character_ else as.character(value)
+      }
+
+      rows[[length(rows) + 1L]] <- data.frame(
+        CD_ID_COMPONENTE = comp_id,
+        NAME_COMPONENTE  = comp_name,
+        NAME_ATRIBUTO    = attr_name,
+        NAME_DATA        = attr_type,
+        VALUE            = value,
+        stringsAsFactors = FALSE
+      )
+    }
+  }
+
+  if (!length(rows)) {
+    return(data.frame(
+      CD_ID_COMPONENTE = integer(0),
+      NAME_COMPONENTE  = character(0),
+      NAME_ATRIBUTO    = character(0),
+      NAME_DATA        = character(0),
+      VALUE            = character(0),
+      stringsAsFactors = FALSE
+    ))
+  }
+  do.call(rbind, rows)
 }
