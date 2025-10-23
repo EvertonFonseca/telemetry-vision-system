@@ -1,32 +1,6 @@
 box::use(DBI,dplyr[pull],./utils[...],lubridate)
 
 #' @export
-checkifExistNameCamera <- function(con,name){
-  
-  DBI$dbGetQuery(con,'SELECT COUNT(*) AS STATUS FROM CAMERA_VIEW WHERE NAME_CAMERA = ?',params = list(name)) |>  pull() > 0
-  
-} 
-#' @export
-checkifExistNameCameraEdit <- function(con,id,name){
-  
-  DBI$dbGetQuery(con,'SELECT COUNT(*) AS STATUS FROM CAMERA_VIEW WHERE NAME_CAMERA = ? AND CD_ID_CAMERA != ?',params = list(name,id)) |>  pull() > 0
-  
-}
-#' @export
-checkifExistUrlCamera <- function(con,url){
-  
-  DBI$dbGetQuery(con,'SELECT COUNT(*) AS STATUS FROM CAMERA_VIEW WHERE URL_CAMERA = ?',params = list(url)) |>  pull() > 0
-  
-}
-
-#' @export
-checkifExistUrlCameraEdit <- function(con,id,url){
-  
-  DBI$dbGetQuery(con,'SELECT COUNT(*) AS STATUS FROM CAMERA_VIEW WHERE URL_CAMERA = ? AND CD_ID_CAMERA != ?',params = list(url,id)) |>  pull() > 0
-  
-}
-
-#' @export
 fetch_frames <- function(conn,time_begin, time_end, camera_id_vec) {
   stopifnot(length(camera_id_vec) >= 1)
   tb <- as.POSIXct(time_begin, tz = "UTC")
@@ -46,4 +20,27 @@ fetch_frames <- function(conn,time_begin, time_end, camera_id_vec) {
   if (!nrow(df)) return(df)
   df$DT_HR_LOCAL <- as.POSIXct(df$DT_HR_LOCAL, tz = "UTC")
   df
+}
+
+# ==================================================
+# DB fetchers (frame único e lote para prefetch)
+# ==================================================
+#' @export
+db_fetch_frame_raw <- function(pool, camera_id, ts_utc) {
+  DBI$dbGetQuery(
+    pool,
+    "SELECT DATA_FRAME FROM FRAME_CAMERA WHERE CD_ID_CAMERA = ? AND DT_HR_LOCAL = ? LIMIT 1",
+    params = list(as.integer(camera_id), as.POSIXct(ts_utc, tz = "UTC"))
+  )
+}
+
+#' @export
+db_fetch_many_frames <- function(pool, camera_id, ts_vec_utc) {
+  placeholders <- paste(rep("?", length(ts_vec_utc)), collapse = ",")
+  sql <- paste0(
+    "SELECT DT_HR_LOCAL, DATA_FRAME
+       FROM FRAME_CAMERA
+      WHERE CD_ID_CAMERA = ? AND DT_HR_LOCAL IN (", placeholders, ")"
+  )
+  DBI$dbGetQuery(pool, sql, params = c(list(as.integer(camera_id)), as.list(as.POSIXct(ts_vec_utc, tz = "UTC"))))
 }

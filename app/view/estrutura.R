@@ -43,7 +43,7 @@ uiNewEstrutura <- function(ns,input,output,session,callback){
   tipoDatas          <- selectAllTipoDados(dbp$get_pool())
   attributoReactive  <- reactiveVal(modelAtributo())
   
-  id       <- ns('dialogObj')
+  id       <- ns('dialogEstrutura')
   cssStyle <- list()
   cssStyle[[paste0(' #parent',id,' .modal-dialog')]]  <- paste0('height: 80% !important;')
   cssStyle[[paste0(' #parent',id,' .modal-content')]] <- paste0('width: 100% !important; height: 100% !important;')
@@ -298,7 +298,7 @@ uiEditEstrutura <- function(ns,input,output,session,callback){
   tipoDatas          <- selectAllTipoDados(dbp$get_pool())
   attributoReactive  <- reactiveVal(modelAtributo())
   
-  id       <- ns('dialogObj')
+  id       <- ns('dialogEstrutura')
   cssStyle <- list()
   cssStyle[[paste0(' #parent',id,' .modal-dialog')]]  <- paste0('height: 80% !important;')
   cssStyle[[paste0(' #parent',id,' .modal-content')]] <- paste0('width: 100% !important; height: 100% !important;')

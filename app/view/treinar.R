@@ -129,26 +129,6 @@ new_lru_cache <- function(max_items = MAX_CACHE_ITEMS) {
 }
 
 # ==================================================
-# DB fetchers (frame único e lote para prefetch)
-# ==================================================
-db_fetch_frame_raw <- function(pool, camera_id, ts_utc) {
-  DBI::dbGetQuery(
-    pool,
-    "SELECT DATA_FRAME FROM FRAME_CAMERA WHERE CD_ID_CAMERA = ? AND DT_HR_LOCAL = ? LIMIT 1",
-    params = list(as.integer(camera_id), as.POSIXct(ts_utc, tz = "UTC"))
-  )
-}
-db_fetch_many_frames <- function(pool, camera_id, ts_vec_utc) {
-  placeholders <- paste(rep("?", length(ts_vec_utc)), collapse = ",")
-  sql <- paste0(
-    "SELECT DT_HR_LOCAL, DATA_FRAME
-       FROM FRAME_CAMERA
-      WHERE CD_ID_CAMERA = ? AND DT_HR_LOCAL IN (", placeholders, ")"
-  )
-  DBI::dbGetQuery(pool, sql, params = c(list(as.integer(camera_id)), as.list(as.POSIXct(ts_vec_utc, tz = "UTC"))))
-}
-
-# ==================================================
 # PlayerContext (render + prefetch), independente do módulo
 # ==================================================
 new_player_ctx <- function(session, pool, lru_cache) {
@@ -263,7 +243,7 @@ clip_summary_overlay <- function(ns, session, objeto, ts_start, ts_end, n_frames
 
   codigo_date <- paste0(as.integer(ts_start),"_",as.integer(ts_end),"_")
   overlay_id <- ns("clip_summary_overlay")
-  parent_sel <- paste0("#parent", ns("dialogObj"), " .modal-content")
+  parent_sel <- paste0("#parent", ns("dialogTrain"), " .modal-content")
   try(removeUI(selector = paste0("#", overlay_id), multiple = TRUE, immediate = TRUE), silent = TRUE)
 
   # Atributos por componente (replica seu construtor)
@@ -329,24 +309,24 @@ clip_summary_overlay <- function(ns, session, objeto, ts_start, ts_end, n_frames
             border.color = "lightgray",
             children = div(style = "padding: 20px;", divLista)
           ),
-          # br(),
-          # panelTitle(
-          #   title = "Descrição",
-          #   background.color.title = "white",
-          #   title.color  = "black",
-          #   border.color = "lightgray",
-          #   children = div(
-          #     style = "padding: 10px;",
-          #     tags$p(tags$b("Janela do clip (UTC):")),
-          #     tags$p(sprintf("De: %s  —  Até: %s", start_utc, end_utc)),
-          #     tags$hr(),
-          #     tags$p(tags$b(sprintf("Duração: %s (%.1f s)", dur_txt, dur_sec))),
-          #     tags$p(tags$b(sprintf("Frames no intervalo: %s", ifelse(is.na(n_frames), "-", as.character(n_frames))))),
-          #     tags$hr(),
-          #     tags$p(tags$b("Conversão p/ fuso local")),
-          #     tags$p(sprintf("Início: %s  —  Fim: %s  (%s)", start_loc, end_loc, tz_local))
-          #   )
-          # )
+          br(),
+          panelTitle(
+            title = "Descrição",
+            background.color.title = "white",
+            title.color  = "black",
+            border.color = "lightgray",
+            children = div(
+              style = "padding: 10px;",
+              tags$p(tags$b("Janela do clip (UTC):")),
+              tags$p(sprintf("De: %s  —  Até: %s", start_utc, end_utc)),
+              tags$hr(),
+              tags$p(tags$b(sprintf("Duração: %s (%.1f s)", dur_txt, dur_sec))),
+              tags$p(tags$b(sprintf("Frames no intervalo: %s", ifelse(is.na(n_frames), "-", as.character(n_frames))))),
+              tags$hr(),
+              tags$p(tags$b("Conversão p/ fuso local")),
+              tags$p(sprintf("Início: %s  —  Fim: %s  (%s)", start_loc, end_loc, tz_local))
+            )
+          )
         ),
         div(
           style = "padding:12px 18px; border-top:1px solid #eee; text-align:right; flex:0 0 auto;",
@@ -437,12 +417,18 @@ uiMain <- function(ns, setores) {
             inputId = ns("datetimeBegin"), label = "Data e Hora De:",
             language = "pt-BR", timepicker = TRUE, dateFormat = "dd/MM/yyyy",
             timepickerOpts = timepickerOptions(hoursStep = 1, minutesStep = 5),
+            update_on  = "change",                 # envia ao digitar
+            readonly   = TRUE,                    # permite digitar no input
+            onkeydown  = "if(event.key==='Enter'){this.blur();}",  # confirma com Enter
             width ="98%", placeholder = "Escolha uma data e hora"
           ),
           airDatepickerInput(
             inputId = ns("datetimeEnd"), label = "Data e Hora Até:",
             language = "pt-BR", timepicker = TRUE, dateFormat = "dd/MM/yyyy",
             timepickerOpts = timepickerOptions(hoursStep = 1, minutesStep = 5),
+            update_on  = "change",                 # envia ao digitar
+            readonly   = TRUE,                    # permite digitar no input
+            onkeydown  = "if(event.key==='Enter'){this.blur();}",  # confirma com Enter
             width ="98%", placeholder = "Escolha uma data e hora"
           ),
           actionButton(ns('btBuscar'), label = '', icon = icon("search"),
@@ -620,7 +606,7 @@ uiNewTreinar <- function(ns, input, output, session, callback){
   ctx <- session$userData$player_ctx
 
   # ---------- Modal/UI ----------
-  id       <- ns('dialogObj')
+  id       <- ns('dialogTrain')
   cssStyle <- list()
   cssStyle[[paste0(' #parent',id,' .modal-dialog')]]  <- 'width: 95% !important; height: 90% !important;'
   cssStyle[[paste0(' #parent',id,' .modal-content')]] <- 'width: 100% !important; height: 100% !important;'
@@ -727,9 +713,9 @@ uiNewTreinar <- function(ns, input, output, session, callback){
         st <- ctx$render_current(seq_df = seq_df, i = i0, w = w0, h = h0, id_map = id_map, fit_bounds = TRUE)
         isolate({ if (isTRUE(st$ok)) { rv$w <- st$w; rv$h <- st$h } })
         ctx$prefetch_ahead_batch(seq_df = seq_df, i = i0, N = PREFETCH_AHEAD)
+        removeProgressLoader(callback = function(){step_frame(+1L)})
       }, once = TRUE)
 
-      removeProgressLoader(callback = function(){step_frame(+1L)})
     }, auto.remove = FALSE)
   }, ignoreInit = TRUE))
 
@@ -968,6 +954,7 @@ uiNewTreinar <- function(ns, input, output, session, callback){
     }
     clips_observed_titles(c(already, new_ids))
   }))
+
 }
 
 # ==================================================
