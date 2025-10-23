@@ -828,15 +828,40 @@ uiNewTreinar <- function(ns, input, output, session, callback){
       ))
     }
     
-    # monta colunas com HTML (inputs e botões)
     rownum <- seq_len(nrow(df))
+    
+    # Título editável
     titulo <- vapply(df$id, function(id){
-      # inputId = "clip_title_<id>" (sem ns no server)
-       as.character(
+      as.character(
         textInput(
-          inputId = paste0("clip_title_", id),
+          inputId = ns(paste0("clip_title_", id)),
           label = NULL, value = df$title[df$id == id],
           width = "100%", placeholder = "Nome do clip"
+        ) |> tagAppendAttributes(style = ';margin-top: 10px;')
+      )
+    }, character(1))
+    
+    # Datas editáveis (texto, no fuso local)
+    t0_txt <- vapply(df$id, function(id){
+      idx <- which(df$id == id)
+      val <- fmt_pt(df$t0[idx], Sys.timezone())
+      as.character(
+        textInput(
+          inputId = ns(paste0("clip_t0_", id)),
+          label = NULL, value = val, width = "100%",
+          placeholder = "dd/mm/aa HH:MM:SS"
+        ) |> tagAppendAttributes(style = ';margin-top: 10px;')
+      )
+    }, character(1))
+    
+    t1_txt <- vapply(df$id, function(id){
+      idx <- which(df$id == id)
+      val <- fmt_pt(df$t1[idx], Sys.timezone())
+      as.character(
+        textInput(
+          inputId = ns(paste0("clip_t1_", id)),
+          label = NULL, value = val, width = "100%",
+          placeholder = "dd/mm/aa HH:MM:SS"
         ) |> tagAppendAttributes(style = ';margin-top: 10px;')
       )
     }, character(1))
@@ -857,18 +882,16 @@ uiNewTreinar <- function(ns, input, output, session, callback){
       )
     }, character(1))
     
-    fmt <- function(x) format(x, tz = "UTC", format = "%d/%m/%y %H:%M:%S")
-    
     out <- data.frame(
-      `Linha`     = rownum,
-      Título     = titulo,
-      `Data Hora De` = fmt_pt(df$t0,Sys.timezone()),
-      `Data Hora Até`= fmt_pt(df$t1,Sys.timezone()),
-      Visualizar = btn_view,
-      Excluir    = btn_del,
+      Linha          = rownum,
+      Título         = titulo,
+      `Data Hora De` = t0_txt,
+      `Data Hora Até`= t1_txt,
+      Visualizar     = btn_view,
+      Excluir        = btn_del,
       stringsAsFactors = FALSE
     )
-
+    
     DT::datatable(
       out, escape = FALSE, selection = "none",
       options = list(
@@ -876,13 +899,11 @@ uiNewTreinar <- function(ns, input, output, session, callback){
         paging = FALSE,
         ordering = FALSE,
         columnDefs = list(
-          list(visible = FALSE, targets = 0),                 # oculta ID
+          list(visible = FALSE, targets = 0),
           list(className = 'dt-center', targets = "_all"),
-          list(width = '75px', targets = c(1, 5, 6))          # #, Visualizar, Excluir
-          # Deixe Título (2) e Datas (3,4) sem width -> auto
-          # Se quiser explicitar: list(width = 'auto', targets = c(2, 3, 4))
-          )
-      ) 
+          list(width = '75px', targets = c(1, 5, 6))
+        )
+      )
     ) |> DT$formatStyle(names(out), cursor = 'pointer')
   })
   
@@ -904,7 +925,6 @@ uiNewTreinar <- function(ns, input, output, session, callback){
       try(removeUI(selector = paste0("#", ns("clip_summary_overlay")), immediate = TRUE), silent = TRUE)
     }
   }, ignoreInit = TRUE))
-  
   
   # ---------- Rodapé ----------
   obs$add(observeEvent(input$btSair, {
