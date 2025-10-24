@@ -25,7 +25,7 @@ insertTable <- function(conn = get_pool(),table, obj, verbose = FALSE) {
   if (verbose) message(sql)
 
   # Use as.list() para não perder tipos (BLOB deve ser raw)
-  DBI$dbExecute(conn, sql, params = unname(unlist(obj)))
+  DBI$dbExecute(conn, sql, params = unname(obj))
 }
 
 # --------- UPDATE (parametrizado) ---------
@@ -44,7 +44,7 @@ updateTable <- function(conn = get_pool(),table, obj, where_cols = character(), 
 
   sql <- sprintf("UPDATE %s SET %s%s", table, set_part, where_sql)
   if (verbose) message(sql)
-  DBI$dbExecute(conn, sql, params = unlist(params))
+  DBI$dbExecute(conn, sql, params = params)
 }
 
 # --------- DELETE (parametrizado) ---------
@@ -57,7 +57,7 @@ deleteTable <- function(conn = get_pool(),table, where_cols = character(), where
   }
   sql <- sprintf("DELETE FROM %s%s", table, where_sql)
   if (verbose) message(sql)
-  DBI$dbExecute(conn, sql, params = unlist(params))
+  DBI$dbExecute(conn, sql, params = params)
 }
 
 # --------- TRANSAÇÃO SEGURA ---------
