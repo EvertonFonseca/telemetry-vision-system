@@ -44,3 +44,41 @@ db_fetch_many_frames <- function(pool, camera_id, ts_vec_utc) {
   )
   DBI$dbGetQuery(pool, sql, params = c(list(as.integer(camera_id)), as.list(as.POSIXct(ts_vec_utc, tz = "UTC"))))
 }
+
+#' @export
+selectAllPacoteToTraino <- function(pool){
+
+  query <- paste0("WITH oc_latest AS (
+    SELECT CD_ID_OBJ_CONF, CD_ID_OBJETO
+    FROM (
+      SELECT
+        oc.*,
+        ROW_NUMBER() OVER (
+          PARTITION BY oc.CD_ID_OBJETO
+          ORDER BY oc.DT_HR_LOCAL DESC, oc.CD_ID_OBJ_CONF DESC
+        ) AS rn
+      FROM OBJETO_CONFIG oc
+    ) x
+    WHERE rn = 1
+  ),
+  cams AS (
+    SELECT
+      ol.CD_ID_OBJETO,
+      GROUP_CONCAT(DISTINCT c.CD_ID_CAMERA ORDER BY c.CD_ID_CAMERA SEPARATOR ',') AS CD_ID_CAMERAS
+    FROM oc_latest ol
+    LEFT JOIN COMPONENTE c
+      ON c.CD_ID_OBJ_CONF = ol.CD_ID_OBJ_CONF
+    GROUP BY ol.CD_ID_OBJETO
+  )
+  SELECT
+    p.*,
+    COALESCE(cams.CD_ID_CAMERAS, '') AS CD_ID_CAMERAS
+  FROM PACOTE_IA p
+  LEFT JOIN cams
+    ON cams.CD_ID_OBJETO = p.CD_ID_OBJETO
+  -- opcional: filtrar apenas pacotes ativos
+  -- WHERE p.FG_ATIVO = 1
+  ORDER BY p.CD_ID_IA")
+
+  DBI$dbGetQuery(pool,query) 
+}
