@@ -99,6 +99,13 @@ key_of <- function(cam, ts_utc) sprintf(
 )
 fmt_pt <- function(x, tz) format(x, tz = tz, format = "%d/%m/%y %H:%M:%S")
 
+validaDateFormat <- function(text){
+  grepl(
+    "^(0[1-9]|[12][0-9]|3[01])/(0[1-9]|1[0-2])/[0-9]{2} ([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]$",
+    text
+  )
+}
+
 # ==================================================
 # LRU Cache (env + funções puras)
 # ==================================================
@@ -376,6 +383,66 @@ uiClipsPanel <- function(ns){
     border.color = "lightgray",
     children = div(
       style = "padding: 10px;",
+      tags$script(HTML("
+      (function(){
+        // Regex do formato dd/mm/yy HH:MM:SS
+        const reDateTime = /^(0[1-9]|[12][0-9]|3[01])\\/(0[1-9]|1[0-2])\\/[0-9]{2}\\s([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]$/;
+      
+        // Máscara + validação para inputs com classe .shiny-datetime-mask
+        $(document).on('input', 'input.shiny-datetime-mask', function(e){
+          let v = $(this).val();
+      
+          // mantém só dígito, espaço, / e :
+          v = v.replace(/[^0-9\\/ :]/g, '');
+      
+          // extrai só dígitos e limita em 12 (dd mm yy HH MM SS)
+          let digits = v.replace(/[^0-9]/g,'').substring(0,12);
+      
+          // reconstrói no formato dd/mm/yy HH:MM:SS conforme o usuário digita
+          let out = '';
+          if(digits.length > 0){
+            out += digits.substring(0,2); // dd
+          }
+          if(digits.length >= 3){
+            out += '/' + digits.substring(2,4); // /mm
+          }
+          if(digits.length >= 5){
+            out += '/' + digits.substring(4,6); // /yy
+          }
+          if(digits.length >= 7){
+            out += ' ' + digits.substring(6,8); // HH
+          }
+          if(digits.length >= 9){
+            out += ':' + digits.substring(8,10); // :MM
+          }
+          if(digits.length >= 11){
+            out += ':' + digits.substring(10,12); // :SS
+          }
+      
+          $(this).val(out);
+      
+          // borda vermelha se formato inválido
+          if(reDateTime.test(out)){
+            $(this).css('border-color', '');
+          } else {
+            $(this).css('border-color', 'red');
+          }
+      
+          // avisa o Shiny (priority:'event' = reativo imediato)
+          Shiny.setInputValue($(this).attr('id'), out, {priority:'event'});
+        });
+      
+        // Checa de novo no blur
+        $(document).on('blur', 'input.shiny-datetime-mask', function(e){
+          const v = $(this).val();
+          if(!reDateTime.test(v)){
+            $(this).css('border-color','red');
+          } else {
+            $(this).css('border-color','');
+          }
+        });
+      })();
+    ")),
       DT::DTOutput(ns("clipsTable"))
     )
   )
@@ -593,8 +660,22 @@ uiNewTreinar <- function(ns, input, output, session, callback){
   )
   next_clip_id <- reactiveVal(1L)
 
+  updateClipsTable <- function(df){
+    n <- nrow(df)
+    if(!n) return(df)
+    
+    for(i in 1:nrow(df)){
+      #update nas linhas
+      id            <- df$id[i]
+      df$title[i]   <- isolate(input[[paste0("clip_title_",id)]])
+      df            <- clips_update_date_time_t0(df,id,isolate(input[[paste0("clip_t0_",id)]]))
+      df            <- clips_update_date_time_t1(df,id,isolate(input[[paste0("clip_t1_",id)]]))
+    }
+    df
+  }
+
   clips_add <- function(t0, t1, i0, i1, title = ""){
-    df <- clips()
+    df <- updateClipsTable(clips())
     id <- next_clip_id()
     n  <- nrow(df)
     row <- data.frame(
@@ -611,7 +692,7 @@ uiNewTreinar <- function(ns, input, output, session, callback){
   }
   
   clips_remove <- function(id){
-    df <- clips()
+    df <- updateClipsTable(clips())
     if (!nrow(df)) return(invisible())
     clips(df[df$id != id, , drop = FALSE])
   }
@@ -980,8 +1061,13 @@ uiNewTreinar <- function(ns, input, output, session, callback){
     
     if(!db$tryTransaction(function(conn){
       
-      descricao <- build_objeto_descricao(input,df,objeto)
-     
+      info <- build_objeto_descricao(input,df,objeto)
+
+      if(info$status){
+        showNotification(info$message, type = "error")
+        return(invisible(NULL))
+      }
+      descricao <- info$datas[[1]]
       for(i in seq_along(descricao)){
         info      <- descricao[[i]]
         objPacote <- list()
@@ -1146,14 +1232,26 @@ collect_clip_attributes <- function(input, objeto,t0,t1) {
 
 build_objeto_descricao <- function(input,df,objeto){
   
-  listas <- list()
+  listas  <- list()
+  status  <- TRUE
+  message <- ""
   for(i in 1:nrow(df)){
     #update nas linhas
     df_tmp <- df[i,]
     id     <- df_tmp$id
-    df_tmp$title <- isolate(input[[paste0("clip_title_",id)]])
-    df_tmp       <- clips_update_date_time_t0(df_tmp,id,isolate(input[[paste0("clip_t0_",id)]]))
-    df_tmp       <- clips_update_date_time_t1(df_tmp,id,isolate(input[[paste0("clip_t1_",id)]]))
+    df_tmp$title <- input[[paste0("clip_title_",id)]]
+    t0           <- input[[paste0("clip_t0_",id)]]
+    t1           <- input[[paste0("clip_t1_",id)]]
+
+    #validformat date
+    if(!validaDateFormat(t0) || !validaDateFormat(t1)){
+      status <- FALSE
+      message <- "❌ formato inválido na tabela clips (use dd/mm/aa HH:MM:SS)!"
+      break
+    }
+
+    df_tmp       <- clips_update_date_time_t0(df_tmp,id,t0)
+    df_tmp       <- clips_update_date_time_t1(df_tmp,id,t1)
     
     atributos <- collect_clip_attributes(input,objeto,df_tmp$t0,df_tmp$t1)
     atributos <- atributos |> 
@@ -1181,5 +1279,6 @@ build_objeto_descricao <- function(input,df,objeto){
     input_  <- paste0("OBJETO: ",objeto$NAME_OBJETO," TIPO: ",objeto$NAME_OBJETO_TIPO)
     listas[[i]] <- list(titulo = df_tmp$title,input = input_,output = output_,begin = df_tmp$t0,end = df$t1)
   }
-  return(listas)
+  return(list(datas = listas,status = status,message = message))
 }
+
