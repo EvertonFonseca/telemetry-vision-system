@@ -729,7 +729,7 @@ uiNewTreinar <- function(ns, input, output, session, callback){
   )
   output$uiFooter <- renderUI(tagList(
     actionButton(ns("btSair"),  label = "Voltar",    icon = icon("arrow-left")),
-    actionButton(ns("btSalvar"),class = "btn-warning", label = "Atualizar", icon = icon("save"))
+    actionButton(ns("btSalvar"),class = "btn-primary", label = "Atualizar", icon = icon("save"))
   ))
 
   # ---------- Reagir troca de setor -> objetos ----------
@@ -757,8 +757,22 @@ uiNewTreinar <- function(ns, input, output, session, callback){
         removeProgressLoader()
         return(invisible())
       }
-      time_begin  <- as.POSIXct(isolate(input$datetimeBegin), tz = "UTC")
-      time_end    <- as.POSIXct(isolate(input$datetimeEnd),   tz = "UTC")
+
+      time_begin <- isolate(input$datetimeBegin)
+      time_end   <- isolate(input$datetimeEnd)
+
+      if(is.null(time_begin)){
+        showNotification("'Data e Hora De' está com campo vazio!", type = "warning")
+        removeProgressLoader()
+        return(invisible())
+      }else if(is.null(time_end)){
+        showNotification("'Data e Hora Até' está com campo vazio!", type = "warning")
+        removeProgressLoader()
+        return(invisible())
+      }
+
+      time_begin  <- as.POSIXct(time_begin,tz = "UTC")
+      time_end    <- as.POSIXct(time_end,tz = "UTC")
       componentes <- objeto$CONFIG[[1]]$COMPONENTES[[1]]
       cameras_ids <- unique(purrr::map_int(componentes$CAMERA, "CD_ID_CAMERA"))
 
@@ -920,13 +934,18 @@ uiNewTreinar <- function(ns, input, output, session, callback){
         data.frame(
           Linha  = integer(0),
           Título = character(0),
-          `Data Hora De` = character(0),
-          `Data Hora Até` = character(0),
+          De = character(0),
+          Ate = character(0),
           Visualizar = character(0),
           Excluir = character(0)
         ),
         escape = FALSE, selection = "none",
-        options = list(dom = "t", paging = FALSE, ordering = FALSE)
+        options = list(dom = "t", paging = FALSE, ordering = FALSE,language = list(
+          emptyTable   = "Nenhum clip disponível na tabela",
+          zeroRecords  = "Nenhum registro encontrado",
+          infoEmpty    = "",
+          info         = ""
+        ))
       ))
     }
     
@@ -987,8 +1006,8 @@ uiNewTreinar <- function(ns, input, output, session, callback){
     out <- data.frame(
       Linha          = rownum,
       Título         = titulo,
-      `Data Hora De` = t0_txt,
-      `Data Hora Até`= t1_txt,
+      De  = t0_txt,
+      Ate = t1_txt,
       Visualizar     = btn_view,
       Excluir        = btn_del,
       stringsAsFactors = FALSE
@@ -1057,7 +1076,10 @@ uiNewTreinar <- function(ns, input, output, session, callback){
     
     df <- isolate(clips())
     
-    if (!nrow(df)) return(invisible())
+    if (!nrow(df)){
+      showNotification("Não foi possivel salvar o pacote de treino, nenhum clip foi encontrado!", type = "error")
+      return(invisible())
+    }
     
     if(!db$tryTransaction(function(conn){
       
