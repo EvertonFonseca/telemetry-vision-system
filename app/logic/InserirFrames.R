@@ -31,8 +31,6 @@ con <- newConnection()
 # dados <- DBI::dbGetQuery(con, "SELECT  CD_ID_CAMERA,DATA_FRAME,DT_HR_LOCAL FROM FRAME_CAMERA")
 
 # img <- image_read(dados$DATA_FRAME[[1]])
-
-
 file_0 <- mixedsort(list.files("C:/Sistema/Everton/TrainModelStatic/data/0",pattern = "image",full.names = T))
 file_1 <- mixedsort(list.files("C:/Sistema/Everton/TrainModelStatic/data/1",pattern = "image",full.names = T))
 file_2 <- mixedsort(list.files("C:/Sistema/Everton/TrainModelStatic/data/2",pattern = "image",full.names = T))
@@ -52,10 +50,7 @@ library(dplyr)
 library(tidyr)
 library(purrr)
 
-fetch_frames <- function(conn,tb, te, camera_id_vec) {
-
-  #tb <- as.POSIXct(time_begin, tz = "UTC")
-  #te <- as.POSIXct(time_end,   tz = "UTC")
+fetch_frames <- function(conn,tb, te, camera_id_vec,limit = 50L) {
 
   placeholders <- paste(rep("?", length(camera_id_vec)), collapse = ",")
   sql <- paste0(
@@ -63,10 +58,10 @@ fetch_frames <- function(conn,tb, te, camera_id_vec) {
      FROM FRAME_CAMERA
      WHERE DT_HR_LOCAL BETWEEN ? AND ?
        AND CD_ID_CAMERA IN (", placeholders, ")
-     ORDER BY DT_HR_LOCAL ASC"
+     ORDER BY DT_HR_LOCAL ASC LIMIT ?"
   )
 
-  params <- c(list(tb, te), as.list(as.integer(camera_id_vec)))
+  params <- list(tb, te,camera_id_vec,limit)
   df <- DBI::dbGetQuery(conn, sql, params = params)
   if (!nrow(df)) return(df)
   df$DT_HR_LOCAL <- as.POSIXct(df$DT_HR_LOCAL, tz = "UTC")
@@ -75,38 +70,58 @@ fetch_frames <- function(conn,tb, te, camera_id_vec) {
 
 con <- newConnection()
 query <- paste0("WITH oc_latest AS (
-    SELECT CD_ID_OBJ_CONF, CD_ID_OBJETO
-    FROM (
+      SELECT CD_ID_OBJ_CONF, CD_ID_OBJETO
+      FROM (
+        SELECT
+          oc.*,
+          ROW_NUMBER() OVER (
+            PARTITION BY oc.CD_ID_OBJETO
+            ORDER BY oc.DT_HR_LOCAL DESC, oc.CD_ID_OBJ_CONF DESC
+          ) AS rn
+        FROM OBJETO_CONFIG oc
+      ) x
+      WHERE rn = 1
+    ),
+    cams AS (
       SELECT
-        oc.*,
-        ROW_NUMBER() OVER (
-          PARTITION BY oc.CD_ID_OBJETO
-          ORDER BY oc.DT_HR_LOCAL DESC, oc.CD_ID_OBJ_CONF DESC
-        ) AS rn
-      FROM OBJETO_CONFIG oc
-    ) x
-    WHERE rn = 1
-  ),
-  cams AS (
+        ol.CD_ID_OBJETO,
+
+        -- todas as câmeras envolvidas nesse objeto (última config)
+        GROUP_CONCAT(
+          DISTINCT c.CD_ID_CAMERA
+          ORDER BY c.CD_ID_CAMERA
+          SEPARATOR ','
+        ) AS CD_ID_CAMERAS,
+
+        -- array JSON: um item por componente, incluindo qual câmera ele pertence
+        JSON_ARRAYAGG(
+          JSON_OBJECT(
+            'CD_ID_CAMERA', c.CD_ID_CAMERA,
+            'CD_ID_COMPONENTE', c.CD_ID_COMPONENTE,
+            'POLIGNO_COMPONENTE', c.POLIGNO_COMPONENTE
+          )
+        ) AS POLIGNOS_COMPONENTES
+
+      FROM oc_latest ol
+      LEFT JOIN COMPONENTE c
+        ON c.CD_ID_OBJ_CONF = ol.CD_ID_OBJ_CONF
+      GROUP BY ol.CD_ID_OBJETO
+    )
+
     SELECT
-      ol.CD_ID_OBJETO,
-      GROUP_CONCAT(DISTINCT c.CD_ID_CAMERA ORDER BY c.CD_ID_CAMERA SEPARATOR ',') AS CD_ID_CAMERAS
-    FROM oc_latest ol
-    LEFT JOIN COMPONENTE c
-      ON c.CD_ID_OBJ_CONF = ol.CD_ID_OBJ_CONF
-    GROUP BY ol.CD_ID_OBJETO
-  )
-  SELECT
-    p.*,
-    COALESCE(cams.CD_ID_CAMERAS, '') AS CD_ID_CAMERAS
-  FROM PACOTE_IA p
-  LEFT JOIN cams
-    ON cams.CD_ID_OBJETO = p.CD_ID_OBJETO
-  -- opcional: filtrar apenas pacotes ativos
-  -- WHERE p.FG_ATIVO = 1
-  ORDER BY p.CD_ID_IA")
+      p.*,
+      COALESCE(cams.CD_ID_CAMERAS, '') AS CD_ID_CAMERAS,
+      COALESCE(cams.POLIGNOS_COMPONENTES, JSON_ARRAY()) AS POLIGNOS_COMPONENTES
+    FROM PACOTE_IA p
+    LEFT JOIN cams
+      ON cams.CD_ID_OBJETO = p.CD_ID_OBJETO
+    -- exemplo se quiser só pacotes ativos:
+    -- WHERE p.FG_ATIVO = 1
+    ORDER BY p.CD_ID_IA
+    ")
 
 frames <- DBI::dbGetQuery(con,query) 
+limit  <- 50
 
 dataset <- frames |> 
   group_by(CD_ID_OBJETO) |> 
@@ -118,8 +133,15 @@ dataset <- frames |>
       group_by(CD_ID_IA) |> 
       nest() |> 
       ungroup() |> 
-      mutate(frame = map(data,function(y){
-        fetch_frames(con,tb = y$DT_HR_LOCAL_BEGIN,te = y$DT_HR_LOCAL_END,camera_id_vec = y$CD_ID_CAMERAS)
+      mutate(DATAS = map(data,function(y){
+        polignos    <- jsonlite::fromJSON(y$POLIGNOS_COMPONENTES)
+        cameras     <- stringr::str_split(y$CD_ID_CAMERAS,",")[[1]]
+        payload     <- purrr::map(cameras,function(camera){
+           componentes <- polignos |> filter(CD_ID_CAMERA == camera)
+           frames_db   <- fetch_frames(con,tb = y$DT_HR_LOCAL_BEGIN,te = y$DT_HR_LOCAL_END,camera_id_vec = camera,limit = limit)
+           tibble(COMPONENTES = list(componentes),FRAMES = list(frames_db))
+        })
+         y |> mutate(PAYLOAD = list(payload),LIMIT = limit)
       })) |> 
       unnest(data)
   
@@ -127,3 +149,4 @@ dataset <- frames |>
   unnest(data)
 
 saveRDS(dataset,"dataset_train.rds")
+
