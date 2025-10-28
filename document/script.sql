@@ -19,6 +19,7 @@ DROP TABLE IF EXISTS ATRIBUTO;
 DROP TABLE IF EXISTS COMPONENTE;
 DROP TABLE IF EXISTS ESTRUTURA_CONFIG;
 DROP TABLE IF EXISTS ESTRUTURA;
+DROP TABLE IF EXISTS FRAME_CAMERA_BLOB;
 DROP TABLE IF EXISTS FRAME_CAMERA;
 DROP TABLE IF EXISTS CAMERA_CONFIG;
 DROP TABLE IF EXISTS OBJETO_CONTEXTO;
@@ -79,18 +80,26 @@ CREATE TABLE IF NOT EXISTS CAMERA_CONFIG (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE IF NOT EXISTS FRAME_CAMERA (
-  CD_ID_FRAME   BIGINT     NOT NULL AUTO_INCREMENT PRIMARY KEY,
-  ID_FRAME_BLOB    BIGINT   NOT NULL FK FRAME_CAMERA_BLOB.ID,
-  DT_HR_LOCAL   TIMESTAMP(5)  NOT NULL DEFAULT CURRENT_TIMESTAMP(5),
-  CD_ID_CAMERA  INT        NOT NULL,
-  CONSTRAINT fk_frame_camera
-    FOREIGN KEY (CD_ID_CAMERA) REFERENCES CAMERA_VIEW(CD_ID_CAMERA)
+  CD_ID_FRAME    BIGINT       NOT NULL AUTO_INCREMENT,
+  DT_HR_LOCAL    TIMESTAMP(5) NOT NULL DEFAULT CURRENT_TIMESTAMP(5),
+  CD_ID_CAMERA   INT          NOT NULL,
+  PRIMARY KEY (CD_ID_FRAME),
+  CONSTRAINT fk_frame_camera_camera
+    FOREIGN KEY (CD_ID_CAMERA)
+    REFERENCES CAMERA_VIEW(CD_ID_CAMERA)
     ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE IF NOT EXISTS FRAME_CAMERA_BLOB (
-  ID   BIGINT     NOT NULL AUTO_INCREMENT PRIMARY KEY,
-  DATA_FRAME    LONGBLOB   NOT NULL,
+  ID_FRAME_BLOB  BIGINT       NOT NULL AUTO_INCREMENT,
+  CD_ID_FRAME    BIGINT       NOT NULL,
+  DATA_FRAME     LONGBLOB     NOT NULL,
+  PRIMARY KEY (ID_FRAME_BLOB),
+  INDEX idx_blob_frame (CD_ID_FRAME),
+  CONSTRAINT fk_blob_frame
+    FOREIGN KEY (CD_ID_FRAME)
+    REFERENCES FRAME_CAMERA(CD_ID_FRAME)
+    ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- Tipos de objeto
@@ -260,8 +269,7 @@ CREATE TABLE IF NOT EXISTS PACOTE_IA (
 -- FRAME_CAMERA: filtros por câmera + período, e "último frame" por câmera
 ALTER TABLE FRAME_CAMERA
   ADD INDEX idx_frame_cam_dt (CD_ID_CAMERA, DT_HR_LOCAL),
-  ADD INDEX idx_frame_dt (DT_HR_LOCAL),
-  ADD INDEX idx_frame_blob (ID_FRAME_BLOB);
+  ADD INDEX idx_frame_dt (DT_HR_LOCAL);
 
 -- CAMERA_CONFIG: pegar a config mais recente por câmera
 ALTER TABLE CAMERA_CONFIG
@@ -306,42 +314,55 @@ ALTER TABLE TIPO_DATA
 ALTER TABLE OBJETO_TIPO
   ADD UNIQUE KEY uk_objtipo_name (NAME_OBJETO_TIPO);
 
+
 -- =========================================================
--- PROCEDURE DE LIMPEZA (retém N dias; usa delete em lotes)
+-- (re)CRIAR PROCEDURE DE LIMPEZA
+-- - apaga em LOTE (LIMIT 10000 por iteração) pra não travar o banco
+-- - usa UTC_TIMESTAMP() porque você está salvando em UTC
+-- - p_keep_days = quantos dias manter
 -- =========================================================
+DROP PROCEDURE IF EXISTS PR_CLEAR_OLD_DATAS;
+
 DELIMITER $$
 
 CREATE PROCEDURE PR_CLEAR_OLD_DATAS(IN p_keep_days INT)
 BEGIN
   DECLARE v_rows INT DEFAULT 1;
 
-  -- Deleta frames antigos em lotes para evitar long locks e binlogs grandes
+  -- Deleta frames antigos em lotes, respeitando FK ON DELETE CASCADE:
+  -- isso vai apagar da FRAME_CAMERA_BLOB junto.
   WHILE v_rows > 0 DO
     DELETE FROM FRAME_CAMERA
-     WHERE DT_HR_LOCAL < (NOW() - INTERVAL p_keep_days DAY)
+     WHERE DT_HR_LOCAL < (UTC_TIMESTAMP() - INTERVAL p_keep_days DAY)
      LIMIT 10000;
     SET v_rows = ROW_COUNT();
   END WHILE;
 
-  -- (Opcional) Limpar configs antigas
-  -- SET v_rows = 1;
-  -- WHILE v_rows > 0 DO
-  --   DELETE FROM CAMERA_CONFIG
-  --    WHERE DT_HR_LOCAL < (NOW() - INTERVAL p_keep_days DAY)
-  --    LIMIT 10000;
-  --   SET v_rows = ROW_COUNT();
-  -- END WHILE;
+  -- Se um dia você quiser podar CAMERA_CONFIG antiga também,
+  -- descomenta esse bloco e garante que faz sentido pra você:
+  /*
+  SET v_rows = 1;
+  WHILE v_rows > 0 DO
+    DELETE FROM CAMERA_CONFIG
+     WHERE DT_HR_LOCAL < (UTC_TIMESTAMP() - INTERVAL p_keep_days DAY)
+     LIMIT 10000;
+    SET v_rows = ROW_COUNT();
+  END WHILE;
+  */
 END$$
 
 DELIMITER ;
 
 -- =========================================================
--- EVENTO DIÁRIO PARA LIMPEZA AUTOMÁTICA
+-- (re)CRIAR EVENTO
+-- - roda A CADA 1 HORA
+-- - chama PR_CLEAR_OLD_DATAS(2)  -> mantém só 2 dias de histórico
 -- =========================================================
-CREATE EVENT IF NOT EXISTS AG_BY_1_DAY
-  ON SCHEDULE EVERY 1 DAY
-  STARTS CURRENT_TIMESTAMP + INTERVAL 1 DAY
-  DO CALL PR_CLEAR_OLD_DATAS(30);
+DROP EVENT IF EXISTS AG_BY_1_HOUR;
+
+CREATE EVENT AG_BY_1_HOUR
+  ON SCHEDULE EVERY 1 HOUR
+  DO CALL PR_CLEAR_OLD_DATAS(2);
 
 -- =========================================================
 -- DADOS INICIAIS

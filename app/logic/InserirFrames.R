@@ -50,23 +50,48 @@ library(dplyr)
 library(tidyr)
 library(purrr)
 
-fetch_frames <- function(conn,tb, te, camera_id_vec,limit = 50L) {
+fetch_frames <- function(conn, tb, te, camera_id_vec, limit = 50L) {
+  stopifnot(length(camera_id_vec) >= 1)
 
-  placeholders <- paste(rep("?", length(camera_id_vec)), collapse = ",")
+  # normaliza datas para UTC
+  tb <- as.POSIXct(tb, tz = "UTC")
+  te <- as.POSIXct(te, tz = "UTC")
+
+  # monta lista de placeholders "?, ?, ?, ..."
+  cam_placeholders <- paste(rep("?", length(camera_id_vec)), collapse = ",")
+
   sql <- paste0(
-    "SELECT DATA_FRAME,DT_HR_LOCAL, CD_ID_CAMERA
-     FROM FRAME_CAMERA
-     WHERE DT_HR_LOCAL BETWEEN ? AND ?
-       AND CD_ID_CAMERA IN (", placeholders, ")
-     ORDER BY DT_HR_LOCAL ASC LIMIT ?"
+    "
+    SELECT
+      fc.DT_HR_LOCAL,
+      fc.CD_ID_CAMERA,
+      b.DATA_FRAME
+    FROM FRAME_CAMERA fc
+    INNER JOIN FRAME_CAMERA_BLOB b
+      ON b.CD_ID_FRAME = fc.CD_ID_FRAME
+    WHERE fc.DT_HR_LOCAL BETWEEN ? AND ?
+      AND fc.CD_ID_CAMERA IN (", cam_placeholders, ")
+    ORDER BY fc.DT_HR_LOCAL ASC, fc.CD_ID_CAMERA ASC
+    LIMIT ?
+    "
   )
 
-  params <- list(tb, te,camera_id_vec,limit)
+  params <- c(
+    list(tb, te),
+    as.list(as.integer(camera_id_vec)),
+    list(as.integer(limit))
+  )
+
   df <- DBI::dbGetQuery(conn, sql, params = params)
-  if (!nrow(df)) return(df)
+
+  if (!nrow(df)) {
+    return(df)
+  }
+
   df$DT_HR_LOCAL <- as.POSIXct(df$DT_HR_LOCAL, tz = "UTC")
   df
 }
+
 
 con <- newConnection()
 query <- paste0("WITH oc_latest AS (

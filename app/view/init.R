@@ -448,8 +448,8 @@ renderMenuSideBarMain <- function(ns){
         ),
          sidebarMenu(id = ns("plot"),
           menuItem("Grafico", icon = icon("chart-line"),
-            menuSubItem("Novo",  tabName = "plotNew"),
-            menuSubItem("Lista", tabName = "plotTable"),
+          #  menuSubItem("Novo",  tabName = "plotNew"),
+          #  menuSubItem("Lista", tabName = "plotTable"),
             # subItem oculto para resetar seleção
             menuSubItem(text = htmltools::HTML("&nbsp;"), tabName = "noop",selected = TRUE)
           )
@@ -457,7 +457,7 @@ renderMenuSideBarMain <- function(ns){
         sidebarMenu(id = ns("treinar"),
           menuItem("Treinar", icon = icon("brain"),
             menuSubItem("Novo",  tabName = "treinarNew"),
-            menuSubItem("Lista", tabName = "treinarTable"),
+           # menuSubItem("Lista", tabName = "treinarTable"),
             # subItem oculto para resetar seleção
             menuSubItem(text = htmltools::HTML("&nbsp;"), tabName = "noop",selected = TRUE)
           )

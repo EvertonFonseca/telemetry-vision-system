@@ -839,7 +839,7 @@ uiNewTreinar <- function(ns, input, output, session, callback){
     )
   )
   output$uiFooter <- renderUI(tagList(
-    actionButton(ns("btSair"),  label = "Voltar",    icon = icon("arrow-left")),
+    actionButton(ns("btSair"),  label = "Sair",    icon = icon("arrow-left")),
     actionButton(ns("btSalvar"),class = "btn-primary", label = "Atualizar", icon = icon("save"))
   ))
 
@@ -886,7 +886,7 @@ uiNewTreinar <- function(ns, input, output, session, callback){
       time_end    <- as.POSIXct(time_end,tz = "UTC")
       componentes <- objeto$CONFIG[[1]]$COMPONENTES[[1]]
       cameras_ids <- unique(purrr::map_int(componentes$CAMERA, "CD_ID_CAMERA"))
-
+    
       frames_idx <- fetch_frames(
         dbp$get_pool(),
         time_begin    = time_begin,

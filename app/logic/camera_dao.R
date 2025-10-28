@@ -26,24 +26,62 @@ checkifExistUrlCameraEdit <- function(con,id,url){
   
 }
 #' @export
-selectAllFrame <- function(con){
-  
-  DBI$dbGetQuery(con, "SELECT CD_ID_FRAME, CD_ID_CAMERA,DATA_FRAME , DT_HR_LOCAL
-                        FROM FRAME_CAMERA ORDER BY CD_ID_FRAME")
+selectAllFrame <- function(con) {
+  sql <- "
+    SELECT
+      fc.CD_ID_FRAME,
+      fc.CD_ID_CAMERA,
+      fc.DT_HR_LOCAL,
+      b.DATA_FRAME
+    FROM FRAME_CAMERA fc
+    LEFT JOIN FRAME_CAMERA_BLOB b
+      ON b.CD_ID_FRAME = fc.CD_ID_FRAME
+    ORDER BY fc.CD_ID_FRAME ASC
+  "
+
+  DBI$dbGetQuery(con, sql)
 }
 
 #' @export
-selectAllFrameById <- function(con,id){
-  
-  DBI$dbGetQuery(con,paste0("SELECT CD_ID_CAMERA,DATA_FRAME, DT_HR_LOCAL
-                              FROM FRAME_CAMERA WHERE CD_ID_CAMERA = ",id," ORDER BY DATA_FRAME"))
+selectAllFrameById <- function(con, id) {
+  # garante que é inteiro simples
+  cam_id <- as.integer(id)
+
+  sql <- "
+    SELECT
+      fc.CD_ID_FRAME,
+      fc.CD_ID_CAMERA,
+      fc.DT_HR_LOCAL,
+      b.DATA_FRAME
+    FROM FRAME_CAMERA fc
+    LEFT JOIN FRAME_CAMERA_BLOB b
+      ON b.CD_ID_FRAME = fc.CD_ID_FRAME
+    WHERE fc.CD_ID_CAMERA = ?
+    ORDER BY fc.DT_HR_LOCAL ASC
+  "
+   DBI$dbGetQuery(con, sql, params = list(cam_id))
 }
 
 #' @export
-selectLastFrameById <- function(con,id){
-  
-  DBI$dbGetQuery(con,paste0("SELECT CD_ID_CAMERA,DATA_FRAME, DT_HR_LOCAL
-                              FROM FRAME_CAMERA WHERE CD_ID_CAMERA = ",id," ORDER BY DT_HR_LOCAL DESC LIMIT 1"))
+selectLastFrameById <- function(con, id) {
+
+  cam_id <- as.integer(id)
+
+  sql <- "
+    SELECT
+      fc.CD_ID_FRAME,
+      fc.CD_ID_CAMERA,
+      fc.DT_HR_LOCAL,
+      b.DATA_FRAME
+    FROM FRAME_CAMERA fc
+    LEFT JOIN FRAME_CAMERA_BLOB b
+      ON b.CD_ID_FRAME = fc.CD_ID_FRAME
+    WHERE fc.CD_ID_CAMERA = ?
+    ORDER BY fc.DT_HR_LOCAL DESC
+    LIMIT 1
+  "
+
+  DBI$dbGetQuery(con, sql, params = list(cam_id))
 }
 
 #' @export
@@ -156,12 +194,19 @@ selectLastFramesByCamera <- function(con, camera, janela = 3L, chronological = T
   
   # Mais recente primeiro (ORDER BY ... DESC) + LIMIT
   sql <- "
-    SELECT *
-    FROM FRAME_CAMERA
-    WHERE CD_ID_CAMERA = ?
-      AND DT_HR_LOCAL IS NOT NULL
-    ORDER BY DT_HR_LOCAL DESC
-    LIMIT ?;
+     SELECT
+      fc.CD_ID_FRAME,
+      fc.CD_ID_CAMERA,
+      fc.DT_HR_LOCAL,
+      fcb.ID_FRAME_BLOB,
+      fcb.DATA_FRAME
+    FROM FRAME_CAMERA fc
+    LEFT JOIN FRAME_CAMERA_BLOB fcb
+           ON fcb.CD_ID_FRAME = fc.CD_ID_FRAME
+    WHERE fc.CD_ID_CAMERA = ?
+      AND fc.DT_HR_LOCAL IS NOT NULL
+    ORDER BY fc.DT_HR_LOCAL DESC
+    LIMIT ?
    "
   
   # Use bind para evitar SQL injection e manter tipos corretos
@@ -200,8 +245,13 @@ selectFramesByCamera <- function(
   # 1) subselect 'a' encontra o DT_HR_LOCAL do frame mais próximo (âncora)
   # 2) a query externa usa a.t0 para pegar 'janela' frames para trás
   sql <- sprintf("
-    SELECT f.*
-    FROM FRAME_CAMERA f
+     SELECT
+      fc.CD_ID_FRAME,
+      fc.CD_ID_CAMERA,
+      fc.DT_HR_LOCAL,
+      fcb.ID_FRAME_BLOB,
+      fcb.DATA_FRAME
+    FROM FRAME_CAMERA fc
     JOIN (
       SELECT DT_HR_LOCAL AS t0
       FROM FRAME_CAMERA
@@ -211,11 +261,13 @@ selectFramesByCamera <- function(
         ABS(TIMESTAMPDIFF(SECOND, DT_HR_LOCAL, ?)) ASC,
         DT_HR_LOCAL DESC
       LIMIT 1
-    ) a
-    WHERE f.CD_ID_CAMERA = ?
-      AND f.DT_HR_LOCAL %s a.t0
-    ORDER BY f.DT_HR_LOCAL DESC
-    LIMIT ?;
+    ) a ON 1=1
+    LEFT JOIN FRAME_CAMERA_BLOB fcb
+           ON fcb.CD_ID_FRAME = fc.CD_ID_FRAME
+    WHERE fc.CD_ID_CAMERA = ?
+      AND fc.DT_HR_LOCAL %s a.t0
+    ORDER BY fc.DT_HR_LOCAL DESC
+    LIMIT ?
   ", op)
   
   rs <- DBI$dbSendQuery(con, sql); on.exit(try(DBI$dbClearResult(rs), silent = TRUE), add = TRUE)
