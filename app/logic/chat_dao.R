@@ -19,7 +19,6 @@ library(httr2)
 
 # 2) CONFIGURAÇÕES -------------------------------------------
 # Coloque sua chave numa variável de ambiente (mais seguro):
-Sys.setenv(OPENAI_API_KEY = "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")
 
 OPENAI_API_KEY <- Sys.getenv("OPENAI_API_KEY")
 if (OPENAI_API_KEY == "") {
