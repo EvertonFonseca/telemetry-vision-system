@@ -9,6 +9,7 @@ box::use(
   ./model[...],
   ./themes[...],
   ./global[...],
+  chatia = ./chat[...],
   dbp  = ../infra/db_pool
 )
 
@@ -154,7 +155,8 @@ ui <- function(id) {
         br(),
          tags$head(tags$style(
           ".sidebar-menu a[data-value='noop'] { display:none !important; }"
-        ))
+        )),
+        chatia$ui(ns)
       ), 
       footer = dashboardFooter(
         left  = "Version 1.0.0",
@@ -169,6 +171,8 @@ server <- function(id) {
   moduleServer(id, function(input, output, session) {
 
     dbp$session_register(session)
+
+    chatia$server(input, output, session)
     
     reactiveNotification         <- reactiveVal(NULL)
     reactiveMessageUsers         <- reactiveVal(NULL)
@@ -274,23 +278,24 @@ server <- function(id) {
     # ---- Obsevent Menu Plot
     observeEvent(input$plot, {
       
-      box::use(./plot)
-      sel <- input$plot
+      # box::use(./plot)
+      # sel <- input$plot
       
-      if (identical(sel, "plotNew")) {
-        plot$uiNewPlot(ns,input,output,session,function(){
-          box::unload(plot)
-          gc()
-        })
-      } else if (identical(sel, "plotTable")) {
-        plot$uiEditPlot(ns,input,output,session,function(){
-          box::unload(plot)
-          gc()
-        })
-      }
-      # reset da seleção para permitir clicar no mesmo item novamente
-      if (!is.null(sel) && sel %in% c("plotNew", "plotTable"))
-      updateTabItems(session, inputId = "plot", selected = "noop")
+      # if (identical(sel, "plotNew")) {
+      #   plot$uiNewPlot(ns,input,output,session,function(){
+      #     box::unload(plot)
+      #     gc()
+      #   })
+      # } else if (identical(sel, "plotTable")) {
+      #   plot$uiEditPlot(ns,input,output,session,function(){
+      #     box::unload(plot)
+      #     gc()
+      #   })
+      # }
+      # # reset da seleção para permitir clicar no mesmo item novamente
+      # if (!is.null(sel) && sel %in% c("plotNew", "plotTable"))
+      # updateTabItems(session, inputId = "plot", selected = "noop")
+      
     },ignoreInit = TRUE,ignoreNULL = TRUE)
     
     # ---- Obsevent Menu Camera
@@ -448,7 +453,7 @@ renderMenuSideBarMain <- function(ns){
         ),
          sidebarMenu(id = ns("plot"),
           menuItem("Grafico", icon = icon("chart-line"),
-          #  menuSubItem("Novo",  tabName = "plotNew"),
+           menuSubItem("Novo",  tabName = "plotNew"),
           #  menuSubItem("Lista", tabName = "plotTable"),
             # subItem oculto para resetar seleção
             menuSubItem(text = htmltools::HTML("&nbsp;"), tabName = "noop",selected = TRUE)

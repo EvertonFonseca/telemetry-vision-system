@@ -848,3 +848,193 @@ insertTablePlotInit <- function(table,context.plot,objetos.tmp,atributos.tmp,dat
 checkifTextEmpty <- function(text){
   stringi$stri_isempty(stringr$str_trim(text))
 }
+
+
+#########################################################################################################
+
+# Pacotes necessários
+library(DBI)
+library(RMariaDB)
+library(dplyr)
+library(tidyr)
+library(purrr)
+library(jsonlite)
+library(lubridate)
+library(ggplot2)
+library(stringr)
+
+# -------------------------------------------------
+# 1. Conexão com o banco MariaDB
+# -------------------------------------------------
+con <- dbConnect(
+  RMariaDB::MariaDB(),
+  dbname = 'system',
+  username = 'root',
+  password = 'ssbwarcq',
+  host = '127.0.0.1',
+  port = 3306
+)
+
+# -------------------------------------------------
+# 2. Carregar a tabela OBJETO_CONTEXTO inteira
+#    (ou filtrar se quiser menos)
+# -------------------------------------------------
+raw_df <- dbReadTable(con, "OBJETO_CONTEXTO")
+raw_df$DATA_OC <- paste0(raw_df$DATA_OC,"}")
+# OU se quiser limitar:
+# raw_df <- dbGetQuery(con, "SELECT * FROM OBJETO_CONTEXTO ORDER BY CD_ID_OC DESC LIMIT 1000;")
+
+# Garante tipo de data/hora como POSIXct
+raw_df <- raw_df %>%
+  mutate(DT_HR_LOCAL = ymd_hms(DT_HR_LOCAL, tz = Sys.timezone()))
+
+# -------------------------------------------------
+# 3. Parsear a coluna DATA_OC (JSON)
+#    Ideia: transformar cada linha JSON em uma tibble "achatada"
+# -------------------------------------------------
+
+# Função auxiliar: pega uma string JSON e devolve um tibble 1 linha
+parse_oc_row <- function(json_txt) {
+  # tenta interpretar o json
+  j <- tryCatch(jsonlite::fromJSON(json_txt), error = function(e) NULL)
+  if (is.null(j)) return(tibble())
+
+  # j pode ser lista (aninhada). Vamos "achatar":
+  # Exemplo:
+  # $PRENSA$`PARADO ESTADO` = "PARADO"
+  # $PRENSA$OPERADOR       = "AUSENTE"
+  # $BOBINA$ESTADO         = "PARADO"
+  # $BOBINA$VOLUME         = "VAZIO"
+  # $VISIVEL               = 1
+  #
+  # Vamos transformar em nomes tipo:
+  # PRENSA_PARADO_ESTADO, PRENSA_OPERADOR, BOBINA_ESTADO, BOBINA_VOLUME, VISIVEL
+
+  flat <- list()
+
+  walk(names(j), function(top_key){
+    val <- j[[top_key]]
+
+    if (is.list(val)) {
+      # nível 2
+      walk(names(val), function(sub_key){
+        colname <- paste(top_key, sub_key, sep = "_")
+        # substituir espaços por underscore
+        colname <- str_replace_all(colname, "\\s+", "_")
+        flat[[colname]] <<- val[[sub_key]]
+      })
+    } else {
+      # nível 1 direto
+      colname <- str_replace_all(top_key, "\\s+", "_")
+      flat[[colname]] <<- val
+    }
+  })
+
+  tibble::as_tibble(flat)
+}
+
+# Aplica a função em cada linha e cola de volta
+parsed_list <- lapply(raw_df$DATA_OC, parse_oc_row)
+
+parsed_df <- bind_rows(parsed_list)
+
+# Junta com cols originais importantes
+df <- bind_cols(
+  raw_df %>% select(CD_ID_OC, CD_ID_OBJETO, DT_HR_LOCAL),
+  parsed_df
+)
+df <- raw_df %>% select(CD_ID_OC, CD_ID_OBJETO, DT_HR_LOCAL)
+# Agora df tem colunas tipo:
+# CD_ID_OC, CD_ID_OBJETO, DT_HR_LOCAL,
+# PRENSA_PARADO_ESTADO, PRENSA_OPERADOR,
+# BOBINA_ESTADO, BOBINA_VOLUME,
+# VISIVEL, ...
+
+# -------------------------------------------------
+# 4. Exemplos de plots
+# -------------------------------------------------
+
+# 4.1. Linha do tempo do estado da PRENSA
+# Vamos contar quantas vezes cada estado apareceu ao longo do tempo
+# (isso é só exemplo; estado é categórico, então grafico de barras por tempo discreto também faz sentido)
+
+ggplot(
+  df,
+  aes(x = DT_HR_LOCAL,
+      y = ..count..,
+      color = factor(CD_ID_OBJETO))
+) +
+  geom_freqpoly(binwidth = 60, aes(linetype = PRENSA_PARADO_ESTADO)) +
+  labs(
+    title   = "Frequência de estados da PRENSA ao longo do tempo",
+    x       = "Tempo (DT_HR_LOCAL)",
+    y       = "Contagem no intervalo",
+    color   = "CD_ID_OBJETO",
+    linetype= "Estado PRENSA"
+  ) +
+  theme_minimal()
+
+
+# 4.2. Barras: distribuição do ESTADO da BOBINA por objeto
+# Conta quantas linhas temos de cada combinação
+df %>%
+  count(CD_ID_OBJETO, BOBINA_ESTADO) %>%
+  ggplot(aes(x = BOBINA_ESTADO,
+             y = n,
+             fill = factor(CD_ID_OBJETO))) +
+  geom_col(position = "dodge") +
+  labs(
+    title = "Distribuição de estados da BOBINA por objeto",
+    x     = "BOBINA_ESTADO",
+    y     = "Ocorrências",
+    fill  = "CD_ID_OBJETO"
+  ) +
+  theme_minimal()
+
+
+# 4.3. Timeline facetada: PRENSA_OPERADOR ao longo do tempo
+# Marcamos pontos coloridos por CD_ID_OBJETO e facet por operador
+ggplot(
+  df,
+  aes(x = DT_HR_LOCAL,
+      y = CD_ID_OBJETO,
+      color = factor(CD_ID_OBJETO))
+) +
+  geom_point(alpha = 0.7) +
+  facet_wrap(~ PRENSA_OPERADOR, ncol = 1, scales = "free_y") +
+  labs(
+    title = "Operador da PRENSA ao longo do tempo",
+    x     = "Tempo",
+    y     = "CD_ID_OBJETO",
+    color = "CD_ID_OBJETO"
+  ) +
+  theme_minimal()
+
+
+# 4.4. Se o JSON tiver campo VISIVEL (0/1), podemos ver % visível por objeto
+vis_df <- df %>%
+  mutate(VISIVEL = as.numeric(VISIVEL)) %>%
+  group_by(CD_ID_OBJETO) %>%
+  summarise(p_visivel = mean(VISIVEL, na.rm = TRUE))
+
+ggplot(
+  vis_df,
+  aes(x = factor(CD_ID_OBJETO),
+      y = p_visivel,
+      fill = factor(CD_ID_OBJETO))
+) +
+  geom_col() +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
+  labs(
+    title = "Percentual VISIVEL por objeto",
+    x     = "CD_ID_OBJETO",
+    y     = "% VISÍVEL",
+    fill  = "CD_ID_OBJETO"
+  ) +
+  theme_minimal()
+
+
+# -------------------------------------------------
+# 5. Desconectar
+# -------------------------------------------------
+dbDisconnect(con)
