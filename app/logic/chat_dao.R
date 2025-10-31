@@ -28,8 +28,8 @@ if (OPENAI_API_KEY == "") {
 # Dados do banco:
 DB_HOST <- "127.0.0.1"
 DB_USER <- "root"
-DB_PASS <- "sua_senha"
-DB_NAME <- "sua_base"
+DB_PASS <- "ssbwarcq"
+DB_NAME <- "system"
 DB_PORT <- 3306
 
 # Quantos registros pegar do banco para mandar ao modelo
