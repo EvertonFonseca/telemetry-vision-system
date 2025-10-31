@@ -331,12 +331,30 @@ gpt_answer_from_rows <- function(user_msg,
 # 4) avaliar código de plot retornado
 # ------------------------------------------------------------
 safe_eval_plot <- function(plot_code, df_ctx) {
-  env <- new.env(parent = emptyenv())
-  env$df_ctx    <- df_ctx
-  env$ggplot2   <- ggplot2
-  env$dplyr     <- dplyr
-  env$lubridate <- lubridate
+  # 1) expande o JSON -> gera PRENSA_ESTADO, BOBINA_ESTADO etc.
+  df_ctx <- expand_data_oc(df_ctx)
 
+  # 2) ambiente restrito + funções
+  env <- new.env(parent = baseenv())
+  env$df_ctx    <- df_ctx
+  env$ggplot2   <- asNamespace("ggplot2")
+  env$dplyr     <- asNamespace("dplyr")
+  env$lubridate <- asNamespace("lubridate")
+  env$jsonlite  <- asNamespace("jsonlite")
+
+  # funções do ggplot mais comuns
+  env$ggplot        <- ggplot2::ggplot
+  env$aes           <- ggplot2::aes
+  env$geom_point    <- ggplot2::geom_point
+  env$geom_line     <- ggplot2::geom_line
+  env$geom_col      <- ggplot2::geom_col
+  env$labs          <- ggplot2::labs
+  env$theme_minimal <- ggplot2::theme_minimal
+  env$theme_void    <- ggplot2::theme_void
+  env$annotate      <- ggplot2::annotate
+  env$scale_color_manual <- ggplot2::scale_color_manual
+
+  # 3) avalia
   plt <- tryCatch({
     eval(parse(text = plot_code), envir = env)
   }, error = function(e) {
@@ -345,8 +363,67 @@ safe_eval_plot <- function(plot_code, df_ctx) {
                         label = paste("Erro ao gerar gráfico:", e$message)) +
       ggplot2::theme_void()
   })
+
   plt
 }
+
+expand_data_oc <- function(df) {
+  if (!nrow(df) || !"DATA_OC" %in% names(df)) return(df)
+
+  rows_extra <- lapply(df$DATA_OC, function(js) {
+    if (is.na(js) || !nzchar(js)) return(list())
+    parsed <- tryCatch(jsonlite::fromJSON(js, simplifyVector = TRUE), error = function(e) NULL)
+    if (is.null(parsed)) return(list())
+
+    flat <- list()
+
+    walk_obj <- function(x, prefix = NULL) {
+      # x pode ser lista (outro nível) ou valor
+      if (is.list(x)) {
+        for (nm in names(x)) {
+          new_prefix <- if (is.null(prefix)) toupper(nm) else paste0(prefix, "_", toupper(nm))
+          walk_obj(x[[nm]], new_prefix)
+        }
+      } else {
+        # valor final
+        flat[[prefix]] <<- x
+      }
+    }
+
+    walk_obj(parsed, NULL)
+    flat
+  })
+
+  # pegar todos os nomes que apareceram em alguma linha
+  all_names <- unique(unlist(lapply(rows_extra, names)))
+  if (length(all_names) == 0) return(df)
+
+  # montar um data.frame dessas colunas
+  extra_df <- data.frame(matrix(NA_character_, nrow = nrow(df), ncol = length(all_names)))
+  names(extra_df) <- all_names
+
+  for (i in seq_along(rows_extra)) {
+    if (length(rows_extra[[i]])) {
+      for (nm in names(rows_extra[[i]])) {
+        val <- rows_extra[[i]][[nm]]
+        extra_df[i, nm] <- as.character(val)
+      }
+    }
+  }
+
+  # tentar converter números
+  extra_df[] <- lapply(extra_df, function(col) {
+    # se der pra converter pra número sem virar tudo NA, converte
+    sup <- suppressWarnings(as.numeric(col))
+    if (!all(is.na(sup)) && sum(!is.na(sup)) >= 1) {
+      return(sup)
+    }
+    col
+  })
+
+  dplyr::bind_cols(df, extra_df)
+}
+
 
 # ------------------------------------------------------------
 # 5) função chamada pelo Shiny (agora recebe e devolve ctx)
