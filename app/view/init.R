@@ -170,9 +170,10 @@ server <- function(id) {
 
   moduleServer(id, function(input, output, session) {
 
+    ns <- NS(id)
     dbp$session_register(session)
 
-    chatia$server(input, output, session)
+    chatia$server(ns,input, output, session)
     
     reactiveNotification         <- reactiveVal(NULL)
     reactiveMessageUsers         <- reactiveVal(NULL)
@@ -183,7 +184,7 @@ server <- function(id) {
     timeReactive                 <- reactiveTimer(60000)
     queeNotification             <- NULL
     queeMessageUsers             <- NULL
-    ns <- NS(id)
+
     output$menuSideBarMain <- renderMenuSideBarMain(ns)
     
     # ---- Obsevent Menu Camera

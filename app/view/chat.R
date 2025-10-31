@@ -1,15 +1,19 @@
 # app/views/assistant_ia.R
 box::use(
   shiny[...],
-  shinyjs
+  shinyjs,
+  ../logic/chat_dao[
+    handle_user_message
+  ]
 )
 
-# UI ------------------------------------------------------------------
+# operador seguro
+`%||%` <- function(x, y) if (is.null(x)) y else x
+
 ui <- function(ns) {
 
   shiny::tagList(
     shinyjs::useShinyjs(),
-    # se não quiser inline, tira e põe no css
     shiny::tags$head(
       shiny::tags$style(shiny::HTML("
         body {
@@ -99,6 +103,20 @@ ui <- function(ns) {
           background: #2F83AC;
           color: #fff;
         }
+
+        /* bloco de gráfico dentro do chat */
+        .ai-msg-plot {
+          align-self: flex-start;
+          background: #fff;
+          border: 1px solid rgba(0,0,0,0.03);
+          border-radius: 12px;
+          padding: 6px 6px 2px;
+          max-width: 90%;
+        }
+        .ai-msg-plot-title {
+          font-weight: 600;
+          margin-bottom: 4px;
+        }
       ")),
       # enter = send
       shiny::tags$script(shiny::HTML(sprintf("
@@ -109,20 +127,26 @@ ui <- function(ns) {
 
         document.addEventListener('DOMContentLoaded', function() {
           document.addEventListener('keydown', function(e) {
-            const ta = document.getElementById('%s');
-            if (!ta) return;
+            const ta  = document.getElementById('%s');
+            const btn = document.getElementById('%s');
+            if (!ta || !btn) return;
+
+            // só quando o foco estiver no textarea
             if (document.activeElement === ta) {
+              // Enter sem shift = envia
               if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
-                const btn = document.getElementById('%s');
-                if (btn) btn.click();
+
+                // 🔥 primeiro manda o valor atualizado pro Shiny
+                Shiny.setInputValue('%s', ta.value, {priority: 'event'});
+
+                // 🔥 depois clica no botão (pode ser no próximo tick)
+                setTimeout(function(){ btn.click(); }, 0);
               }
             }
           });
         });
-      ", ns("chat"), ns("user_text"), ns("send_btn"))))
-    ),
-
+      ", ns("chat"), ns("user_text"), ns("send_btn"), ns("user_text"))))),
     # wrapper
     shiny::div(
       class = "ai-chat-wrapper",
@@ -165,42 +189,98 @@ ui <- function(ns) {
   )
 }
 
-# SERVER ---------------------------------------------------------------
-server <- function(input,output,session) {
+server <- function(ns,input, output, session) {
 
-    rv <- shiny::reactiveValues(
-      msgs = list(
-        list(role = "bot", text = "Olá Everton 👋"),
-        list(role = "bot", text = "Posso te ajudar com consultas, IA e os dados da Elite aço.")
-      )
+  rv <- shiny::reactiveValues(
+    msgs = list(
+      list(role = "bot", type = "text", text = "Olá 👋"),
+      list(role = "bot", type = "text", text = "Posso te ajudar com consultas, IA e os dados da Elite aço.")
     )
+  )
 
-    send_message <- function(txt) {
-      txt <- trimws(txt)
-      if (!nzchar(txt)) return()
+  append_msg <- function(msg) {
+    rv$msgs <- append(rv$msgs, list(msg))
+    session$sendCustomMessage(paste0(session$ns("chat"), "-scroll"), NULL)
+  }
 
-      rv$msgs <- append(rv$msgs, list(list(role = "user", text = txt)))
-      session$sendCustomMessage(paste0(session$ns("chat"), "-scroll"), NULL)
+  send_message <- function(txt) {
+    txt <- trimws(txt)
+    if (!nzchar(txt)) return()
+   
+    # mostra msg do user
+    append_msg(list(role = "user", type = "text", text = txt))
+    shiny::updateTextAreaInput(session, "user_text", value = "")
 
-      shiny::updateTextAreaInput(session, "user_text", value = "")
+    # chama o DAO
+    resp <- handle_user_message(txt)
 
-      # aqui você pluga o ChatGPT
-      resp <- paste("Você disse:", txt)
-      rv$msgs <- append(rv$msgs, list(list(role = "bot", text = resp)))
-      session$sendCustomMessage(paste0(session$ns("chat"), "-scroll"), NULL)
+    if (!is.null(resp) && !is.null(resp$items)) {
+      for (it in resp$items) {
+        if (identical(it$kind, "text")) {
+          append_msg(list(
+            role = "bot",
+            type = "text",
+            text = it$content
+          ))
+        } else if (identical(it$kind, "plot")) {
+          append_msg(list(
+            role  = "bot",
+            type  = "plot",
+            title = it$title %||% "Gráfico",
+            plot  = it$plot
+          ))
+        }
+      }
     }
+  }
 
-    shiny::observeEvent(input$send_btn, {
+  shiny::observeEvent(input$send_btn, {
+
+    tryCatch({
       send_message(input$user_text)
+    },error = function(e){
+      showNotification("Não foi possível processar agora 😢. Tente de novo em instantes.", type = "warning")
     })
+ 
+  })
 
-    output$chat_history <- shiny::renderUI({
-      lapply(rv$msgs, function(m) {
+  # renderiza histórico
+  output$chat_history <- shiny::renderUI({
+    msgs <- rv$msgs
+    lapply(seq_along(msgs), function(i) {
+      m <- msgs[[i]]
+      if (m$type == "text") {
         if (m$role == "user") {
           shiny::div(class = "ai-msg-user", m$text)
         } else {
           shiny::div(class = "ai-msg-bot", m$text)
         }
-      })
+      } else if (m$type == "plot") {
+        pid <- session$ns(paste0("plot_", i))
+        shiny::div(
+          class = "ai-msg-plot",
+          shiny::div(class = "ai-msg-plot-title", m$title),
+          shiny::plotOutput(pid, height = 280)
+        )
+      }
     })
+  })
+
+  # criar os renderPlot dinamicamente
+  shiny::observe({
+    msgs <- rv$msgs
+    for (i in seq_along(msgs)) {
+      m <- msgs[[i]]
+      if (!is.null(m$type) && m$type == "plot") {
+        local({
+          my_i <- i
+          my_plot <- msgs[[my_i]]$plot
+          out_id <- paste0("plot_", my_i)
+          output[[out_id]] <- shiny::renderPlot({
+            my_plot
+          })
+        })
+      }
+    }
+  })
 }
