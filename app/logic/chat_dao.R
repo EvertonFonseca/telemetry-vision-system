@@ -32,23 +32,49 @@ build_df_ctx_long <- function(df_ctx) {
     return(data.frame())
   }
 
-  # vamos tentar pivotar tudo que veio do JSON
-  # df_ctx_long: DT_HR_LOCAL | Componente | Valor
+  # 1) pivotar tudo que não é base
   df_long <- tryCatch({
     tidyr::pivot_longer(
       df_ctx,
       cols = dplyr::all_of(comp_cols),
-      names_to = "Componente",
-      values_to = "Valor"
+      names_to = "colname",
+      values_to = "VALOR"
     )
   }, error = function(e) {
-    data.frame()
+    return(data.frame())
   })
 
-  # alguns modelos costumam usar "Estado" em vez de "Valor"
-  if (nrow(df_long)) {
-    df_long$Estado <- df_long$Valor
-  }
+  if (!nrow(df_long)) return(df_long)
+
+  # 2) separar componente x atributo
+  # regra simples: antes do primeiro "_" é componente, o resto é atributo
+  df_long <- df_long |>
+    dplyr::mutate(
+      colname = toupper(colname),
+      COMPONENTE = sub("_.*$", "", colname),
+      ATRIBUTO   = sub("^[^_]+_", "", colname),  # tira o primeiro bloco + "_"
+      # se não tiver "_", então é só um atributo genérico
+      ATRIBUTO   = dplyr::if_else(ATRIBUTO == colname, "VALOR", ATRIBUTO)
+    )
+
+  # 3) manter também as colunas de contexto
+  df_long <- df_long |>
+    dplyr::mutate(
+      DT_HR_LOCAL = df_ctx$DT_HR_LOCAL[match(paste0(row_number()), paste0(seq_len(nrow(df_long))))],
+      NAME_OBJETO = df_ctx$NAME_OBJETO[match(paste0(row_number()), paste0(seq_len(nrow(df_long))))],
+      NAME_SETOR  = df_ctx$NAME_SETOR[match(paste0(row_number()), paste0(seq_len(nrow(df_long))))]
+    )
+
+  # 4) renomear pra algo estável
+  df_long <- df_long |>
+    dplyr::select(
+      DT_HR_LOCAL,
+      NAME_OBJETO,
+      NAME_SETOR,
+      COMPONENTE,
+      ATRIBUTO,
+      VALOR
+    )
 
   df_long
 }
@@ -389,20 +415,37 @@ gpt_answer_from_rows <- function(user_msg,
       plot_title = NULL
     ))
   }
-
+  
   body <- httr2::resp_body_json(resp)
   txt  <- body$choices[[1]]$message$content
-
+  
   plot_code  <- NULL
   plot_title <- NULL
-  open_idx <- regexpr("\\{[[:space:]]*\"plot_code\"", txt)
-  if (open_idx > 0) {
-    json_part <- substr(txt, open_idx, nchar(txt))
-    parsed <- tryCatch(jsonlite::fromJSON(json_part), error = function(e) NULL)
-    if (!is.null(parsed$plot_code)) {
+  # 1) tenta pegar bloco entre ```json ... ```
+  m_triple <- regexpr("```json[\\r\\n]+\\{", txt, perl = TRUE)
+  if (m_triple[1] == -1) {
+    # tenta com ``` sem json
+    m_triple <- regexpr("```[rR]?[\\r\\n]+\\{", txt, perl = TRUE)
+  }
+  
+  if (m_triple[1] != -1) {
+    # começa logo no "{"
+    start_json <- regexpr("\\{", substr(txt, m_triple[1], nchar(txt)), perl = TRUE)
+    start_json <- m_triple[1] + start_json - 1L
+    
+    # corta até o último "```" depois
+    end_back  <- regexpr("```", substr(txt, start_json, nchar(txt)), fixed = TRUE)
+    if (end_back[1] != -1) {
+      raw_json <- substr(txt, start_json, start_json + end_back[1] - 2L)
+    } else {
+      raw_json <- substr(txt, start_json, nchar(txt))
+    }
+    
+    parsed <- tryCatch(jsonlite::fromJSON(raw_json), error = function(e) NULL)
+    if (!is.null(parsed) && !is.null(parsed$plot_code)) {
       plot_code  <- parsed$plot_code
       plot_title <- parsed$title %||% "Gráfico"
-      assistant_text <- trimws(substr(txt, 1, open_idx - 1))
+      assistant_text <- trimws(substr(txt, 1, m_triple[1] - 1L))
       return(list(
         assistant_text = assistant_text,
         plot_code      = plot_code,
@@ -410,7 +453,29 @@ gpt_answer_from_rows <- function(user_msg,
       ))
     }
   }
-
+  
+  # 2) fallback: tentar achar direto o "{ "plot_code": ... }" sem crase
+  open_idx <- regexpr("\\{[[:space:]]*\"plot_code\"", txt, perl = TRUE)
+  if (open_idx[1] > 0) {
+    json_part <- substr(txt, open_idx, nchar(txt))
+    
+    # tentar remover lixo de final (``` ou texto)
+    json_part <- sub("```.*$", "", json_part)    # tira crases até o fim
+    json_part <- sub("\\n\\s*$", "", json_part)  # tira quebra no fim
+    
+    parsed <- tryCatch(jsonlite::fromJSON(json_part), error = function(e) NULL)
+    if (!is.null(parsed) && !is.null(parsed$plot_code)) {
+      plot_code  <- parsed$plot_code
+      plot_title <- parsed$title %||% "Gráfico"
+      assistant_text <- trimws(substr(txt, 1, open_idx[1] - 1L))
+      return(list(
+        assistant_text = assistant_text,
+        plot_code      = plot_code,
+        plot_title     = plot_title
+      ))
+    }
+  }
+  
   list(
     assistant_text = txt,
     plot_code      = NULL,
@@ -422,32 +487,79 @@ gpt_answer_from_rows <- function(user_msg,
 # 4) avaliar código de plot retornado
 # ------------------------------------------------------------
 safe_eval_plot <- function(plot_code, df_ctx) {
-  # 1) expande o JSON -> gera PRENSA_ESTADO, BOBINA_ESTADO etc.
+  # 1) expande JSON para wide
   df_ctx <- expand_data_oc(df_ctx)
+
+  # 2) versão longa genérica
   df_ctx_long <- build_df_ctx_long(df_ctx)
-  
+
+  # limpar cercas ``` que o modelo pode ter mandado
   if (grepl("```", plot_code, fixed = TRUE)) {
     plot_code <- gsub("^```[rR]?|```$", "", plot_code)
     plot_code <- gsub("^```json|```$", "", plot_code)
     plot_code <- trimws(plot_code)
   }
 
-  # 2) ambiente restrito + funções
+  # 3) ambiente controlado
   env <- new.env(parent = baseenv())
-  env$df_ctx    <- df_ctx
-  env$ggplot2   <- asNamespace("ggplot2")
-  env$dplyr     <- asNamespace("dplyr")
-  env$lubridate <- asNamespace("lubridate")
-  env$jsonlite  <- asNamespace("jsonlite")
-  env$tidyr     <- asNamespace("tidyr")
-
-   # carrega todas as exports do ggplot2
+  env$df_ctx      <- df_ctx
+  env$df_ctx_long <- df_ctx_long
+  env$ggplot2     <- asNamespace("ggplot2")
+  env$dplyr       <- asNamespace("dplyr")
+  env$lubridate   <- asNamespace("lubridate")
+  env$jsonlite    <- asNamespace("jsonlite")
+  env$tidyr       <- asNamespace("tidyr")
   env <- loadNamesGgplot(env)
 
-  # 3) avalia
+  # 4) tenta rodar exatamente o que veio do modelo
   plt <- tryCatch({
     eval(parse(text = plot_code), envir = env)
   }, error = function(e) {
+
+    # -------------------------
+    # FALLBACK DINÂMICO
+    # -------------------------
+    if (nrow(df_ctx_long)) {
+      # tentar descobrir o atributo mais frequente
+      freq_attr <- df_ctx_long |>
+        dplyr::count(ATRIBUTO, sort = TRUE)
+
+      if (nrow(freq_attr)) {
+        top_attr <- freq_attr$ATRIBUTO[1]
+
+        df_top <- df_ctx_long |>
+          dplyr::filter(ATRIBUTO == top_attr)
+
+        # se o valor for numérico, faz linha no tempo
+        if (suppressWarnings(!all(is.na(as.numeric(df_top$VALOR))))) {
+          df_top$VALOR_NUM <- suppressWarnings(as.numeric(df_top$VALOR))
+          return(
+            ggplot2::ggplot(df_top, ggplot2::aes(x = DT_HR_LOCAL, y = VALOR_NUM, color = COMPONENTE)) +
+              ggplot2::geom_line() +
+              ggplot2::labs(
+                title = paste("Evolução de", top_attr),
+                x = "Tempo",
+                y = top_attr
+              ) +
+              ggplot2::theme_minimal()
+          )
+        } else {
+          # categórico → barra de frequências
+          return(
+            ggplot2::ggplot(df_top, ggplot2::aes(x = VALOR, fill = COMPONENTE)) +
+              ggplot2::geom_bar(position = "dodge") +
+              ggplot2::labs(
+                title = paste("Frequência de", top_attr),
+                x = top_attr,
+                y = "Contagem"
+              ) +
+              ggplot2::theme_minimal()
+          )
+        }
+      }
+    }
+
+    # se não tinha nada mesmo
     ggplot2::ggplot() +
       ggplot2::annotate("text", x = 0, y = 0,
                         label = paste("Erro ao gerar gráfico:", e$message)) +
