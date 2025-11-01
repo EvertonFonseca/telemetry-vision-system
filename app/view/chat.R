@@ -46,7 +46,7 @@ ui <- function(ns) {
           justify-content: space-between;
           align-items: center;
         }
-        .ai-chat-title { font-size: 1rem; font-weight: 600; }
+        .ai-chat-title { font-size: 18px; font-weight: 600; }
         .ai-chat-body {
           flex: 1 1 auto;
           overflow-y: auto;
@@ -163,14 +163,19 @@ ui <- function(ns) {
           class = "ai-chat-input-bar",
           shiny::div(
             class = "ai-chat-textarea ai-chat-input",
-            shiny::textAreaInput(
-              inputId = ns("user_text"),
-              label   = NULL,
-              width   = "100%",
-              height  = "110px",
-              placeholder = "Digite sua mensagem e aperte Enter (Shift+Enter quebra linha)",
-              resize  = "none"
-            )
+            tags$style(HTML("
+            #app-user_text {
+              font-size: 16px !important;
+            }
+          ")),
+          shiny::textAreaInput(
+            inputId = ns("user_text"),
+            label   = NULL,
+            width   = "100%",
+            height  = "110px",
+            placeholder = "Digite sua mensagem e aperte Enter (Shift+Enter quebra linha)",
+            resize  = "none"
+          )
           ),
           shiny::actionButton(
             inputId = ns("send_btn"),
