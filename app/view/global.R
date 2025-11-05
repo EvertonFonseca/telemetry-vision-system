@@ -397,3 +397,24 @@ moveScrollToUp <- function(){
   )
 }
 
+#' @export
+.init_reports_path <- local({
+  done <- FALSE
+  function(base_subdir = file.path("app", "www", "reports")) {
+    if (done) return(invisible(NULL))
+
+    app_base   <- getwd()
+    reports_dir <- normalizePath(file.path(app_base, base_subdir),
+                                 winslash = "/", mustWork = FALSE)
+    dir.create(reports_dir, recursive = TRUE, showWarnings = FALSE)
+
+    # Evita erro se já existir um path "reports"
+    try(shiny::removeResourcePath("reports"), silent = TRUE)
+    shiny::addResourcePath("reports", reports_dir)
+
+    options(.reports_dir = reports_dir)  # guardamos pra reuso
+    done <<- TRUE
+    invisible(NULL)
+  }
+})
+

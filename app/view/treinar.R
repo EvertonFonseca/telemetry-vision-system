@@ -665,7 +665,7 @@ uiComponenteVideo <- function(ns){
       tagAppendAttributes(style = ';margin-top: -25px;'),
     actionButton(ns("clipToggle"), label = "Start Clip", icon = icon("scissors"),
                  class = "btn btn-outline-primary", title = "Iniciar/encerrar clip (máx. duração)"),
-    numericInput(ns("clip_max_min"), "Máx (min)", value = 5, min = 1, max = 60, step = 1, width = "120px") |>
+    numericInput(ns("clip_max_min"), "Máx (min)", value = 1, min = 1, max = 60, step = 1, width = "120px") |>
       tagAppendAttributes(style = ';margin-top: -25px;'),
     textOutput(ns("titleClock"))
   )
@@ -840,7 +840,7 @@ uiNewTreinar <- function(ns, input, output, session, callback){
   )
   output$uiFooter <- renderUI(tagList(
     actionButton(ns("btSair"),  label = "Sair",    icon = icon("arrow-left")),
-    actionButton(ns("btSalvar"),class = "btn-primary", label = "Atualizar", icon = icon("save"))
+    actionButton(ns("btSalvar"),class = "btn-primary", label = "Salvar", icon = icon("save"))
   ))
 
   # ---------- Reagir troca de setor -> objetos ----------
@@ -1258,20 +1258,20 @@ uiNewTreinar <- function(ns, input, output, session, callback){
 
       info <- build_objeto_descricao(input,df,objeto)
 
-      if(info$status){
+      if(!info$status){
         showNotification(info$message, type = "error")
         return(invisible(NULL))
       }
-      descricao <- info$datas[[1]]
-      for(i in seq_along(descricao)){
-        info      <- descricao[[i]]
-        objPacote <- list()
+
+      for(i in seq_along(info$datas)){
+        descricao  <- info$datas[[i]]
+        objPacote  <- list()
         objPacote$CD_ID_OBJETO       <- objeto$CD_ID_OBJETO
-        objPacote$TITULO_IA          <- info$titulo
-        objPacote$INPUT_IA           <- info$input
-        objPacote$OUTPUT_IA          <- info$output
-        objPacote$DT_HR_LOCAL_BEGIN  <- info$begin
-        objPacote$DT_HR_LOCAL_END    <- info$end
+        objPacote$TITULO_IA          <- descricao$titulo
+        objPacote$INPUT_IA           <- descricao$input
+        objPacote$OUTPUT_IA          <- descricao$output
+        objPacote$DT_HR_LOCAL_BEGIN  <- descricao$begin
+        objPacote$DT_HR_LOCAL_END    <- descricao$end
         db$insertTable(conn,"PACOTE_IA",objPacote)
       }
 

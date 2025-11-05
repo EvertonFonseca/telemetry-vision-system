@@ -107,7 +107,7 @@ box::use(
       obj$TEMPO_REATIVAR_UNIDADE_SETOR <- isolate(input$comboUnit)
       obj$TEMPO_PASSADO_SETOR          <- isolate(input$comboTimerLook)
       obj$TEMPO_PASSADO_UNIDADE_SETOR  <- isolate(input$comboUnitLook)
-      id                               <- db$nextSequenciaID('SETOR')
+      id                               <- db$nextSequenciaID(conn,'SETOR')
       
       insertNewSetor(conn,id,obj)
 

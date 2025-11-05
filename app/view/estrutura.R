@@ -246,7 +246,7 @@ uiNewEstrutura <- function(ns,input,output,session,callback){
                     tipo_data <- tipoDatas |> filter(NAME_DATA == atributos$NAME_DATA[k])
                     objAtt    <- list()
                     objAtt$NAME_ATRIBUTO    <- atributos$NAME_ATRIBUTO[k] 
-                    objAtt$CLASSE_ATRIBUTO  <- atributos$CLASSE_ATRIBUTO[k] 
+                    objAtt$CLASSE_ATRIBUTO  <- paste0(unlist(atributos$CLASSE_ATRIBUTO[k]),collapse = ",")
                     objAtt$FG_ATIVO         <- as.integer(atributos$FG_ATIVO[k])
                     objAtt$CD_ID_ESTRUTURA_CONFIG  <- config$CD_ID_ESTRUTURA_CONFIG
                     objAtt$CD_ID_DATA              <- tipo_data$CD_ID_DATA
@@ -668,7 +668,7 @@ uiEditEstrutura <- function(ns,input,output,session,callback){
                 tipo_data <- tipoDatas |> filter(NAME_DATA == atributos$NAME_DATA[k])
                 objAtt    <- list()
                 objAtt$NAME_ATRIBUTO    <- atributos$NAME_ATRIBUTO[k] 
-                objAtt$CLASSE_ATRIBUTO  <- atributos$CLASSE_ATRIBUTO[k] 
+                objAtt$CLASSE_ATRIBUTO  <- paste0(unlist(atributos$CLASSE_ATRIBUTO[k]),collapse = ",")
                 objAtt$FG_ATIVO         <- as.integer(atributos$FG_ATIVO[k])
                 objAtt$CD_ID_ESTRUTURA_CONFIG  <- config$CD_ID_ESTRUTURA_CONFIG
                 objAtt$CD_ID_DATA              <- tipo_data$CD_ID_DATA

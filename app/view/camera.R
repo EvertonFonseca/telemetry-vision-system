@@ -110,7 +110,7 @@ box::use(
       obj$NAME_CAMERA   <- nomeCamera
       obj$URL_CAMERA    <- urlCamera
       obj$FPS_CAMERA    <- isolate(input$comboFps)
-      id                <- db$nextSequenciaID('CAMERA_VIEW')
+      id                <- db$nextSequenciaID(conn,'CAMERA_VIEW')
       obj$CD_ID_CAMERA  <- insertNewCamera(conn,id,obj)
      
       dialogConfirm(

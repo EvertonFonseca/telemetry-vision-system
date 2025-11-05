@@ -170,6 +170,7 @@ server <- function(id) {
 
   moduleServer(id, function(input, output, session) {
 
+    .init_reports_path() 
     ns <- NS(id)
     dbp$session_register(session)
 

@@ -1,7 +1,3 @@
-# app/dao/chat_dao.R
-# Integração do chat com OpenAI + MariaDB + geração de gráfico dinâmico
-# Everton Fonseca
-
 box::use(
   DBI,
   RMariaDB,
@@ -10,29 +6,27 @@ box::use(
   httr2,
   lubridate,
   ggplot2,
+  tidyr,
   dbp  = ../infra/db_pool
 )
 
 `%||%` <- function(x, y) if (is.null(x)) y else x
 
 OPENAI_API_KEY      <- Sys.getenv("OPENAI_API_KEY")
-DEFAULT_N_REGISTROS <- 50L
+DEFAULT_N_REGISTROS <- 250L
 DEFAULT_MODEL       <- "gpt-5-chat-latest"
 
+# =========================================================
+# Constrói versão longa dos dados após expandir DATA_OC
+# (sem 'match' — pivot_longer já preserva colunas base)
+# =========================================================
 build_df_ctx_long <- function(df_ctx) {
-  # df_ctx já vem expandido (tem colunas PRENSA_..., BOBINA_..., etc.)
-  if (!nrow(df_ctx)) {
-    return(data.frame())
-  }
-
+  if (!nrow(df_ctx)) return(data.frame())
+  
   base_cols <- c("DATA_OC", "DT_HR_LOCAL", "NAME_OBJETO", "NAME_SETOR")
   comp_cols <- setdiff(names(df_ctx), base_cols)
-
-  if (!length(comp_cols)) {
-    return(data.frame())
-  }
-
-  # 1) pivotar tudo que não é base
+  if (!length(comp_cols)) return(data.frame())
+  
   df_long <- tryCatch({
     tidyr::pivot_longer(
       df_ctx,
@@ -40,672 +34,140 @@ build_df_ctx_long <- function(df_ctx) {
       names_to = "colname",
       values_to = "VALOR"
     )
-  }, error = function(e) {
-    return(data.frame())
-  })
-
+  }, error = function(e) data.frame())
+  
   if (!nrow(df_long)) return(df_long)
-
-  # 2) separar componente x atributo
-  # regra simples: antes do primeiro "_" é componente, o resto é atributo
-  df_long <- df_long |>
+  
+  df_long |>
     dplyr::mutate(
-      colname = toupper(colname),
-      COMPONENTE = sub("_.*$", "", colname),
-      ATRIBUTO   = sub("^[^_]+_", "", colname),  # tira o primeiro bloco + "_"
-      # se não tiver "_", então é só um atributo genérico
-      ATRIBUTO   = dplyr::if_else(ATRIBUTO == colname, "VALOR", ATRIBUTO)
-    )
-
-  # 3) manter também as colunas de contexto
-  df_long <- df_long |>
-    dplyr::mutate(
-      DT_HR_LOCAL = df_ctx$DT_HR_LOCAL[match(paste0(row_number()), paste0(seq_len(nrow(df_long))))],
-      NAME_OBJETO = df_ctx$NAME_OBJETO[match(paste0(row_number()), paste0(seq_len(nrow(df_long))))],
-      NAME_SETOR  = df_ctx$NAME_SETOR[match(paste0(row_number()), paste0(seq_len(nrow(df_long))))]
-    )
-
-  # 4) renomear pra algo estável
-  df_long <- df_long |>
-    dplyr::select(
-      DT_HR_LOCAL,
-      NAME_OBJETO,
-      NAME_SETOR,
-      COMPONENTE,
-      ATRIBUTO,
-      VALOR
-    )
-
-  df_long
+      colname    = toupper(.data$colname),
+      COMPONENTE = sub("_.*$", "", .data$colname),
+      ATRIBUTO   = sub("^[^_]+_", "", .data$colname),
+      ATRIBUTO   = dplyr::if_else(.data$ATRIBUTO == .data$colname, "VALOR", .data$ATRIBUTO)
+    ) |>
+    dplyr::select(DT_HR_LOCAL, NAME_OBJETO, NAME_SETOR, COMPONENTE, ATRIBUTO, VALOR)
 }
 
-# ------------------------------------------------------------
-# converte datas/horas que vieram em horário local (America/Sao_Paulo)
-# para UTC dentro do SQL gerado pelo GPT
-# ------------------------------------------------------------
+# =========================================================
+# Normaliza filtros de data/hora gerados pelo GPT para UTC
+# (use se oc.DT_HR_LOCAL é armazenado em UTC)
+# =========================================================
 normalize_sql_dt_to_utc <- function(sql_txt,
                                     tz_local = "America/Sao_Paulo") {
-
   out <- sql_txt
-
-  # 1) DATE(oc.DT_HR_LOCAL) = '2025-10-31'
+  
+  # DATE(oc.DT_HR_LOCAL) = 'YYYY-MM-DD'
   pat_date <- "DATE\\(oc\\.DT_HR_LOCAL\\)\\s*=\\s*'([0-9]{4}-[0-9]{2}-[0-9]{2})'"
   m <- regexpr(pat_date, out, perl = TRUE)
   if (m[1] != -1) {
-    full <- regmatches(out, m)[[1]]
+    full     <- regmatches(out, m)[[1]]
     date_str <- sub(pat_date, "\\1", full, perl = TRUE)
-
-    # converte 00:00 local -> UTC
+    
     dt_local <- as.POSIXct(paste0(date_str, " 00:00:00"), tz = tz_local)
     dt_utc   <- format(as.POSIXct(dt_local, tz = "UTC"), "%Y-%m-%d")
-
-    new_piece <- paste0("DATE(oc.DT_HR_LOCAL) = '", dt_utc, "'")
-    out <- sub(pat_date, new_piece, out, perl = TRUE)
+    out <- sub(pat_date, paste0("DATE(oc.DT_HR_LOCAL) = '", dt_utc, "'"), out, perl = TRUE)
   }
-
-  # 2) TIME(oc.DT_HR_LOCAL) BETWEEN '06:20:00' AND '06:40:59'
+  
+  # TIME(oc.DT_HR_LOCAL) BETWEEN 'HH:MM:SS' AND 'HH:MM:SS'
   pat_time_between <- "TIME\\(oc\\.DT_HR_LOCAL\\)\\s+BETWEEN\\s+'([0-9]{2}:[0-9]{2}:[0-9]{2})'\\s+AND\\s+'([0-9]{2}:[0-9]{2}:[0-9]{2})'"
   m2 <- regexpr(pat_time_between, out, perl = TRUE)
   if (m2[1] != -1) {
     full2 <- regmatches(out, m2)[[1]]
     t1 <- sub(pat_time_between, "\\1", full2, perl = TRUE)
     t2 <- sub(pat_time_between, "\\2", full2, perl = TRUE)
-
+    
     to_utc_time <- function(tstr) {
-      # tstr é tipo "06:20:00" no horário local
       today_local <- as.POSIXct(paste0("2000-01-01 ", tstr), tz = tz_local)
       today_utc   <- as.POSIXct(today_local, tz = "UTC")
       format(today_utc, "%H:%M:%S")
     }
-
+    
     t1_utc <- to_utc_time(t1)
     t2_utc <- to_utc_time(t2)
-
-    new_piece2 <- paste0(
-      "TIME(oc.DT_HR_LOCAL) BETWEEN '", t1_utc, "' AND '", t2_utc, "'"
+    out <- sub(
+      pat_time_between,
+      paste0("TIME(oc.DT_HR_LOCAL) BETWEEN '", t1_utc, "' AND '", t2_utc, "'"),
+      out, perl = TRUE
     )
-    out <- sub(pat_time_between, new_piece2, out, perl = TRUE)
   }
-
+  
   out
 }
 
-# ------------------------------------------------------------
-# 1) GPT GERA A SQL (agora com contexto opcional)
-# ------------------------------------------------------------
-gpt_build_sql <- function(user_msg,
-                          ctx    = NULL,
-                          model  = DEFAULT_MODEL,
-                          api_key = OPENAI_API_KEY) {
-
-  if (!nzchar(api_key)) {
-    return(list(sql = NULL, error = "OPENAI_API_KEY não configurada"))
-  }
-
-  # contexto anterior (objeto/setor) vira instrução
-  ctx_txt <- ""
-  if (!is.null(ctx)) {
-    if (!is.null(ctx$last_object)) {
-      ctx_txt <- paste0(ctx_txt,
-        "- Se o usuário NÃO mencionar objeto agora, reutilize este: '", ctx$last_object, "'.\n"
-      )
-    }
-    if (!is.null(ctx$last_setor)) {
-      ctx_txt <- paste0(ctx_txt,
-        "- Se o usuário NÃO mencionar setor agora, reutilize este: '", ctx$last_setor, "'.\n"
-      )
-    }
-  }
-
-  system_msg <- paste(
-    "Você gera SQL para consultar telemetria industrial em MariaDB.",
-    "",
-    "BASE DA CONSULTA (sempre):",
-    "SELECT",
-    "  oc.DATA_OC,",
-    "  oc.DT_HR_LOCAL,",
-    "  o.NAME_OBJETO,",
-    "  s.NAME_SETOR",
-    "FROM objeto_contexto oc",
-    "LEFT JOIN objeto o ON o.CD_ID_OBJETO = oc.CD_ID_OBJETO",
-    "LEFT JOIN setor  s ON s.CD_ID_SETOR  = o.CD_ID_SETOR",
-    "",
-    "REGRAS MUITO IMPORTANTES:",
-    "1. Responda APENAS em JSON, exatamente assim: {\"sql\": \"SELECT ...\"}",
-    "2. NÃO use ```sql, não explique, não comente.",
-    "3. SEMPRE termine com: ORDER BY oc.DT_HR_LOCAL DESC LIMIT 300",
-    "4. APENAS SELECT. Proibido: UPDATE, DELETE, INSERT, CREATE, DROP.",
-    "",
-    "FILTROS QUE VOCÊ PODE USAR (APENAS ESTES):",
-    "- Se o usuário falar de uma máquina ou objeto",
-    "  filtre: o.NAME_OBJETO LIKE '%<NOME_EM_MAIUSCULO>%'",
-    "",
-    "- Se o usuário falar de um setor",
-    "  filtre: s.NAME_SETOR LIKE '%<NOME_EM_MAIUSCULO>%'",
-    "",
-    "- Se o usuário falar de um intervalo de horário (ex.: 'entre 06:20 e 06:40'),",
-    "  filtre: TIME(oc.DT_HR_LOCAL) BETWEEN '06:20:00' AND '06:40:59'",
-    "",
-    "- Se o usuário falar de uma data (ex.: '2025-10-31' ou 'hoje'),",
-    "  use: DATE(oc.DT_HR_LOCAL) = '2025-10-31'",
-    "",
-    "IMPORTANTE:",
-    "- NÃO crie filtros usando JSON_EXTRACT.",
-    "- NÃO filtre pelo conteúdo de oc.DATA_OC.",
-    "- Apenas traga oc.DATA_OC no SELECT.",
-    "",
-    "CONTEXTO ATUAL (se existir):",
-    ctx_txt,
-    "",
-    "SAÍDA:",
-    "- devolva somente: {\"sql\": \"SELECT ...\"}",
-    sep = "\n"
-  )
-
-  user_full <- paste(
-    "Usuário pediu:",
-    user_msg,
-    "\nMonte a SQL seguindo as regras."
-  )
-
-  req <- httr2::request("https://api.openai.com/v1/chat/completions") |>
-    httr2::req_headers(
-      "Authorization" = paste("Bearer", api_key),
-      "Content-Type"  = "application/json"
-    ) |>
-    httr2::req_body_json(list(
-      model = model,
-      temperature = 0,
-      messages = list(
-        list(role = "system", content = system_msg),
-        list(role = "user",   content = user_full)
-      )
-    ))
-
-  resp <- httr2::req_perform(req)
-  if (httr2::resp_status(resp) >= 300) {
-    return(list(sql = NULL, error = httr2::resp_body_string(resp)))
-  }
-
-  body    <- httr2::resp_body_json(resp)
-  raw_txt <- body$choices[[1]]$message$content
-
-  # 1) tenta JSON direto
-  sql_txt <- NULL
-  parsed  <- tryCatch(jsonlite::fromJSON(raw_txt), error = function(e) NULL)
-  if (!is.null(parsed) && !is.null(parsed$sql)) {
-    sql_txt <- parsed$sql
-  }
-
-  # 2) fallback: pegar primeira linha com SELECT
-  if (is.null(sql_txt)) {
-    lines <- strsplit(raw_txt, "\n", fixed = TRUE)[[1]]
-    cand  <- lines[grepl("^\\s*SELECT\\s", lines, ignore.case = TRUE)]
-    if (length(cand)) {
-      sql_txt <- paste(cand, collapse = " ")
-    }
-  }
-
-  # 3) fallback final
-  if (is.null(sql_txt)) {
-    sql_txt <- paste(
-      "SELECT oc.DATA_OC, oc.DT_HR_LOCAL, o.NAME_OBJETO, s.NAME_SETOR",
-      "FROM objeto_contexto oc",
-      "LEFT JOIN objeto o ON o.CD_ID_OBJETO = oc.CD_ID_OBJETO",
-      "LEFT JOIN setor s ON s.CD_ID_SETOR = o.CD_ID_SETOR",
-      "ORDER BY oc.DT_HR_LOCAL DESC",
-      "LIMIT 1000;"
-    )
-    return(list(
-      sql   = sql_txt,
-      error = "Modelo não retornou SELECT; usei a query base."
-    ))
-  }
-
-  # 4) saneamento mínimo
-  if (!grepl("^\\s*SELECT\\s", sql_txt, ignore.case = TRUE)) {
-    return(list(
-      sql = NULL,
-      error = "Modelo não retornou um SELECT mesmo após normalização."
-    ))
-  }
-  if (grepl(";", sql_txt)) {
-    parts   <- strsplit(sql_txt, ";", fixed = TRUE)[[1]]
-    sql_txt <- paste0(trimws(parts[[1]]), ";")
-  }
-
-  list(
-    sql = sql_txt,
-    error = NULL
-  )
-}
-
-# ------------------------------------------------------------
+# =========================================================
+# Consulta SQL no banco.
+# Assume que DT_HR_LOCAL está em UTC no banco e converte para exibição local.
+# =========================================================
 run_user_sql <- function(con, sql_txt) {
-  DBI::dbGetQuery(con, sql_txt) |>
-    dplyr::mutate(DT_HR_LOCAL = as.POSIXct(DT_HR_LOCAL, Sys.timezone()))
-}
-
-# ------------------------------------------------------------
-# extrai contexto da resposta SQL
-# ------------------------------------------------------------
-infer_ctx_from_df <- function(df, old_ctx = NULL) {
-  new_ctx <- old_ctx %||% list()
-  if (!is.null(df) && nrow(df)) {
-    # pega o objeto mais frequente retornado
-    if ("NAME_OBJETO" %in% names(df)) {
-      obj <- df$NAME_OBJETO
-      obj <- obj[!is.na(obj) & nzchar(obj)]
-      if (length(obj)) {
-        tab <- sort(table(obj), decreasing = TRUE)
-        new_ctx$last_object <- names(tab)[1]
-      }
-    }
-    if ("NAME_SETOR" %in% names(df)) {
-      st <- df$NAME_SETOR
-      st <- st[!is.na(st) & nzchar(st)]
-      if (length(st)) {
-        tab2 <- sort(table(st), decreasing = TRUE)
-        new_ctx$last_setor <- names(tab2)[1]
-      }
-    }
-  }
-  new_ctx
-}
-
-# ------------------------------------------------------------
-gpt_answer_from_rows <- function(user_msg,
-                                 df,
-                                 ctx   = NULL,
-                                 model = DEFAULT_MODEL,
-                                 api_key = OPENAI_API_KEY) {
-
-  if (!nzchar(api_key)) {
-    return(list(
-      assistant_text = "⚠️ IA indisponível no momento.",
-      plot_code = NULL,
-      plot_title = NULL
-    ))
-  }
-
-  df_preview <- if (nrow(df)) {
-    head_n <- min(40L, nrow(df))
-    jsonlite::toJSON(df[seq_len(head_n), , drop = FALSE], auto_unbox = TRUE)
-  } else {
-    "[]"
-  }
-
-  ctx_txt <- ""
-  if (!is.null(ctx)) {
-    if (!is.null(ctx$last_object)) {
-      ctx_txt <- paste0(ctx_txt, "- Último objeto em foco: ", ctx$last_object, "\n")
-    }
-    if (!is.null(ctx$last_setor)) {
-      ctx_txt <- paste0(ctx_txt, "- Último setor em foco: ", ctx$last_setor, "\n")
-    }
-  }
-  # system_msg <- paste(
-  #   "Você é um ASSISTENTE DE OPERAÇÃO INDUSTRIAL.",
-  #   "Você recebeu dados de operação já filtrados (cada linha tem DATA_OC, DT_HR_LOCAL, NAME_OBJETO, NAME_SETOR).",
-  #   "DATA_OC é um JSON contendo 1 ou mais componentes do Objeto, cada componente possui nomes dos atributos e valores.",
-  #   "NAME_OBJETO é uma string que contem o nome do objeto ou maquina.",
-  #   "Seu trabalho é explicar para o usuário, em português claro as suas necessidades e faça um resumo em poucas palavras.",
-  #   "IMPORTANTE:",
-  #   "- NÃO fale de banco de dados, nem de SQL, nem de R.",
-  #   "- NÃO repita o JSON bruto.",
-  #   "- Se o usuário pedir gráfico ou escrever 'plota', aí SIM devolva, AO FINAL, um bloco JSON assim:",
-  #   "{ \"plot_code\": \"ggplot(df_ctx, aes(...)) + ...\", \"title\": \"...\" }",
-  #   "- caso contrário, NÃO devolva o JSON."
-  # )
-  system_msg <- paste(
-    "Você é um ASSISTENTE DE OPERAÇÃO INDUSTRIAL dentro de um painel.",
-    "Você recebe linhas já filtradas com: DATA_OC (JSON de componentes), DT_HR_LOCAL (timestamp), NAME_OBJETO (máquina/objeto) e NAME_SETOR.",
-    "",
-    "REGRAS DE INTERPRETAÇÃO:",
-    "- Se o usuário pedir **nomes de máquinas / objetos / ativos / equipamentos**, responda usando APENAS os valores distintos de NAME_OBJETO que vieram nos dados.",
-    "- NESSA SITUAÇÃO, NÃO use os componentes do JSON (DATA_OC) como se fossem máquinas.",
-    "- Só use DATA_OC quando o usuário falar de 'componentes', 'partes', 'itens dentro do objeto', 'atributos do objeto' ou pedir estado/força/volume.",
-    "- Se existir apenas 1 objeto nos dados, diga isso claramente: 'Nos registros há apenas o objeto X'.",
-    "",
-    "NOMES DE COLUNAS:",
-    "- Quando devolver código de gráfico (ggplot), use EXATAMENTE os nomes das colunas como aparecem nos dados.",
-    "- Os campos expandidos do JSON são sempre gerados em MAIÚSCULO e com '_' (ex.: PRENSA_ESTADO, BOBINA_VOLUME, CABINE_TEMPERATURA).",
-    "- Portanto, **NÃO use nomes em minúsculo** como data_oc_estado ou prensa_estado.",
-    "- Se precisar criar um gráfico com componente do JSON, escreva: ggplot(df_ctx, aes(x = DT_HR_LOCAL, y = PRENSA_ESTADO)) ...",
-    "",
-    "ESTILO DA RESPOSTA:",
-    "- Responda de forma direta sobre o que o usuário perguntou (tempo, estado, máquina, setor).",
-    "- Use no máximo 4 frases quando for só explicação.",
-    "- NÃO repetir o nome do objeto ou do setor se eles não mudaram em relação à pergunta.",
-    "- NÃO reexplicar o que é DATA_OC, nem falar de banco, SQL ou R.",
-    "- Evite começar com 'Os registros mostram...' quando a pergunta for simples; vá direto: 'Nos registros há ...'.",
-    "",
-    "SE O USUÁRIO PEDIR GRÁFICO:",
-    "- ao final, devolva um bloco JSON assim:",
-    '{ \"plot_code\": \"ggplot(df_ctx, aes(...)) + ...\", \"title\": \"...\" }',
-    "- caso contrário, NÃO devolva o JSON.",
-    "",
-    "Contexto atual:",
-    ctx_txt,
-    sep = "\n"
-  )
-  user_full <- paste(
-    "Pergunta original do usuário:\n", user_msg, "\n\n",
-    "Dados filtrados (JSON):\n", df_preview
-  )
-
-  req <- httr2::request("https://api.openai.com/v1/chat/completions") |>
-    httr2::req_headers(
-      "Authorization" = paste("Bearer", api_key),
-      "Content-Type"  = "application/json"
-    ) |>
-    httr2::req_body_json(list(
-      model = model,
-      messages = list(
-        list(role = "system", content = system_msg),
-        list(role = "user",   content = user_full)
-      )
-    ))
-
-  resp <- httr2::req_perform(req)
-  if (httr2::resp_status(resp) >= 300) {
-    return(list(
-      assistant_text = paste("Erro da IA:", httr2::resp_body_string(resp)),
-      plot_code = NULL,
-      plot_title = NULL
-    ))
-  }
+  out <- DBI::dbGetQuery(con, sql_txt)
   
-  body <- httr2::resp_body_json(resp)
-  txt  <- body$choices[[1]]$message$content
-  
-  plot_code  <- NULL
-  plot_title <- NULL
-  # 1) tenta pegar bloco entre ```json ... ```
-  m_triple <- regexpr("```json[\\r\\n]+\\{", txt, perl = TRUE)
-  if (m_triple[1] == -1) {
-    # tenta com ``` sem json
-    m_triple <- regexpr("```[rR]?[\\r\\n]+\\{", txt, perl = TRUE)
-  }
-  
-  if (m_triple[1] != -1) {
-    # começa logo no "{"
-    start_json <- regexpr("\\{", substr(txt, m_triple[1], nchar(txt)), perl = TRUE)
-    start_json <- m_triple[1] + start_json - 1L
-    
-    # corta até o último "```" depois
-    end_back  <- regexpr("```", substr(txt, start_json, nchar(txt)), fixed = TRUE)
-    if (end_back[1] != -1) {
-      raw_json <- substr(txt, start_json, start_json + end_back[1] - 2L)
+  if ("DT_HR_LOCAL" %in% names(out)) {
+    if (!inherits(out$DT_HR_LOCAL, "POSIXct")) {
+      out$DT_HR_LOCAL <- as.POSIXct(out$DT_HR_LOCAL, tz = "UTC")
     } else {
-      raw_json <- substr(txt, start_json, nchar(txt))
+      attr(out$DT_HR_LOCAL, "tzone") <- "UTC"
     }
-    
-    parsed <- tryCatch(jsonlite::fromJSON(raw_json), error = function(e) NULL)
-    if (!is.null(parsed) && !is.null(parsed$plot_code)) {
-      plot_code  <- parsed$plot_code
-      plot_title <- parsed$title %||% "Gráfico"
-      assistant_text <- trimws(substr(txt, 1, m_triple[1] - 1L))
-      return(list(
-        assistant_text = assistant_text,
-        plot_code      = plot_code,
-        plot_title     = plot_title
-      ))
-    }
+    out$DT_HR_LOCAL <- lubridate::with_tz(out$DT_HR_LOCAL, tzone = "America/Sao_Paulo")
   }
   
-  # 2) fallback: tentar achar direto o "{ "plot_code": ... }" sem crase
-  open_idx <- regexpr("\\{[[:space:]]*\"plot_code\"", txt, perl = TRUE)
-  if (open_idx[1] > 0) {
-    json_part <- substr(txt, open_idx, nchar(txt))
-    
-    # tentar remover lixo de final (``` ou texto)
-    json_part <- sub("```.*$", "", json_part)    # tira crases até o fim
-    json_part <- sub("\\n\\s*$", "", json_part)  # tira quebra no fim
-    
-    parsed <- tryCatch(jsonlite::fromJSON(json_part), error = function(e) NULL)
-    if (!is.null(parsed) && !is.null(parsed$plot_code)) {
-      plot_code  <- parsed$plot_code
-      plot_title <- parsed$title %||% "Gráfico"
-      assistant_text <- trimws(substr(txt, 1, open_idx[1] - 1L))
-      return(list(
-        assistant_text = assistant_text,
-        plot_code      = plot_code,
-        plot_title     = plot_title
-      ))
-    }
-  }
-  
-  list(
-    assistant_text = txt,
-    plot_code      = NULL,
-    plot_title     = NULL
-  )
+  out
 }
 
-# ------------------------------------------------------------
-# 4) avaliar código de plot retornado
-# ------------------------------------------------------------
-safe_eval_plot <- function(plot_code, df_ctx) {
-  # 1) expande JSON para wide
-  df_ctx <- expand_data_oc(df_ctx)
-
-  # 2) versão longa genérica
-  df_ctx_long <- build_df_ctx_long(df_ctx)
-
-  # limpar cercas ``` que o modelo pode ter mandado
-  if (grepl("```", plot_code, fixed = TRUE)) {
-    plot_code <- gsub("^```[rR]?|```$", "", plot_code)
-    plot_code <- gsub("^```json|```$", "", plot_code)
-    plot_code <- trimws(plot_code)
-  }
-
-  # 3) ambiente controlado
-  env <- new.env(parent = baseenv())
-  env$df_ctx      <- df_ctx
-  env$df_ctx_long <- df_ctx_long
-  env$ggplot2     <- asNamespace("ggplot2")
-  env$dplyr       <- asNamespace("dplyr")
-  env$lubridate   <- asNamespace("lubridate")
-  env$jsonlite    <- asNamespace("jsonlite")
-  env$tidyr       <- asNamespace("tidyr")
-  env <- loadNamesGgplot(env)
-
-  # 4) tenta rodar exatamente o que veio do modelo
-  plt <- tryCatch({
-    eval(parse(text = plot_code), envir = env)
-  }, error = function(e) {
-
-    # -------------------------
-    # FALLBACK DINÂMICO
-    # -------------------------
-    if (nrow(df_ctx_long)) {
-      # tentar descobrir o atributo mais frequente
-      freq_attr <- df_ctx_long |>
-        dplyr::count(ATRIBUTO, sort = TRUE)
-
-      if (nrow(freq_attr)) {
-        top_attr <- freq_attr$ATRIBUTO[1]
-
-        df_top <- df_ctx_long |>
-          dplyr::filter(ATRIBUTO == top_attr)
-
-        # se o valor for numérico, faz linha no tempo
-        if (suppressWarnings(!all(is.na(as.numeric(df_top$VALOR))))) {
-          df_top$VALOR_NUM <- suppressWarnings(as.numeric(df_top$VALOR))
-          return(
-            ggplot2::ggplot(df_top, ggplot2::aes(x = DT_HR_LOCAL, y = VALOR_NUM, color = COMPONENTE)) +
-              ggplot2::geom_line() +
-              ggplot2::labs(
-                title = paste("Evolução de", top_attr),
-                x = "Tempo",
-                y = top_attr
-              ) +
-              ggplot2::theme_minimal()
-          )
-        } else {
-          # categórico → barra de frequências
-          return(
-            ggplot2::ggplot(df_top, ggplot2::aes(x = VALOR, fill = COMPONENTE)) +
-              ggplot2::geom_bar(position = "dodge") +
-              ggplot2::labs(
-                title = paste("Frequência de", top_attr),
-                x = top_attr,
-                y = "Contagem"
-              ) +
-              ggplot2::theme_minimal()
-          )
-        }
-      }
-    }
-
-    # se não tinha nada mesmo
-    ggplot2::ggplot() +
-      ggplot2::annotate("text", x = 0, y = 0,
-                        label = paste("Erro ao gerar gráfico:", e$message)) +
-      ggplot2::theme_void()
-  })
-
-  plt
-}
-
+# =========================================================
+# Expande DATA_OC (JSON) em colunas wide robustas (suporta arrays)
+# =========================================================
 expand_data_oc <- function(df) {
   if (!nrow(df) || !"DATA_OC" %in% names(df)) return(df)
-
+  
   rows_extra <- lapply(df$DATA_OC, function(js) {
     if (is.na(js) || !nzchar(js)) return(list())
-    parsed <- tryCatch(jsonlite::fromJSON(js, simplifyVector = TRUE), error = function(e) NULL)
+    parsed <- tryCatch(jsonlite::fromJSON(js, simplifyVector = FALSE), error = function(e) NULL)
     if (is.null(parsed)) return(list())
-
+    
     flat <- list()
-
     walk_obj <- function(x, prefix = NULL) {
-      # x pode ser lista (outro nível) ou valor
       if (is.list(x)) {
         for (nm in names(x)) {
           new_prefix <- if (is.null(prefix)) toupper(nm) else paste0(prefix, "_", toupper(nm))
           walk_obj(x[[nm]], new_prefix)
         }
       } else {
-        # valor final
-        flat[[prefix]] <<- x
+        flat[[prefix]] <<- if (length(x) > 1) toString(x) else x
       }
     }
-
     walk_obj(parsed, NULL)
     flat
   })
-
-  # pegar todos os nomes que apareceram em alguma linha
+  
   all_names <- unique(unlist(lapply(rows_extra, names)))
   if (length(all_names) == 0) return(df)
-
-  # montar um data.frame dessas colunas
-  extra_df <- data.frame(matrix(NA_character_, nrow = nrow(df), ncol = length(all_names)))
+  
+  extra_df <- as.data.frame(matrix(NA_character_, nrow = nrow(df), ncol = length(all_names)))
   names(extra_df) <- all_names
-
+  
   for (i in seq_along(rows_extra)) {
     if (length(rows_extra[[i]])) {
       for (nm in names(rows_extra[[i]])) {
-        val <- rows_extra[[i]][[nm]]
-        extra_df[i, nm] <- as.character(val)
+        extra_df[i, nm] <- as.character(rows_extra[[i]][[nm]])
       }
     }
   }
-
-  # tentar converter números
+  
+  # tenta converter números quando fizer sentido
   extra_df[] <- lapply(extra_df, function(col) {
-    # se der pra converter pra número sem virar tudo NA, converte
     sup <- suppressWarnings(as.numeric(col))
-    if (!all(is.na(sup)) && sum(!is.na(sup)) >= 1) {
-      return(sup)
-    }
-    col
+    if (!all(is.na(sup)) && sum(!is.na(sup)) >= 1) sup else col
   })
-
+  
   dplyr::bind_cols(df, extra_df)
 }
 
-
-# ------------------------------------------------------------
-# 5) função chamada pelo Shiny (agora recebe e devolve ctx)
-# ------------------------------------------------------------
-#' @export
-handle_user_message <- function(user_msg, ctx = NULL) {
-
-  # 1) monta SQL com base no contexto
-  plan <- gpt_build_sql(user_msg, ctx = ctx)
-  if (!is.null(plan$error) && is.null(plan$sql)) {
-    return(list(
-      items = list(
-        list(kind = "text", content = paste("Não consegui montar a consulta:", plan$error))
-      ),
-      ctx = ctx
-    ))
-  }
-
-  sql_txt <- normalize_sql_dt_to_utc(plan$sql)
-
-  # 2) roda a SQL no banco
-  con    <- dbp$get_pool()
-  df     <- NULL
-  ok_db  <- TRUE
-  err_db <- NULL
-  tryCatch({
-    df  <- run_user_sql(con, sql_txt)
-  }, error = function(e) {
-    ok_db <<- FALSE
-    err_db <<- e$message
-  })
-
-  if (!ok_db) {
-    return(list(
-      items = list(
-        list(
-          kind = "text",
-          content = paste("Consulta gerada, mas não consegui executar no banco:", err_db)
-        )
-      ),
-      ctx = ctx
-    ))
-  }
-
-  # 2b) atualiza contexto com o que veio do banco
-  new_ctx <- infer_ctx_from_df(df, old_ctx = ctx)
-
-  # 3) pede pro GPT transformar os dados em resposta operacional
-  ans <- gpt_answer_from_rows(user_msg, df, ctx = new_ctx)
-
-  items <- list(
-    list(
-      kind    = "text",
-      content = ans$assistant_text
-    )
-  )
-
-  if (!is.null(ans$plot_code)) {
-    
-    plt <- safe_eval_plot(ans$plot_code, df %||% data.frame())
-    items <- c(
-      items,
-      list(
-        list(
-          kind  = "plot",
-          title = ans$plot_title %||% "Gráfico",
-          plot  = plt
-        )
-      )
-    )
-  }
-
-  list(
-    items = items,
-    ctx   = new_ctx
-  )
-}
-
+# =========================================================
+# Carrega nomes de funções mais comuns do ggplot2 no ambiente do eval
+# (binder enxuto e "à prova de versão")
+# =========================================================
 loadNamesGgplot <- function(env){
- 
+  
   env$ggplot                     <- ggplot2::ggplot
   env$geom_bar                   <- ggplot2::geom_bar
   env$is_facet                   <- ggplot2::is_facet
@@ -1350,4 +812,543 @@ loadNamesGgplot <- function(env){
   env$scale_alpha_manual          <- ggplot2::scale_alpha_manual
   env$Guide                       <- ggplot2::Guide
   env
+}
+
+# =========================================================
+# GPT: gerar SQL (apenas SELECT) seguindo regras
+# =========================================================
+gpt_build_sql <- function(user_msg,
+                          ctx    = NULL,
+                          model  = DEFAULT_MODEL,
+                          api_key = OPENAI_API_KEY) {
+  
+  if (!nzchar(api_key)) {
+    return(list(sql = NULL, error = "OPENAI_API_KEY não configurada"))
+  }
+  
+  ctx_txt <- ""
+  if (!is.null(ctx)) {
+    if (!is.null(ctx$last_object)) {
+      ctx_txt <- paste0(ctx_txt, "- Se o usuário NÃO mencionar objeto agora, reutilize este: '", ctx$last_object, "'.\n")
+    }
+    if (!is.null(ctx$last_setor)) {
+      ctx_txt <- paste0(ctx_txt, "- Se o usuário NÃO mencionar setor agora, reutilize este: '", ctx$last_setor, "'.\n")
+    }
+  }
+  
+  system_msg <- paste(
+    "Você gera SQL para consultar telemetria industrial em MariaDB.",
+    "",
+    "BASE DA CONSULTA (sempre):",
+    "SELECT",
+    "  oc.DATA_OC,",
+    "  oc.DT_HR_LOCAL,",
+    "  o.NAME_OBJETO,",
+    "  s.NAME_SETOR",
+    "FROM objeto_contexto oc",
+    "LEFT JOIN objeto o ON o.CD_ID_OBJETO = oc.CD_ID_OBJETO",
+    "LEFT JOIN setor  s ON s.CD_ID_SETOR  = o.CD_ID_SETOR",
+    "",
+    "REGRAS MUITO IMPORTANTES:",
+    "1. Responda APENAS em JSON, exatamente assim: {\"sql\": \"SELECT ...\"}",
+    "2. NÃO use ```sql, não explique, não comente.",
+    "3. SEMPRE termine com: ORDER BY oc.DT_HR_LOCAL DESC LIMIT 300",
+    "4. APENAS SELECT. Proibido: UPDATE, DELETE, INSERT, CREATE, DROP.",
+    "",
+    "FILTROS QUE VOCÊ PODE USAR (APENAS ESTES):",
+    "- Se o usuário falar de uma máquina ou objeto",
+    "  filtre: o.NAME_OBJETO LIKE '%<NOME_EM_MAIUSCULO>%'",
+    "",
+    "- Se o usuário falar de um setor",
+    "  filtre: s.NAME_SETOR LIKE '%<NOME_EM_MAIUSCULO>%'",
+    "",
+    "- Se o usuário falar de um intervalo de horário (ex.: 'entre 06:20 e 06:40'),",
+    "  filtre: TIME(oc.DT_HR_LOCAL) BETWEEN '06:20:00' AND '06:40:59'",
+    "",
+    "- Se o usuário falar de uma data (ex.: '2025-10-31' ou 'hoje'),",
+    "  use: DATE(oc.DT_HR_LOCAL) = '2025-10-31'",
+    "",
+    "IMPORTANTE:",
+    "- NÃO crie filtros usando JSON_EXTRACT.",
+    "- NÃO filtre pelo conteúdo de oc.DATA_OC.",
+    "- Apenas traga oc.DATA_OC no SELECT.",
+    "",
+    "CONTEXTO ATUAL (se existir):",
+    ctx_txt,
+    "",
+    "SAÍDA:",
+    "- devolva somente: {\"sql\": \"SELECT ...\"}",
+    sep = "\n"
+  )
+  
+  user_full <- paste(
+    "Usuário pediu:",
+    user_msg,
+    "\nMonte a SQL seguindo as regras."
+  )
+  
+  req <- httr2::request("https://api.openai.com/v1/chat/completions") |>
+    httr2::req_headers(
+      "Authorization" = paste("Bearer", api_key),
+      "Content-Type"  = "application/json"
+    ) |>
+    httr2::req_body_json(list(
+      model = model,
+      temperature = 0,
+      messages = list(
+        list(role = "system", content = system_msg),
+        list(role = "user",   content = user_full)
+      )
+    ))
+  
+  resp <- httr2::req_perform(req)
+  if (httr2::resp_status(resp) >= 300) {
+    return(list(sql = NULL, error = httr2::resp_body_string(resp)))
+  }
+  
+  body    <- httr2::resp_body_json(resp)
+  raw_txt <- body$choices[[1]]$message$content
+  
+  sql_txt <- NULL
+  parsed  <- tryCatch(jsonlite::fromJSON(raw_txt), error = function(e) NULL)
+  if (!is.null(parsed) && !is.null(parsed$sql)) {
+    sql_txt <- parsed$sql
+  }
+  
+  if (is.null(sql_txt)) {
+    lines <- strsplit(raw_txt, "\n", fixed = TRUE)[[1]]
+    cand  <- lines[grepl("^\\s*SELECT\\s", lines, ignore.case = TRUE)]
+    if (length(cand)) {
+      sql_txt <- paste(cand, collapse = " ")
+    }
+  }
+  
+  if (is.null(sql_txt)) {
+    sql_txt <- paste(
+      "SELECT oc.DATA_OC, oc.DT_HR_LOCAL, o.NAME_OBJETO, s.NAME_SETOR",
+      "FROM objeto_contexto oc",
+      "LEFT JOIN objeto o ON o.CD_ID_OBJETO = oc.CD_ID_OBJETO",
+      "LEFT JOIN setor s ON s.CD_ID_SETOR = o.CD_ID_SETOR",
+      "ORDER BY oc.DT_HR_LOCAL DESC",
+      "LIMIT 1000;"
+    )
+    return(list(
+      sql   = sql_txt,
+      error = "Modelo não retornou SELECT; usei a query base."
+    ))
+  }
+  
+  if (!grepl("^\\s*SELECT\\s", sql_txt, ignore.case = TRUE)) {
+    return(list(sql = NULL, error = "Modelo não retornou um SELECT mesmo após normalização."))
+  }
+  if (grepl(";", sql_txt)) {
+    parts   <- strsplit(sql_txt, ";", fixed = TRUE)[[1]]
+    sql_txt <- paste0(trimws(parts[[1]]), ";")
+  }
+  
+  list(sql = sql_txt, error = NULL)
+}
+
+# =========================================================
+# Extrai contexto (último objeto/setor) a partir das linhas retornadas
+# =========================================================
+infer_ctx_from_df <- function(df, old_ctx = NULL) {
+  new_ctx <- old_ctx %||% list()
+  if (!is.null(df) && nrow(df)) {
+    if ("NAME_OBJETO" %in% names(df)) {
+      obj <- df$NAME_OBJETO
+      obj <- obj[!is.na(obj) & nzchar(obj)]
+      if (length(obj)) {
+        tab <- sort(table(obj), decreasing = TRUE)
+        new_ctx$last_object <- names(tab)[1]
+      }
+    }
+    if ("NAME_SETOR" %in% names(df)) {
+      st <- df$NAME_SETOR
+      st <- st[!is.na(st) & nzchar(st)]
+      if (length(st)) {
+        tab2 <- sort(table(st), decreasing = TRUE)
+        new_ctx$last_setor <- names(tab2)[1]
+      }
+    }
+  }
+  new_ctx
+}
+
+#' @export
+gpt_build_report_html <- function(user_msg_for_report,
+                                  df_ctx,
+                                  ctx   = NULL,
+                                  model = DEFAULT_MODEL,
+                                  api_key = OPENAI_API_KEY) {
+  if (!nzchar(api_key)) {
+    return(list(html = NULL, error = "OPENAI_API_KEY não configurada"))
+  }
+  
+  # Amostra de dados (máx 60 linhas) — enviada ao GPT para tabulação
+  df_preview <- if (nrow(df_ctx)) {
+    head_n <- min(60L, nrow(df_ctx))
+    jsonlite::toJSON(df_ctx[seq_len(head_n), , drop = FALSE], auto_unbox = TRUE)
+  } else {
+    "[]"
+  }
+  
+  ctx_txt <- ""
+  if (!is.null(ctx)) {
+    if (!is.null(ctx$last_object)) ctx_txt <- paste0(ctx_txt, "- Último objeto em foco: ", ctx$last_object, "\n")
+    if (!is.null(ctx$last_setor))  ctx_txt <- paste0(ctx_txt, "- Último setor em foco: ", ctx$last_setor, "\n")
+  }
+  
+  system_msg <- paste(
+    "Você é um gerador de RELATÓRIO EXECUTIVO (Diretoria Industrial).",
+    "Gere **APENAS** um documento **HTML COMPLETO** (<!DOCTYPE html> ... </html>) pronto para impressão A4, com CSS inline. Não use recursos externos.",
+    "Idiomas: Português (Brasil).",
+    "",
+    "REGRAS ESTRUTURAIS (obrigatórias):",
+    "- Página A4, margens 18mm; fontes seguras (ex: Arial, sans-serif).",
+    "- Cabeçalho com Título, Data/Hora local (America/Sao_Paulo) e contexto (Objeto/Setor) se existirem.",
+    "- Seções mínimas: 1) Período e contexto; 2) Sumário executivo (bullet points); 3) Situação operacional; 4) Principais evidências (tabela com até 30 linhas de amostra); 5) Recomendações.",
+    "- Inclua uma **tabela HTML** usando a amostra JSON fornecida (máx 30 linhas).",
+    "- Não invente colunas. Use somente as colunas da amostra.",
+    "- Se o usuário pediu itens específicos (ex.: métricas, destaques, filtros), atenda no texto.",
+    "- Evite gráficos por imagem; use apenas tabela e texto (o PDF será gerado a partir do HTML).",
+    "- Não inclua backticks nem markdown. Saída deve ser **somente** HTML completo.",
+    sep = "\n"
+  )
+  
+  user_msg <- paste(
+    "INSTRUÇÕES DO USUÁRIO (copie o tom, estrutura e requisitos):\n",
+    user_msg_for_report, "\n\n",
+    "CONTEXTO ATUAL:\n", ctx_txt, "\n\n",
+    "AMOSTRA DOS DADOS (JSON; até 60 linhas):\n", df_preview, "\n\n",
+    "Observações:\n",
+    "- Use datas/horas como aparecem (não traduza valores da tabela).",
+    "- Se a amostra estiver vazia, produza um relatório coerente explicando que não há linhas retornadas para o período/consulta.",
+    sep = ""
+  )
+  
+  req <- httr2::request("https://api.openai.com/v1/chat/completions") |>
+    httr2::req_headers(
+      "Authorization" = paste("Bearer", api_key),
+      "Content-Type"  = "application/json"
+    ) |>
+    httr2::req_body_json(list(
+      model = model,
+      temperature = 0.2,
+      messages = list(
+        list(role = "system", content = system_msg),
+        list(role = "user",   content = user_msg)
+      )
+    ))
+  
+  resp <- httr2::req_perform(req)
+  if (httr2::resp_status(resp) >= 300) {
+    return(list(html = NULL, error = httr2::resp_body_string(resp)))
+  }
+  
+  body <- httr2::resp_body_json(resp)
+  html <- body$choices[[1]]$message$content %||% ""
+  
+  # Limpa cercas acidentais (caso o modelo devolva markdown por engano)
+  if (grepl("```", html, fixed = TRUE)) {
+    html <- gsub("^```[a-zA-Z]*", "", html)
+    html <- gsub("```\\s*$", "", html)
+    html <- trimws(html)
+  }
+  
+  # Garante que é um HTML completo
+  if (!grepl("<html", html, ignore.case = TRUE)) {
+    html <- paste0("<!DOCTYPE html><html><head><meta charset='utf-8'><title>Relatório</title></head><body>", html, "</body></html>")
+  }
+  
+  list(html = html, error = NULL)
+}
+
+# =========================================================
+# GPT: sintetiza resposta e (opcionalmente) devolve JSON com plot_code/title
+# =========================================================
+gpt_answer_from_rows <- function(user_msg,
+                                 df,
+                                 ctx   = NULL,
+                                 model = DEFAULT_MODEL,
+                                 api_key = OPENAI_API_KEY) {
+  
+  if (!nzchar(api_key)) {
+    return(list(
+      assistant_text = "⚠️ IA indisponível no momento.",
+      plot_code = NULL,
+      plot_title = NULL
+    ))
+  }
+  
+  df_preview <- if (nrow(df)) {
+    head_n <- min(40L, nrow(df))
+    jsonlite::toJSON(df[seq_len(head_n), , drop = FALSE], auto_unbox = TRUE)
+  } else {
+    "[]"
+  }
+  
+  ctx_txt <- ""
+  if (!is.null(ctx)) {
+    if (!is.null(ctx$last_object)) ctx_txt <- paste0(ctx_txt, "- Último objeto em foco: ", ctx$last_object, "\n")
+    if (!is.null(ctx$last_setor))  ctx_txt <- paste0(ctx_txt, "- Último setor em foco: ", ctx$last_setor, "\n")
+  }
+  
+  system_msg <- paste(
+    "Você é um ASSISTENTE DE OPERAÇÃO INDUSTRIAL dentro de um painel.",
+    "Você recebe linhas já filtradas com: DATA_OC (JSON de componentes), DT_HR_LOCAL (timestamp), NAME_OBJETO (máquina/objeto) e NAME_SETOR.",
+    "",
+    "REGRAS DE INTERPRETAÇÃO:",
+    "- Se o usuário pedir **nomes de máquinas / objetos / ativos / equipamentos**, responda usando APENAS os valores distintos de NAME_OBJETO que vieram nos dados.",
+    "- NESSA SITUAÇÃO, NÃO use os componentes do JSON (DATA_OC) como se fossem máquinas.",
+    "- Só use DATA_OC quando o usuário falar de 'componentes', 'partes', 'itens dentro do objeto', 'atributos do objeto' ou pedir estado/força/volume.",
+    #"- Se existir apenas 1 objeto nos dados, diga isso claramente: 'Nos registros há apenas o objeto X'.",
+    "",
+    "NOMES DE COLUNAS:",
+    "- Quando devolver código de gráfico (ggplot), use EXATAMENTE os nomes das colunas como aparecem nos dados.",
+    "- Os campos expandidos do JSON são sempre gerados em MAIÚSCULO e com '_' (ex.: PRENSA_ESTADO, BOBINA_VOLUME, CABINE_TEMPERATURA).",
+    "- Portanto, **NÃO use nomes em minúsculo** como data_oc_estado ou prensa_estado.",
+    "- Se precisar criar um gráfico com componente do JSON, escreva: ggplot(df_ctx, aes(x = DT_HR_LOCAL, y = PRENSA_ESTADO)) ...",
+    "",
+    "ESTILO DA RESPOSTA:",
+    "- Responda de forma direta sobre o que o usuário perguntou (tempo, estado, máquina, setor).",
+    "- Use no máximo 4 frases quando for só explicação.",
+    "- NÃO reexplicar o que é DATA_OC, nem falar de banco, SQL ou R.",
+    #"- Evite começar com 'Os registros mostram...' quando a pergunta for simples; vá direto: 'Nos registros há ...'.",
+    "",
+    "SE O USUÁRIO PEDIR GRÁFICO:",
+    "- ao final, devolva um bloco JSON assim:",
+    '{ \"plot_code\": \"ggplot(df_ctx, aes(...)) + ...\", \"title\": \"...\" }',
+    "- caso contrário, NÃO devolva o JSON.",
+    "",
+    "SE O USUÁRIO PEDIR RELATORIO ou DOCUMENTO exemplo, doc, pdf e html:",
+    "- DATA_OC é atributos do objeto ou maquina",
+    '- DT_HR_LOCAL é Data Hora',
+    "- NAME_OBJETO é Objeto",
+    "- NAME_SETOR é Setor.",
+    "- Seja profissional para criar o relátorio para diretória.",
+    "",
+    "Contexto atual:",
+    ctx_txt,
+    sep = "\n"
+  )
+  
+  user_full <- paste(
+    "Pergunta original do usuário:\n", user_msg, "\n\n",
+    "Dados filtrados (JSON):\n", df_preview
+  )
+  
+  req <- httr2::request("https://api.openai.com/v1/chat/completions") |>
+    httr2::req_headers(
+      "Authorization" = paste("Bearer", api_key),
+      "Content-Type"  = "application/json"
+    ) |>
+    httr2::req_body_json(list(
+      model = model,
+      messages = list(
+        list(role = "system", content = system_msg),
+        list(role = "user",   content = user_full)
+      )
+    ))
+  
+  resp <- httr2::req_perform(req)
+  if (httr2::resp_status(resp) >= 300) {
+    return(list(
+      assistant_text = paste("Erro da IA:", httr2::resp_body_string(resp)),
+      plot_code = NULL,
+      plot_title = NULL
+    ))
+  }
+  
+  body <- httr2::resp_body_json(resp)
+  txt  <- body$choices[[1]]$message$content
+  
+  plot_code  <- NULL
+  plot_title <- NULL
+  
+  # Tenta bloco ```json { ... }
+  m_triple <- regexpr("```json[\\r\\n]+\\{", txt, perl = TRUE)
+  if (m_triple[1] == -1) {
+    m_triple <- regexpr("```[rR]?[\\r\\n]+\\{", txt, perl = TRUE)
+  }
+  if (m_triple[1] != -1) {
+    start_json <- regexpr("\\{", substr(txt, m_triple[1], nchar(txt)), perl = TRUE)
+    start_json <- m_triple[1] + start_json - 1L
+    end_back  <- regexpr("```", substr(txt, start_json, nchar(txt)), fixed = TRUE)
+    raw_json <- if (end_back[1] != -1) substr(txt, start_json, start_json + end_back[1] - 2L) else substr(txt, start_json, nchar(txt))
+    
+    parsed <- tryCatch(jsonlite::fromJSON(raw_json), error = function(e) NULL)
+    if (!is.null(parsed) && !is.null(parsed$plot_code)) {
+      plot_code  <- parsed$plot_code
+      plot_title <- parsed$title %||% "Gráfico"
+      assistant_text <- trimws(substr(txt, 1, m_triple[1] - 1L))
+      return(list(
+        assistant_text = assistant_text,
+        plot_code      = plot_code,
+        plot_title     = plot_title
+      ))
+    }
+  }
+  
+  # Fallback: procurar {"plot_code": ...} diretamente
+  open_idx <- regexpr("\\{[[:space:]]*\"plot_code\"", txt, perl = TRUE)
+  if (open_idx[1] > 0) {
+    json_part <- substr(txt, open_idx, nchar(txt))
+    json_part <- sub("```.*$", "", json_part)
+    json_part <- sub("\\n\\s*$", "", json_part)
+    
+    parsed <- tryCatch(jsonlite::fromJSON(json_part), error = function(e) NULL)
+    if (!is.null(parsed) && !is.null(parsed$plot_code)) {
+      plot_code  <- parsed$plot_code
+      plot_title <- parsed$title %||% "Gráfico"
+      assistant_text <- trimws(substr(txt, 1, open_idx[1] - 1L))
+      return(list(
+        assistant_text = assistant_text,
+        plot_code      = plot_code,
+        plot_title     = plot_title
+      ))
+    }
+  }
+  
+  list(
+    assistant_text = txt,
+    plot_code      = NULL,
+    plot_title     = NULL
+  )
+}
+
+# =========================================================
+# Avalia código de plot retornado usando df_ctx expandido + fallback automático caso o código quebre
+# =========================================================
+safe_eval_plot <- function(plot_code, df_ctx) {
+  # 1) expande JSON para wide
+  df_ctx <- expand_data_oc(df_ctx)
+  
+  # 2) versão longa genérica (para fallback)
+  df_ctx_long <- build_df_ctx_long(df_ctx)
+  
+  # remove cercas ``` que possam vir
+  if (grepl("```", plot_code, fixed = TRUE)) {
+    plot_code <- gsub("^```[rR]?|```$", "", plot_code)
+    plot_code <- gsub("^```json|```$", "", plot_code)
+    plot_code <- trimws(plot_code)
+  }
+  
+  # 3) ambiente controlado
+  env <- new.env(parent = baseenv())
+  env$df_ctx      <- df_ctx
+  env$df_ctx_long <- df_ctx_long
+  env$ggplot2     <- asNamespace("ggplot2")
+  env$dplyr       <- asNamespace("dplyr")
+  env$lubridate   <- asNamespace("lubridate")
+  env$jsonlite    <- asNamespace("jsonlite")
+  env$tidyr       <- asNamespace("tidyr")
+  env <- loadNamesGgplot(env)
+  
+  # 4) tenta rodar exatamente o que veio do modelo
+  plt <- tryCatch({
+    eval(parse(text = plot_code), envir = env)
+  }, error = function(e) {
+    # -------------------------
+    # FALLBACK DINÂMICO
+    # -------------------------
+    if (nrow(df_ctx_long)) {
+      freq_attr <- df_ctx_long |>
+        dplyr::count(ATRIBUTO, sort = TRUE)
+      
+      if (nrow(freq_attr)) {
+        top_attr <- freq_attr$ATRIBUTO[1]
+        df_top <- df_ctx_long |>
+          dplyr::filter(ATRIBUTO == top_attr)
+        
+        # Se numérico → linha no tempo
+        if (suppressWarnings(!all(is.na(as.numeric(df_top$VALOR))))) {
+          df_top$VALOR_NUM <- suppressWarnings(as.numeric(df_top$VALOR))
+          return(
+            ggplot2::ggplot(df_top, ggplot2::aes(x = DT_HR_LOCAL, y = VALOR_NUM, color = COMPONENTE)) +
+              ggplot2::geom_line() +
+              ggplot2::labs(title = paste("Evolução de", top_attr), x = "Tempo", y = top_attr) +
+              ggplot2::theme_minimal()
+          )
+        } else {
+          # Categórico → barras
+          return(
+            ggplot2::ggplot(df_top, ggplot2::aes(x = VALOR, fill = COMPONENTE)) +
+              ggplot2::geom_bar(position = "dodge") +
+              ggplot2::labs(title = paste("Frequência de", top_attr), x = top_attr, y = "Contagem") +
+              ggplot2::theme_minimal()
+          )
+        }
+      }
+    }
+    
+    ggplot2::ggplot() +
+      ggplot2::annotate("text", x = 0, y = 0,
+                        label = paste("Erro ao gerar gráfico:", e$message)) +
+      ggplot2::theme_void()
+  })
+  
+  plt
+}
+
+# =========================================================
+# Função principal chamada pelo Shiny (agora devolve df_ctx!)
+# =========================================================
+#' @export
+handle_user_message <- function(user_msg, ctx = NULL) {
+  
+  # 1) monta SQL com base no contexto
+  plan <- gpt_build_sql(user_msg, ctx = ctx)
+  if (!is.null(plan$error) && is.null(plan$sql)) {
+    return(list(
+      items = list(
+        list(kind = "text", content = paste("Não consegui montar a consulta:", plan$error))
+      ),
+      ctx = ctx,
+      df_ctx = data.frame()
+    ))
+  }
+  
+  sql_txt <- normalize_sql_dt_to_utc(plan$sql)
+  
+  # 2) roda a SQL no banco
+  con    <- dbp$get_pool()
+  df     <- NULL
+  ok_db  <- TRUE
+  err_db <- NULL
+  tryCatch({
+    df  <- run_user_sql(con, sql_txt)
+  }, error = function(e) {
+    ok_db <<- FALSE
+    err_db <<- e$message
+  })
+  
+  if (!ok_db) {
+    return(list(
+      items = list(
+        list(kind = "text", content = paste("Consulta gerada, mas não consegui executar no banco:", err_db))
+      ),
+      ctx = ctx,
+      df_ctx = data.frame()
+    ))
+  }
+  
+  # 2b) atualiza contexto com o que veio do banco
+  new_ctx <- infer_ctx_from_df(df, old_ctx = ctx)
+  
+  # 3) pede pro GPT transformar os dados em resposta operacional
+  ans <- gpt_answer_from_rows(user_msg, df, ctx = new_ctx)
+  
+  items <- list(list(kind = "text", content = ans$assistant_text))
+  
+  if (!is.null(ans$plot_code)) {
+    plt <- safe_eval_plot(ans$plot_code, df %||% data.frame())
+    items <- c(items, list(list(kind = "plot", title = ans$plot_title %||% "Gráfico", plot = plt)))
+  }
+  
+  list(
+    items = items,
+    ctx   = new_ctx,
+    df_ctx = df
+  )
 }
