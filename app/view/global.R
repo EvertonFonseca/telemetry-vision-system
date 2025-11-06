@@ -402,10 +402,16 @@ moveScrollToUp <- function(){
   done <- FALSE
   function(base_subdir = file.path("app", "www", "reports")) {
     if (done) return(invisible(NULL))
-
-    app_base   <- getwd()
-    reports_dir <- normalizePath(file.path(app_base, base_subdir),
-                                 winslash = "/", mustWork = FALSE)
+    
+    app_base    <- getwd()
+    reports_dir <- normalizePath(file.path(app_base, base_subdir),winslash = "/", mustWork = FALSE)
+    
+    if (dir.exists(reports_dir)) {
+      unlink(list.files(reports_dir, full.names = TRUE, all.files = TRUE, no.. = TRUE),recursive = TRUE, force = TRUE)
+    } else {
+      dir.create(reports_dir, recursive = TRUE, showWarnings = FALSE)
+    }
+    
     dir.create(reports_dir, recursive = TRUE, showWarnings = FALSE)
 
     # Evita erro se já existir um path "reports"
@@ -417,4 +423,3 @@ moveScrollToUp <- function(){
     invisible(NULL)
   }
 })
-
