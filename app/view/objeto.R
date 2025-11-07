@@ -289,11 +289,16 @@ initMap <- FALSE
             swiperSlideNext(idSwiper)
           }
         }, ignoreNULL = TRUE, ignoreInit = TRUE))
+
+        obs2$add(observeEvent(input$comboCameras,{
+          camera      <- cameras |> filter(NAME_CAMERA == input$comboCameras)
+          componentes <- frame_data$componente[[1]]          
+          output$mapFrame <- renderLeaflet({uiMapa(ns,camera,cameras,frame_data,componentes = componentes)})
+        },ignoreNULL = TRUE,ignoreInit = TRUE))
         
         output$mapFrame <- renderLeaflet({
           
-          req(input$comboCameras)
-          camera   <- cameras |> filter(NAME_CAMERA == input$comboCameras)
+          camera   <- cameras |> filter(NAME_CAMERA == isolate(input$comboCameras))
           uiMapa(ns,camera,cameras,frame_data)
         })
         
@@ -811,11 +816,17 @@ uiEditObjeto <- function(ns,input,output,session,callback){
       }, ignoreInit = TRUE))
       
       
+      obs2$add(observeEvent(input$comboCameras,{
+        camera      <- cameras |> filter(NAME_CAMERA == input$comboCameras)
+        componentes <- frame_data$componente[[1]]          
+        output$mapFrame <- renderLeaflet({uiMapa(ns,camera,cameras,frame_data,componentes = componentes)})
+      },ignoreNULL = TRUE,ignoreInit = TRUE))
+      
       output$mapFrame <- renderLeaflet({
         
         req(input$comboCameras)
         
-        camera   <- cameras |> filter(NAME_CAMERA == input$comboCameras)
+        camera   <- cameras |> filter(NAME_CAMERA == isolate(input$comboCameras))
         uiMapa(ns,camera,cameras,frame_data,objetoSelect$CONFIG[[1]]$COMPONENTES[[1]])
       })
       
