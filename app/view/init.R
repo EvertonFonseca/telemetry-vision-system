@@ -9,6 +9,7 @@ box::use(
   ./model[...],
   ./themes[...],
   ./global[...],
+  dash =./dashboard[...],
   chatia = ./chat[...],
   dbp  = ../infra/db_pool
 )
@@ -280,23 +281,23 @@ server <- function(id) {
     # ---- Obsevent Menu Plot
     observeEvent(input$plot, {
       
-      # box::use(./plot)
-      # sel <- input$plot
+      box::use(./plot)
+      sel <- input$plot
       
-      # if (identical(sel, "plotNew")) {
-      #   plot$uiNewPlot(ns,input,output,session,function(){
-      #     box::unload(plot)
-      #     gc()
-      #   })
-      # } else if (identical(sel, "plotTable")) {
-      #   plot$uiEditPlot(ns,input,output,session,function(){
-      #     box::unload(plot)
-      #     gc()
-      #   })
-      # }
-      # # reset da seleção para permitir clicar no mesmo item novamente
-      # if (!is.null(sel) && sel %in% c("plotNew", "plotTable"))
-      # updateTabItems(session, inputId = "plot", selected = "noop")
+      if (identical(sel, "plotNew")) {
+        plot$uiNewPlot(ns,input,output,session,function(){
+          box::unload(plot)
+          gc()
+        })
+      } else if (identical(sel, "plotTable")) {
+        plot$uiEditPlot(ns,input,output,session,function(){
+          box::unload(plot)
+          gc()
+        })
+      }
+      # reset da seleção para permitir clicar no mesmo item novamente
+      if (!is.null(sel) && sel %in% c("plotNew", "plotTable"))
+      updateTabItems(session, inputId = "plot", selected = "noop")
       
     },ignoreInit = TRUE,ignoreNULL = TRUE)
     
@@ -455,8 +456,8 @@ renderMenuSideBarMain <- function(ns){
         ),
          sidebarMenu(id = ns("plot"),
           menuItem("Grafico", icon = icon("chart-line"),
-           menuSubItem("Novo",  tabName = "plotNew"),
-          #  menuSubItem("Lista", tabName = "plotTable"),
+            menuSubItem("Novo",  tabName = "plotNew"),
+            menuSubItem("Lista", tabName = "plotTable"),
             # subItem oculto para resetar seleção
             menuSubItem(text = htmltools::HTML("&nbsp;"), tabName = "noop",selected = TRUE)
           )

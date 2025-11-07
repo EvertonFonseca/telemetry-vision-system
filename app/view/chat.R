@@ -9,6 +9,7 @@ box::use(
 
 `%||%` <- function(x, y) if (is.null(x)) y else x
 
+#' @export
 ui <- function(ns) {
   
   shiny::tagList(
@@ -116,6 +117,7 @@ ui <- function(ns) {
   )
 }
 
+#' @export
 server <- function(ns, input, output, session) {
   
   rv <- shiny::reactiveValues(

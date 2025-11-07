@@ -23,11 +23,13 @@ box::use(
   .. / model / swiper[...],
   DT,
   shinycssloaders,
-  db = .. / logic / database,
+  dbp  = ../infra/db_pool,
+  db   = ../infra/database,
   .. / logic/objeto_dao[...],
   .. / logic/camera_dao[...],
   .. / logic/setor_dao[...],
   .. / logic/plot_dao[...],
+  ../ logic/estrutura_dao[...],
   stringr,
   dplyr[...],
   lubridate[...],
@@ -44,57 +46,55 @@ box::use(
 #' @export
  uiNewPlot <- function(ns,input,output,session,callback){
    
-  db$tryResetConnection(function(con){
-
-    obs        <- newObserve()
-    obs2       <- newObserve()
-    obs3       <- newObserve()
-    setores    <- selectAllSetors(con)
-    typedatas  <- selectAllTipoDados(con)
-    tipoPlots  <- selectTypesPlots(con)
-    index_objs   <- FALSE
-    context.plot <- NULL
-
-    objetos         <- selectAllObjetos(con,fg.ativo = TRUE)
-    sliderPosition  <- reactiveVal(1L)
-    tipo.plot       <- NULL
-    datatable       <- NULL
-
-    idSwiper <- ns('swiperMain')
-    id       <- ns('dialogObj')
-    cssStyle <- list()
-    cssStyle[[paste0(' #parent',id,' .modal-dialog')]]  <- paste0('height: 80% !important;')
-    cssStyle[[paste0(' #parent',id,' .modal-content')]] <- paste0('width: 100% !important; height: 100% !important;')
-    cssStyle[[paste0(' #parent',id,' .modal-body')]]    <- paste0('width: 100% !important; height: calc(100% - 57px - 65px) !important; overflow-y: auto;')
+   obs          <- newObserve()
+   obs2         <- newObserve()
+   obs3         <- newObserve()
+   setores      <- selectAllSetors(dbp$get_pool())
+   typedatas    <- selectAllTipoDados(dbp$get_pool())
+   tipoPlots    <- selectTypesPlots(dbp$get_pool())
+   index_objs   <- FALSE
+   context.plot <- NULL
    
-    showModal(
-      session = session,
-      div(
-       id = paste0('parent', id),
-       style = paste0("height: 90%;"),
-       shinyjs::inlineCSS(cssStyle),
+   objetos         <- selectAllObjetos(dbp$get_pool(),fg.ativo = TRUE)
+   sliderPosition  <- reactiveVal(1L)
+   tipo.plot       <- NULL
+   datatable       <- NULL
+   
+   idSwiper <- ns('swiperMain')
+   id       <- ns('dialogObj')
+   cssStyle <- list()
+   cssStyle[[paste0(' #parent',id,' .modal-dialog')]]  <- paste0('height: 80% !important;')
+   cssStyle[[paste0(' #parent',id,' .modal-content')]] <- paste0('width: 100% !important; height: 100% !important;')
+   cssStyle[[paste0(' #parent',id,' .modal-body')]]    <- paste0('width: 100% !important; height: calc(100% - 57px - 65px) !important; overflow-y: auto;')
+   
+   showModal(
+    session = session,
+    div(
+      id = paste0('parent', id),
+      style = paste0("height: 90%;"),
+      shinyjs::inlineCSS(cssStyle),
       dialogModal(
         title = textOutput(ns("titleTexto")),
         size = 'm',
         swiper(id = idSwiper,width = '100%',height = '100%',
-              parent.style = "min-height: 350px !important;",
-              swiperSlide(
-                style = 'height: 100%; width: 100%; overflow: hidden; padding: 1px;',
-                uiOutput(ns('slider1')) |> shinycssloaders$withSpinner(color = 'lightblue')
-              ),
-              swiperSlide(
-                style = 'height: 100%; width: 100%; overflow-y: hidden; overflow-x: hidden; padding: 1px;',
-                uiOutput(ns('slider2')) |> shinycssloaders$withSpinner(color = 'lightblue')
-              ),
-              swiperSlide(
-                style = 'height: 100%; width: 100%; overflow-x: hidden; overflow-y: hidden;  padding: 1px;',
-                uiOutput(ns('slider3')) |> shinycssloaders$withSpinner(color = 'lightblue')
-              )
-        ),  
-        footer = uiOutput(ns('uiFooter')))))
-    
-      output$uiFooter <- renderUI({
+        parent.style = "min-height: 350px !important;",
+        swiperSlide(
+          style = 'height: 100%; width: 100%; overflow: hidden; padding: 1px;',
+          uiOutput(ns('slider1')) |> shinycssloaders$withSpinner(color = 'lightblue')
+        ),
+        swiperSlide(
+          style = 'height: 100%; width: 100%; overflow-y: hidden; overflow-x: hidden; padding: 1px;',
+          uiOutput(ns('slider2')) |> shinycssloaders$withSpinner(color = 'lightblue')
+        ),
+        swiperSlide(
+          style = 'height: 100%; width: 100%; overflow-x: hidden; overflow-y: hidden;  padding: 1px;',
+          uiOutput(ns('slider3')) |> shinycssloaders$withSpinner(color = 'lightblue')
+        )
+      ),  
+      footer = uiOutput(ns('uiFooter')))))
       
+      output$uiFooter <- renderUI({
+        
         current <- sliderPosition()
         
         if(current == 1){
@@ -103,13 +103,13 @@ box::use(
         else{
           tagList(actionButton(inputId = "btSair","Voltar"),actionButton(ns('btSalvar'),'Salvar'))
         }
+        
+      })
       
-    })
-
-     output$titleTexto <- renderText({
+      output$titleTexto <- renderText({
         
         current <- sliderPosition()
-
+        
         if(current == 1L){
           'Novo Grafico'
         }
@@ -118,135 +118,134 @@ box::use(
         }else{
           'Seleção de atributos'
         }
-
-      })
-    
-    output$slider1 <- renderUI({
-
-      output$containerFormat <- renderUI({
         
-        req(input$plotType)
-        
-        tipo.plot <<- tipoPlots|> filter(NAME_TIPO == input$plotType) 
-
-        x <- NULL
-        y <- NULL
-        
-        if(tipo.plot$CD_ID_TIPO == 1 || tipo.plot$CD_ID_TIPO == 2){ #scatter and line
-          
-          y <- c('QUANTITATIVE')#typedatas|>  filter(R_DATA == 'numeric' | R_DATA == 'integer')
-          x <- c('QUANTITATIVE','TIME')#typedatas|>  filter(R_DATA == 'numeric' | R_DATA == 'time' | R_DATA == 'date')
-          
-        }
-        else if(tipo.plot$CD_ID_TIPO == 3){ # box
-          
-          y <- c('QUANTITATIVE')
-          x <- c('QUALITATIVE','TIME')
-          
-        }
-        else if(tipo.plot$CD_ID_TIPO == 4){ # hist
-          
-          y <- c('QUANTITATIVE')
-          x <- c('QUANTITATIVE')
-          
-        }
-        else if(tipo.plot$CD_ID_TIPO == 5){ # dens
-          
-          y <- c('QUANTITATIVE')
-          x <- c('QUANTITATIVE')
-          
-        }
-        else if(tipo.plot$CD_ID_TIPO == 6){ # bar
-          
-          y <- c('QUANTITATIVE')
-          x <- c('QUALITATIVE')
-          
-        }
-        else if(tipo.plot$CD_ID_TIPO == 7){ # pie
-          
-          y <- c('QUANTITATIVE')
-          x <- c('QUALITATIVE')
-          
-        }
-        else if(tipo.plot$CD_ID_TIPO == 8){ # Area
-          
-          y <- c('QUANTITATIVE')
-          x <- c('QUALITATIVE','TIME')
-          
-        }
-
-        y.txt    <- column(6,textInput(ns('textEixoY'),label  = 'Texto Eixo Y',placeholder = 'Digite o text para Eixo Y',value = isolate(input$textEixoY)))
-        y.format <- column(6,selectizeInput(ns('comboEixoY'),label  = 'Tipo de dado Eixo Y',choices = toupper(y),options  = list(
-                      dropdownParent = 'body',
-                      openOnFocus = TRUE,
-                      closeAfterSelect = TRUE
-                    )))
-        x.txt    <- column(6,textInput(ns('textEixoX'),label  = 'Texto Eixo X',placeholder = 'Digite o text para Eixo X',value = isolate(input$textEixoX)))
-        x.format <- column(6,selectizeInput(ns('comboEixoX'),label  = 'Tipo de dado Eixo X',choices = toupper(x),options  = list(
-                      dropdownParent = 'body',
-                      openOnFocus = TRUE,
-                      closeAfterSelect = TRUE
-                    )))
-        
-      fluidRow(
-        y.txt,
-        y.format,
-        x.txt,
-        x.format
-      )
-    
       })
       
-      tagList(
-        fluidRow(
-          column(6,fluidRow(
-            shinyjs::inlineCSS("#textTitlePlot {text-transform: uppercase;}"),
-            shinyjs::inlineCSS("#textEixoY {text-transform: uppercase;}"),
-            shinyjs::inlineCSS("#textEixoX {text-transform: uppercase;}"),
-            shinyjs::inlineCSS("#textLegend {text-transform: uppercase;}"),
-            column(12,selectizeInput(
-              ns('comboBoxSetor'),
-              label = 'Seleciona Setor',
-              choices = setores$NAME_SETOR,
-              selected = isolate(input$comboBoxSetor)
-            )),
-            column(12,textInput(ns('textTitlePlot'),label = 'Titulo',placeholder = 'Digite o titulo para grafico',value = '')),
-          ))
-        ),    
-        br(),
-        panelTitle(title = 'Configuração',
-                        background.color.title = 'white',
-                        title.color = 'black',
-                        border.color = 'lightgray',
-                        children = fluidRow(style = 'padding: 10px',column(12,selectizeInput(ns('plotType'),label = 'Tipo de grafico',choices =  tipoPlots$NAME_TIPO,width = '100%',options  = list(
-                                              dropdownParent = 'body',
-                                              openOnFocus = TRUE,
-                                              closeAfterSelect = TRUE
-                                            ))),
-                                            column(12,uiOutput(ns('containerFormat'))),
-                                            column(12,textInput(ns('textLegend'),label = 'Texto Legenda',placeholder = 'Digite o titulo para legenda',value = '',width = '100%'))
-                                            
-                        ))
+      output$slider1 <- renderUI({
+        
+        output$containerFormat <- renderUI({
+          
+          req(input$plotType)
+          
+          tipo.plot <<- tipoPlots|> filter(NAME_TIPO == input$plotType) 
+          
+          x <- NULL
+          y <- NULL
+          
+          if(tipo.plot$CD_ID_TIPO == 1 || tipo.plot$CD_ID_TIPO == 2){ #scatter and line
+            
+            y <- c('QUANTITATIVE')#typedatas|>  filter(R_DATA == 'numeric' | R_DATA == 'integer')
+            x <- c('QUANTITATIVE','TIME')#typedatas|>  filter(R_DATA == 'numeric' | R_DATA == 'time' | R_DATA == 'date')
+            
+          }
+          else if(tipo.plot$CD_ID_TIPO == 3){ # box
+            
+            y <- c('QUANTITATIVE')
+            x <- c('QUALITATIVE','TIME')
+            
+          }
+          else if(tipo.plot$CD_ID_TIPO == 4){ # hist
+            
+            y <- c('QUANTITATIVE')
+            x <- c('QUANTITATIVE')
+            
+          }
+          else if(tipo.plot$CD_ID_TIPO == 5){ # dens
+            
+            y <- c('QUANTITATIVE')
+            x <- c('QUANTITATIVE')
+            
+          }
+          else if(tipo.plot$CD_ID_TIPO == 6){ # bar
+            
+            y <- c('QUANTITATIVE')
+            x <- c('QUALITATIVE')
+            
+          }
+          else if(tipo.plot$CD_ID_TIPO == 7){ # pie
+            
+            y <- c('QUANTITATIVE')
+            x <- c('QUALITATIVE')
+            
+          }
+          else if(tipo.plot$CD_ID_TIPO == 8){ # Area
+            
+            y <- c('QUANTITATIVE')
+            x <- c('QUALITATIVE','TIME')
+            
+          }
+          
+          y.txt    <- column(6,textInput(ns('textEixoY'),label  = 'Texto Eixo Y',placeholder = 'Digite o text para Eixo Y',value = isolate(input$textEixoY)))
+          y.format <- column(6,selectizeInput(ns('comboEixoY'),label  = 'Tipo de dado Eixo Y',choices = toupper(y),options  = list(
+            dropdownParent = 'body',
+            openOnFocus = TRUE,
+            closeAfterSelect = TRUE
+          )))
+          x.txt    <- column(6,textInput(ns('textEixoX'),label  = 'Texto Eixo X',placeholder = 'Digite o text para Eixo X',value = isolate(input$textEixoX)))
+          x.format <- column(6,selectizeInput(ns('comboEixoX'),label  = 'Tipo de dado Eixo X',choices = toupper(x),options  = list(
+            dropdownParent = 'body',
+            openOnFocus = TRUE,
+            closeAfterSelect = TRUE
+          )))
+          
+          fluidRow(
+            y.txt,
+            y.format,
+            x.txt,
+            x.format
+          )
+          
+        })
+        
+        tagList(
+          fluidRow(
+            column(6,fluidRow(
+              shinyjs::inlineCSS("#textTitlePlot {text-transform: uppercase;}"),
+              shinyjs::inlineCSS("#textEixoY {text-transform: uppercase;}"),
+              shinyjs::inlineCSS("#textEixoX {text-transform: uppercase;}"),
+              shinyjs::inlineCSS("#textLegend {text-transform: uppercase;}"),
+              column(12,selectizeInput(
+                ns('comboBoxSetor'),
+                label = 'Seleciona Setor',
+                choices = setores$NAME_SETOR,
+                selected = isolate(input$comboBoxSetor)
+              )),
+              column(12,textInput(ns('textTitlePlot'),label = 'Titulo',placeholder = 'Digite o titulo para grafico',value = '')),
+            ))
+          ),    
+          br(),
+          panelTitle(title = 'Configuração',
+          background.color.title = 'white',
+          title.color = 'black',
+          border.color = 'lightgray',
+          children = fluidRow(style = 'padding: 10px',column(12,selectizeInput(ns('plotType'),label = 'Tipo de grafico',choices =  tipoPlots$NAME_TIPO,width = '100%',options  = list(
+            dropdownParent = 'body',
+            openOnFocus = TRUE,
+            closeAfterSelect = TRUE
+          ))),
+          column(12,uiOutput(ns('containerFormat'))),
+          column(12,textInput(ns('textLegend'),label = 'Texto Legenda',placeholder = 'Digite o titulo para legenda',value = '',width = '100%'))
+          
+        ))
         
       )# end tagList
     })
-
-
-   output$slider2 <- renderUI({
-  
+    
+    output$slider2 <- renderUI({
+      
       req(sliderPosition() == 2)
-     
+      
       output$containerObjetos <- renderUI({
         
         changetextPlaceHolder()
-
+        
         estruturas.tmp <- typedatas |> filter(NAME_DATA %in% input$multiTipoStrutcs)
-
+        
         #objetos para selecao do plot
         objetos.tmp <- objetos$NAME_OBJETO[index_objs]
-
-        if(tipo.plot$CD_ID_TIPO != 7){
         
+        if(tipo.plot$CD_ID_TIPO != 7){
+          
           multiInput(
             inputId = ns('multiTipoObjects'),
             width = '100%',
@@ -270,108 +269,108 @@ box::use(
             width   = '100%',
             choices = objetos.tmp,
             options = list(
-                      dropdownParent = 'body',
-                      openOnFocus = TRUE,
-                      closeAfterSelect = TRUE
-                    )
+              dropdownParent = 'body',
+              openOnFocus = TRUE,
+              closeAfterSelect = TRUE
+            )
           )
         }
-  
+        
       })
-
+      
       div(
         style = 'height: auto;',
         uiOutput(ns('containerEstruturas')),
         uiOutput(ns('containerObjetos'))
       )
-    
-   }) # end slider 2
-    
-   output$slider3 <- renderUI({
-
-    req(sliderPosition() == 3)
-    
-    objetos.tmp    <- objetos |> filter(NAME_OBJETO %in% isolate(input$multiTipoObjects))
-    component.y    <- NULL
-
-    obs2$clear()
-    
-    if(is.null(datatable))
-    {
-      datatable   <<- reactiveVal({
-        x <- as.data.frame(matrix(nrow = 0,ncol = 4))
-        colnames(x) <- c(context.plot$EIXO.Y,context.plot$EIXO.X,"LEGENDA","REMOVER")
-        x
-      })
-    }else{
-      isolate(datatable({
-        x <- as.data.frame(matrix(nrow = 0,ncol = 4))
-        colnames(x) <- c(context.plot$EIXO.Y,context.plot$EIXO.X,"LEGENDA","REMOVER")
-        x
-      }))
-    }
-    
-    obs2$add(observeEvent(input$deletePressedRow,{
       
-      id    <- as.integer(input$deletePressedRow)
-      table <- isolate(datatable())
-      table <- table[-id,]
+    }) # end slider 2
+    
+    output$slider3 <- renderUI({
       
-      if(nrow(table) == 0){
-        datatable({
+      req(sliderPosition() == 3)
+      
+      objetos.tmp    <- objetos |> filter(NAME_OBJETO %in% isolate(input$multiTipoObjects))
+      component.y    <- NULL
+      
+      obs2$clear()
+      
+      if(is.null(datatable))
+      {
+        datatable   <<- reactiveVal({
           x <- as.data.frame(matrix(nrow = 0,ncol = 4))
           colnames(x) <- c(context.plot$EIXO.Y,context.plot$EIXO.X,"LEGENDA","REMOVER")
           x
         })
       }else{
-        datatable(table)
+        isolate(datatable({
+          x <- as.data.frame(matrix(nrow = 0,ncol = 4))
+          colnames(x) <- c(context.plot$EIXO.Y,context.plot$EIXO.X,"LEGENDA","REMOVER")
+          x
+        }))
       }
       
-      
-    },ignoreInit = TRUE,ignoreNULL = TRUE))
-    
-    obs2$add(observeEvent(input$btInsertTable,{
-  
-      table     <- isolate(datatable())
-
-      table.new <- insertTablePlot(table          = table,
-                                   context.plot   = context.plot,
-                                   objetos.tmp    = objetos.tmp,
-                                   atributos.tmp  = atributos.tmp,
-                                   nameObject.y   = isolate(input$comboObjetoY),
-                                   nameObject.x   = isolate(input$comboObjetoX),
-                                   nameAtriburo.y = isolate(input$comboAtributoY),
-                                   nameAtriburo.x = isolate(input$comboAtributoX)
-                                   )
-
-      datatable(rbind(table,table.new))
-      
-    },ignoreInit = TRUE,ignoreNULL = TRUE))
-
-    obs2$add(observeEvent(input$comboObjetoY,{
-      objeto         <- objetos.tmp |> filter(NAME_OBJETO    == input$comboObjetoY)
-      atributo       <- atributos.tmp |> filter((CD_ID_STRUCT == objeto$CD_ID_STRUCT & context.plot$FORMAT.Y == R_DATA) | !is.na(CD_ID_QUAT))  
-      updateSelectInput(inputId = 'comboAtributoY',choices = unique(atributo$NAME_ATRIBUTO))
-      
-    },ignoreNULL = TRUE))
-    
-    obs2$add(observeEvent(input$comboObjetoX,{
-      objeto         <- objetos.tmp |> filter(NAME_OBJETO    == input$comboObjetoX)
-      atributo       <- atributos.tmp |> filter((CD_ID_STRUCT == objeto$CD_ID_STRUCT & context.plot$FORMAT.X == R_DATA) | !is.na(CD_ID_QUAT))
-      updateSelectInput(inputId = 'comboAtributoX',choices = unique(atributo$NAME_ATRIBUTO))    
-      
-    },ignoreNULL = TRUE))
-
-    output$tableDataframe <- DT::renderDataTable({
-      
-      datas       <- datatable()  
-      colunaNames <- c({if(context.plot$BINARY)context.plot$EIXO.Y else NULL},context.plot$EIXO.X,"LEGENDA","REMOVER")
-
-      if(nrow(datas) > 0){
+      obs2$add(observeEvent(input$deletePressedRow,{
         
-        if(context.plot$BINARY){
-
-          datas <-  datas |> 
+        id    <- as.integer(input$deletePressedRow)
+        table <- isolate(datatable())
+        table <- table[-id,]
+        
+        if(nrow(table) == 0){
+          datatable({
+            x <- as.data.frame(matrix(nrow = 0,ncol = 4))
+            colnames(x) <- c(context.plot$EIXO.Y,context.plot$EIXO.X,"LEGENDA","REMOVER")
+            x
+          })
+        }else{
+          datatable(table)
+        }
+        
+        
+      },ignoreInit = TRUE,ignoreNULL = TRUE))
+      
+      obs2$add(observeEvent(input$btInsertTable,{
+        
+        table     <- isolate(datatable())
+        
+        table.new <- insertTablePlot(table          = table,
+          context.plot   = context.plot,
+          objetos.tmp    = objetos.tmp,
+          atributos.tmp  = atributos.tmp,
+          nameObject.y   = isolate(input$comboObjetoY),
+          nameObject.x   = isolate(input$comboObjetoX),
+          nameAtriburo.y = isolate(input$comboAtributoY),
+          nameAtriburo.x = isolate(input$comboAtributoX)
+        )
+        
+        datatable(rbind(table,table.new))
+        
+      },ignoreInit = TRUE,ignoreNULL = TRUE))
+      
+      obs2$add(observeEvent(input$comboObjetoY,{
+        objeto         <- objetos.tmp |> filter(NAME_OBJETO    == input$comboObjetoY)
+        atributo       <- atributos.tmp |> filter((CD_ID_STRUCT == objeto$CD_ID_STRUCT & context.plot$FORMAT.Y == R_DATA) | !is.na(CD_ID_QUAT))  
+        updateSelectInput(inputId = 'comboAtributoY',choices = unique(atributo$NAME_ATRIBUTO))
+        
+      },ignoreNULL = TRUE))
+      
+      obs2$add(observeEvent(input$comboObjetoX,{
+        objeto         <- objetos.tmp |> filter(NAME_OBJETO    == input$comboObjetoX)
+        atributo       <- atributos.tmp |> filter((CD_ID_STRUCT == objeto$CD_ID_STRUCT & context.plot$FORMAT.X == R_DATA) | !is.na(CD_ID_QUAT))
+        updateSelectInput(inputId = 'comboAtributoX',choices = unique(atributo$NAME_ATRIBUTO))    
+        
+      },ignoreNULL = TRUE))
+      
+      output$tableDataframe <- DT::renderDataTable({
+        
+        datas       <- datatable()  
+        colunaNames <- c({if(context.plot$BINARY)context.plot$EIXO.Y else NULL},context.plot$EIXO.X,"LEGENDA","REMOVER")
+        
+        if(nrow(datas) > 0){
+          
+          if(context.plot$BINARY){
+            
+            datas <-  datas |> 
             mutate_if(is.character,toupper) |> 
             mutate(
               !!colunaNames[1] :=  datas[[context.plot$EIXO.Y]],
@@ -390,179 +389,178 @@ box::use(
                 )
                 
               }))  |> select(colunaNames)
-          
-        }else{
-
-          datas <-  datas |> 
-            mutate_if(is.character,toupper) |> 
-            mutate(
-              !!colunaNames[1] :=  datas[[context.plot$EIXO.X]],
-              !!colunaNames[2] :=  datas$LEGENDA,
-              !!colunaNames[3] :=  sapply(1:nrow(datas),function(x){
-                
-                as.character(
-                  actionButton(
-                    paste0(ns('btRemove')),
-                    label = '',
-                    icon = icon('trash'),
-                    onclick = paste0('Shiny.setInputValue(\"',ns("deletePressedRow"),'\","',x,'",{priority: "event"})'),
-                    #style = 'background-color: transparent; color: lightblue; border-solid: none;'
+              
+            }else{
+              
+              datas <-  datas |> 
+              mutate_if(is.character,toupper) |> 
+              mutate(
+                !!colunaNames[1] :=  datas[[context.plot$EIXO.X]],
+                !!colunaNames[2] :=  datas$LEGENDA,
+                !!colunaNames[3] :=  sapply(1:nrow(datas),function(x){
+                  
+                  as.character(
+                    actionButton(
+                      paste0(ns('btRemove')),
+                      label = '',
+                      icon = icon('trash'),
+                      onclick = paste0('Shiny.setInputValue(\"',ns("deletePressedRow"),'\","',x,'",{priority: "event"})'),
+                      #style = 'background-color: transparent; color: lightblue; border-solid: none;'
+                    )
                   )
-                )
+                  
+                }))  |> select(colunaNames)
                 
-              }))  |> select(colunaNames)
-          
-        }
-      }
-      else{
-        datas <-  datas |> select(colunaNames)
-      }
-      
-      DT::datatable({datas}, 
-                    class = 'cell-border stripe',
-                    extensions = 'Scroller',
-                    options = list(
-                      language = list(url = 'js/table/translate.json'),
-                      dom = 't',
-                      bSort=FALSE,
-                      columnDefs = list(list(visible=FALSE, targets=c(0)),list(className = 'dt-center', targets = "_all"),list(width = 'autos',targets = 0:3)),
-                      deferRender = TRUE,
-                      scroller = FALSE
-                    ),
-                    escape = F,
-                    selection = 'none',
-      )  |> DT::formatStyle(colunaNames, cursor = 'pointer')
-      
-    })
-    
-    if(context.plot$BINARY)
-    {
-      component.y    <-   tagList(panelTitle(title = 'Eixo Y',
-                                             background.color.title = 'white',
-                                             title.color = 'black',
-                                             border.color = 'lightgray',
-                                             children = div(style = 'padding: 10px',
-                                                            splitLayout(
-                                                              selectInput(ns('comboObjetoY'),'Objeto',choices = objetos.tmp$NAME_OBJETO,selected = isolate(input$comboObjetoY),width = '100%'),
-                                                              selectInput(ns('comboAtributoY'),'Atributo',choices = '',width = '100%'),
-                                                              cellWidths = c('50%','50%')
-                                                            ))),br())
-    }
-     
-    div(
-      style = 'padding-left: 15px; padding-right: 15px; padding-bottom: 10px',
-      br(),
-      component.y,
-      panelTitle(title = 'Eixo X',
-                 background.color.title = 'white',
-                 title.color = 'black',
-                 border.color = 'lightgray',
-                 children = div(style = 'padding: 10px',
-                                splitLayout(
-                                  selectInput(ns('comboObjetoX'),'Objeto',choices = objetos.tmp$NAME_OBJETO,selected = isolate(input$comboObjetoX),width = '100%'),
-                                  selectInput(ns('comboAtributoX'),'Atributo',choices = '',width = '100%'),
-                                  cellWidths = c('50%','50%')
-                                ))),
-      br(),
-      span('Adicionar',style = 'font-size: 16px;'),
-      actionButton(ns('btInsertTable'),'',icon = icon('arrow-down'),width = '100%',style = 'font-size: 18px;'),
-      br(),
-      div(
-        style = 'width: 100%; height: auto; padding: 5px;',
-        DT::dataTableOutput(ns('tableDataframe'))
-      ))
-    
-   })
-    
-      ## Clear
-    obs$add(observeEvent(input$btClear, {
-      updateTextInput(session,'textNameObjeto', value = '')
-      updateMultiInput(session,'multiCameras',choices = '')
-    }, ignoreInit = TRUE))
-
-    ## Salvar Objeto
-    obs$add(observeEvent(input$btSalvar,{
-
-      current <- isolate(sliderPosition())
-
-      if(current == 1L){
-
-        textTitle     <- toupper(isolate(input$textTitlePlot))
-        textEixoY     <- toupper(isolate(input$textEixoY))
-        textEixoX     <- toupper(isolate(input$textEixoX))
-        textLegend    <- toupper(isolate(input$textLegend))
-        binary.status <- FALSE
-        
-        if(tipo.plot$CD_ID_TIPO  == 1 || tipo.plot$CD_ID_TIPO  == 2 || tipo.plot$CD_ID_TIPO  == 3 || tipo.plot$CD_ID_TIPO  == 8){ #scatter and line
-
-          binary.status <- TRUE
-          
-          if(checkifTextEmpty(textTitle) || 
-              checkifTextEmpty(textEixoY) ||
-              checkifTextEmpty(textEixoX) ||
-              checkifTextEmpty(textLegend)){
+              }
+            }
+            else{
+              datas <-  datas |> select(colunaNames)
+            }
             
-            showNotification("Existe campos que não foram preenchido!", type = "warning")
+            DT::datatable({datas}, 
+              class = 'cell-border stripe',
+              extensions = 'Scroller',
+              options = list(
+                language = list(url = 'js/table/translate.json'),
+                dom = 't',
+                bSort=FALSE,
+                columnDefs = list(list(visible=FALSE, targets=c(0)),list(className = 'dt-center', targets = "_all"),list(width = 'autos',targets = 0:3)),
+                deferRender = TRUE,
+                scroller = FALSE
+              ),
+              escape = F,
+              selection = 'none',
+            )  |> DT::formatStyle(colunaNames, cursor = 'pointer')
             
-            return()
+          })
+          
+          if(context.plot$BINARY)
+          {
+            component.y    <-   tagList(panelTitle(title = 'Eixo Y',
+            background.color.title = 'white',
+            title.color = 'black',
+            border.color = 'lightgray',
+            children = div(style = 'padding: 10px',
+            splitLayout(
+              selectInput(ns('comboObjetoY'),'Objeto',choices = objetos.tmp$NAME_OBJETO,selected = isolate(input$comboObjetoY),width = '100%'),
+              selectInput(ns('comboAtributoY'),'Atributo',choices = '',width = '100%'),
+              cellWidths = c('50%','50%')
+            ))),br())
           }
           
-          if(stringr::str_trim(textEixoY) == stringr::str_trim(textEixoX)){
+          div(
+            style = 'padding-left: 15px; padding-right: 15px; padding-bottom: 10px',
+            br(),
+            component.y,
+            panelTitle(title = 'Eixo X',
+            background.color.title = 'white',
+            title.color = 'black',
+            border.color = 'lightgray',
+            children = div(style = 'padding: 10px',
+            splitLayout(
+              selectInput(ns('comboObjetoX'),'Objeto',choices = objetos.tmp$NAME_OBJETO,selected = isolate(input$comboObjetoX),width = '100%'),
+              selectInput(ns('comboAtributoX'),'Atributo',choices = '',width = '100%'),
+              cellWidths = c('50%','50%')
+            ))),
+            br(),
+            span('Adicionar',style = 'font-size: 16px;'),
+            actionButton(ns('btInsertTable'),'',icon = icon('arrow-down'),width = '100%',style = 'font-size: 18px;'),
+            br(),
+            div(
+              style = 'width: 100%; height: auto; padding: 5px;',
+              DT::dataTableOutput(ns('tableDataframe'))
+            ))
             
-            showNotification("O texto do Eixo Y e X não podem ser iguais!", type = "warning")
-            
-            return()
-          }
-        }
-        else{
+          })
           
-          binary.status <- FALSE
+          ## Clear
+          obs$add(observeEvent(input$btClear, {
+            updateTextInput(session,'textNameObjeto', value = '')
+            updateMultiInput(session,'multiCameras',choices = '')
+          }, ignoreInit = TRUE))
           
-          if(checkifTextEmpty(textTitle) || 
-            checkifTextEmpty(textEixoX) ||
-            checkifTextEmpty(textLegend)){
+          ## Salvar Objeto
+          obs$add(observeEvent(input$btSalvar,{
             
-            showNotification("Existe campos que não foram preenchido!", type = "warning")
+            current <- isolate(sliderPosition())
             
-            return()
-          }
-          
-        }
-        
-        context.plot <<- list(
-          TITLE    = textTitle,
-          EIXO.X   = textEixoX,
-          EIXO.Y   = textEixoY,
-          LEGEND   = textLegend,
-          FORMAT.X = isolate(input$comboEixoX),
-          FORMAT.Y = isolate(input$comboEixoY),
-          BINARY   = binary.status
-        )
+            if(current == 1L){
+              
+              textTitle     <- toupper(isolate(input$textTitlePlot))
+              textEixoY     <- toupper(isolate(input$textEixoY))
+              textEixoX     <- toupper(isolate(input$textEixoX))
+              textLegend    <- toupper(isolate(input$textLegend))
+              binary.status <- FALSE
+              
+              if(tipo.plot$CD_ID_TIPO  == 1 || tipo.plot$CD_ID_TIPO  == 2 || tipo.plot$CD_ID_TIPO  == 3 || tipo.plot$CD_ID_TIPO  == 8){ #scatter and line
+                
+                binary.status <- TRUE
+                
+                if(checkifTextEmpty(textTitle) || 
+                checkifTextEmpty(textEixoY) ||
+                checkifTextEmpty(textEixoX) ||
+                checkifTextEmpty(textLegend)){
+                  
+                  showNotification("Existe campos que não foram preenchido!", type = "warning")
+                  
+                  return()
+                }
+                
+                if(stringr::str_trim(textEixoY) == stringr::str_trim(textEixoX)){
+                  
+                  showNotification("O texto do Eixo Y e X não podem ser iguais!", type = "warning")
+                  
+                  return()
+                }
+              }
+              else{
+                
+                binary.status <- FALSE
+                
+                if(checkifTextEmpty(textTitle) || 
+                checkifTextEmpty(textEixoX) ||
+                checkifTextEmpty(textLegend)){
+                  
+                  showNotification("Existe campos que não foram preenchido!", type = "warning")
+                  
+                  return()
+                }
+                
+              }
+              
+              context.plot <<- list(
+                TITLE    = textTitle,
+                EIXO.X   = textEixoX,
+                EIXO.Y   = textEixoY,
+                LEGEND   = textLegend,
+                FORMAT.X = isolate(input$comboEixoX),
+                FORMAT.Y = isolate(input$comboEixoY),
+                BINARY   = binary.status
+              )
+              
+              nome_estrutura <- isolate({c(input$comboEixoY,input$comboEixoX)})
+              index_objs     <<- findAllObjetosEstruturaToPlot(objetos,nome_estrutura)
+              
+              if(!any(index_objs)){
+                showNotification("Nenhum objeto possui esses tipos estrutura!", type = "warning")
+              }else{
+                sliderPosition(isolate(sliderPosition()) + 1L)
+                swiperSlideNext(idSwiper)
+              }
+            }else if(current == 2L){
+              selecao_objetos <- isolate(input$multiTipoObjects)
+              
+              if(length(selecao_objetos) == 0){
+                showNotification("Nenhum objeto foi selecionado para grafico!", type = "warning")
+              }else{
+                sliderPosition(isolate(sliderPosition()) + 1L)
+                swiperSlideNext(idSwiper)
+              }
+            }
+            
+            
+          },ignoreInit = T,ignoreNULL = T))
 
-        nome_estrutura <- isolate({c(input$comboEixoY,input$comboEixoX)})
-        index_objs     <<- findAllObjetosEstruturaToPlot(objetos,nome_estrutura)
-
-        if(!any(index_objs)){
-          showNotification("Nenhum objeto possui esses tipos estrutura!", type = "warning")
-        }else{
-          sliderPosition(isolate(sliderPosition()) + 1L)
-          swiperSlideNext(idSwiper)
-        }
-      }else if(current == 2L){
-        selecao_objetos <- isolate(input$multiTipoObjects)
-      
-        if(length(selecao_objetos) == 0){
-          showNotification("Nenhum objeto foi selecionado para grafico!", type = "warning")
-        }else{
-          sliderPosition(isolate(sliderPosition()) + 1L)
-          swiperSlideNext(idSwiper)
-        }
-      }
-
-
-    },ignoreInit = T,ignoreNULL = T))
-
-  }) # end banco
  }
  
 insertNewPlotComponent <- function(plot,componentPlot){
@@ -850,191 +848,191 @@ checkifTextEmpty <- function(text){
 }
 
 
-#########################################################################################################
+# #########################################################################################################
 
-# Pacotes necessários
-library(DBI)
-library(RMariaDB)
-library(dplyr)
-library(tidyr)
-library(purrr)
-library(jsonlite)
-library(lubridate)
-library(ggplot2)
-library(stringr)
+# # Pacotes necessários
+# library(DBI)
+# library(RMariaDB)
+# library(dplyr)
+# library(tidyr)
+# library(purrr)
+# library(jsonlite)
+# library(lubridate)
+# library(ggplot2)
+# library(stringr)
 
-# -------------------------------------------------
-# 1. Conexão com o banco MariaDB
-# -------------------------------------------------
-con <- dbConnect(
-  RMariaDB::MariaDB(),
-  dbname = 'system',
-  username = 'root',
-  password = 'ssbwarcq',
-  host = '127.0.0.1',
-  port = 3306
-)
+# # -------------------------------------------------
+# # 1. Conexão com o banco MariaDB
+# # -------------------------------------------------
+# con <- dbConnect(
+#   RMariaDB::MariaDB(),
+#   dbname = 'system',
+#   username = 'root',
+#   password = 'ssbwarcq',
+#   host = '127.0.0.1',
+#   port = 3306
+# )
 
-# -------------------------------------------------
-# 2. Carregar a tabela OBJETO_CONTEXTO inteira
-#    (ou filtrar se quiser menos)
-# -------------------------------------------------
-raw_df <- dbReadTable(con, "OBJETO_CONTEXTO")
-raw_df$DATA_OC <- paste0(raw_df$DATA_OC,"}")
-# OU se quiser limitar:
-# raw_df <- dbGetQuery(con, "SELECT * FROM OBJETO_CONTEXTO ORDER BY CD_ID_OC DESC LIMIT 1000;")
+# # -------------------------------------------------
+# # 2. Carregar a tabela OBJETO_CONTEXTO inteira
+# #    (ou filtrar se quiser menos)
+# # -------------------------------------------------
+# raw_df <- dbReadTable(con, "OBJETO_CONTEXTO")
+# raw_df$DATA_OC <- paste0(raw_df$DATA_OC,"}")
+# # OU se quiser limitar:
+# # raw_df <- dbGetQuery(con, "SELECT * FROM OBJETO_CONTEXTO ORDER BY CD_ID_OC DESC LIMIT 1000;")
 
-# Garante tipo de data/hora como POSIXct
-raw_df <- raw_df %>%
-  mutate(DT_HR_LOCAL = ymd_hms(DT_HR_LOCAL, tz = Sys.timezone()))
+# # Garante tipo de data/hora como POSIXct
+# raw_df <- raw_df %>%
+#   mutate(DT_HR_LOCAL = ymd_hms(DT_HR_LOCAL, tz = Sys.timezone()))
 
-# -------------------------------------------------
-# 3. Parsear a coluna DATA_OC (JSON)
-#    Ideia: transformar cada linha JSON em uma tibble "achatada"
-# -------------------------------------------------
+# # -------------------------------------------------
+# # 3. Parsear a coluna DATA_OC (JSON)
+# #    Ideia: transformar cada linha JSON em uma tibble "achatada"
+# # -------------------------------------------------
 
-# Função auxiliar: pega uma string JSON e devolve um tibble 1 linha
-parse_oc_row <- function(json_txt) {
-  # tenta interpretar o json
-  j <- tryCatch(jsonlite::fromJSON(json_txt), error = function(e) NULL)
-  if (is.null(j)) return(tibble())
+# # Função auxiliar: pega uma string JSON e devolve um tibble 1 linha
+# parse_oc_row <- function(json_txt) {
+#   # tenta interpretar o json
+#   j <- tryCatch(jsonlite::fromJSON(json_txt), error = function(e) NULL)
+#   if (is.null(j)) return(tibble())
 
-  # j pode ser lista (aninhada). Vamos "achatar":
-  # Exemplo:
-  # $PRENSA$`PARADO ESTADO` = "PARADO"
-  # $PRENSA$OPERADOR       = "AUSENTE"
-  # $BOBINA$ESTADO         = "PARADO"
-  # $BOBINA$VOLUME         = "VAZIO"
-  # $VISIVEL               = 1
-  #
-  # Vamos transformar em nomes tipo:
-  # PRENSA_PARADO_ESTADO, PRENSA_OPERADOR, BOBINA_ESTADO, BOBINA_VOLUME, VISIVEL
+#   # j pode ser lista (aninhada). Vamos "achatar":
+#   # Exemplo:
+#   # $PRENSA$`PARADO ESTADO` = "PARADO"
+#   # $PRENSA$OPERADOR       = "AUSENTE"
+#   # $BOBINA$ESTADO         = "PARADO"
+#   # $BOBINA$VOLUME         = "VAZIO"
+#   # $VISIVEL               = 1
+#   #
+#   # Vamos transformar em nomes tipo:
+#   # PRENSA_PARADO_ESTADO, PRENSA_OPERADOR, BOBINA_ESTADO, BOBINA_VOLUME, VISIVEL
 
-  flat <- list()
+#   flat <- list()
 
-  walk(names(j), function(top_key){
-    val <- j[[top_key]]
+#   walk(names(j), function(top_key){
+#     val <- j[[top_key]]
 
-    if (is.list(val)) {
-      # nível 2
-      walk(names(val), function(sub_key){
-        colname <- paste(top_key, sub_key, sep = "_")
-        # substituir espaços por underscore
-        colname <- str_replace_all(colname, "\\s+", "_")
-        flat[[colname]] <<- val[[sub_key]]
-      })
-    } else {
-      # nível 1 direto
-      colname <- str_replace_all(top_key, "\\s+", "_")
-      flat[[colname]] <<- val
-    }
-  })
+#     if (is.list(val)) {
+#       # nível 2
+#       walk(names(val), function(sub_key){
+#         colname <- paste(top_key, sub_key, sep = "_")
+#         # substituir espaços por underscore
+#         colname <- str_replace_all(colname, "\\s+", "_")
+#         flat[[colname]] <<- val[[sub_key]]
+#       })
+#     } else {
+#       # nível 1 direto
+#       colname <- str_replace_all(top_key, "\\s+", "_")
+#       flat[[colname]] <<- val
+#     }
+#   })
 
-  tibble::as_tibble(flat)
-}
+#   tibble::as_tibble(flat)
+# }
 
-# Aplica a função em cada linha e cola de volta
-parsed_list <- lapply(raw_df$DATA_OC, parse_oc_row)
+# # Aplica a função em cada linha e cola de volta
+# parsed_list <- lapply(raw_df$DATA_OC, parse_oc_row)
 
-parsed_df <- bind_rows(parsed_list)
+# parsed_df <- bind_rows(parsed_list)
 
-# Junta com cols originais importantes
-df <- bind_cols(
-  raw_df %>% select(CD_ID_OC, CD_ID_OBJETO, DT_HR_LOCAL),
-  parsed_df
-)
-df <- raw_df %>% select(CD_ID_OC, CD_ID_OBJETO, DT_HR_LOCAL)
-# Agora df tem colunas tipo:
-# CD_ID_OC, CD_ID_OBJETO, DT_HR_LOCAL,
-# PRENSA_PARADO_ESTADO, PRENSA_OPERADOR,
-# BOBINA_ESTADO, BOBINA_VOLUME,
-# VISIVEL, ...
+# # Junta com cols originais importantes
+# df <- bind_cols(
+#   raw_df %>% select(CD_ID_OC, CD_ID_OBJETO, DT_HR_LOCAL),
+#   parsed_df
+# )
+# df <- raw_df %>% select(CD_ID_OC, CD_ID_OBJETO, DT_HR_LOCAL)
+# # Agora df tem colunas tipo:
+# # CD_ID_OC, CD_ID_OBJETO, DT_HR_LOCAL,
+# # PRENSA_PARADO_ESTADO, PRENSA_OPERADOR,
+# # BOBINA_ESTADO, BOBINA_VOLUME,
+# # VISIVEL, ...
 
-# -------------------------------------------------
-# 4. Exemplos de plots
-# -------------------------------------------------
+# # -------------------------------------------------
+# # 4. Exemplos de plots
+# # -------------------------------------------------
 
-# 4.1. Linha do tempo do estado da PRENSA
-# Vamos contar quantas vezes cada estado apareceu ao longo do tempo
-# (isso é só exemplo; estado é categórico, então grafico de barras por tempo discreto também faz sentido)
+# # 4.1. Linha do tempo do estado da PRENSA
+# # Vamos contar quantas vezes cada estado apareceu ao longo do tempo
+# # (isso é só exemplo; estado é categórico, então grafico de barras por tempo discreto também faz sentido)
 
-ggplot(
-  df,
-  aes(x = DT_HR_LOCAL,
-      y = ..count..,
-      color = factor(CD_ID_OBJETO))
-) +
-  geom_freqpoly(binwidth = 60, aes(linetype = PRENSA_PARADO_ESTADO)) +
-  labs(
-    title   = "Frequência de estados da PRENSA ao longo do tempo",
-    x       = "Tempo (DT_HR_LOCAL)",
-    y       = "Contagem no intervalo",
-    color   = "CD_ID_OBJETO",
-    linetype= "Estado PRENSA"
-  ) +
-  theme_minimal()
-
-
-# 4.2. Barras: distribuição do ESTADO da BOBINA por objeto
-# Conta quantas linhas temos de cada combinação
-df %>%
-  count(CD_ID_OBJETO, BOBINA_ESTADO) %>%
-  ggplot(aes(x = BOBINA_ESTADO,
-             y = n,
-             fill = factor(CD_ID_OBJETO))) +
-  geom_col(position = "dodge") +
-  labs(
-    title = "Distribuição de estados da BOBINA por objeto",
-    x     = "BOBINA_ESTADO",
-    y     = "Ocorrências",
-    fill  = "CD_ID_OBJETO"
-  ) +
-  theme_minimal()
+# ggplot(
+#   df,
+#   aes(x = DT_HR_LOCAL,
+#       y = ..count..,
+#       color = factor(CD_ID_OBJETO))
+# ) +
+#   geom_freqpoly(binwidth = 60, aes(linetype = PRENSA_PARADO_ESTADO)) +
+#   labs(
+#     title   = "Frequência de estados da PRENSA ao longo do tempo",
+#     x       = "Tempo (DT_HR_LOCAL)",
+#     y       = "Contagem no intervalo",
+#     color   = "CD_ID_OBJETO",
+#     linetype= "Estado PRENSA"
+#   ) +
+#   theme_minimal()
 
 
-# 4.3. Timeline facetada: PRENSA_OPERADOR ao longo do tempo
-# Marcamos pontos coloridos por CD_ID_OBJETO e facet por operador
-ggplot(
-  df,
-  aes(x = DT_HR_LOCAL,
-      y = CD_ID_OBJETO,
-      color = factor(CD_ID_OBJETO))
-) +
-  geom_point(alpha = 0.7) +
-  facet_wrap(~ PRENSA_OPERADOR, ncol = 1, scales = "free_y") +
-  labs(
-    title = "Operador da PRENSA ao longo do tempo",
-    x     = "Tempo",
-    y     = "CD_ID_OBJETO",
-    color = "CD_ID_OBJETO"
-  ) +
-  theme_minimal()
+# # 4.2. Barras: distribuição do ESTADO da BOBINA por objeto
+# # Conta quantas linhas temos de cada combinação
+# df %>%
+#   count(CD_ID_OBJETO, BOBINA_ESTADO) %>%
+#   ggplot(aes(x = BOBINA_ESTADO,
+#              y = n,
+#              fill = factor(CD_ID_OBJETO))) +
+#   geom_col(position = "dodge") +
+#   labs(
+#     title = "Distribuição de estados da BOBINA por objeto",
+#     x     = "BOBINA_ESTADO",
+#     y     = "Ocorrências",
+#     fill  = "CD_ID_OBJETO"
+#   ) +
+#   theme_minimal()
 
 
-# 4.4. Se o JSON tiver campo VISIVEL (0/1), podemos ver % visível por objeto
-vis_df <- df %>%
-  mutate(VISIVEL = as.numeric(VISIVEL)) %>%
-  group_by(CD_ID_OBJETO) %>%
-  summarise(p_visivel = mean(VISIVEL, na.rm = TRUE))
-
-ggplot(
-  vis_df,
-  aes(x = factor(CD_ID_OBJETO),
-      y = p_visivel,
-      fill = factor(CD_ID_OBJETO))
-) +
-  geom_col() +
-  scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
-  labs(
-    title = "Percentual VISIVEL por objeto",
-    x     = "CD_ID_OBJETO",
-    y     = "% VISÍVEL",
-    fill  = "CD_ID_OBJETO"
-  ) +
-  theme_minimal()
+# # 4.3. Timeline facetada: PRENSA_OPERADOR ao longo do tempo
+# # Marcamos pontos coloridos por CD_ID_OBJETO e facet por operador
+# ggplot(
+#   df,
+#   aes(x = DT_HR_LOCAL,
+#       y = CD_ID_OBJETO,
+#       color = factor(CD_ID_OBJETO))
+# ) +
+#   geom_point(alpha = 0.7) +
+#   facet_wrap(~ PRENSA_OPERADOR, ncol = 1, scales = "free_y") +
+#   labs(
+#     title = "Operador da PRENSA ao longo do tempo",
+#     x     = "Tempo",
+#     y     = "CD_ID_OBJETO",
+#     color = "CD_ID_OBJETO"
+#   ) +
+#   theme_minimal()
 
 
-# -------------------------------------------------
-# 5. Desconectar
-# -------------------------------------------------
-dbDisconnect(con)
+# # 4.4. Se o JSON tiver campo VISIVEL (0/1), podemos ver % visível por objeto
+# vis_df <- df %>%
+#   mutate(VISIVEL = as.numeric(VISIVEL)) %>%
+#   group_by(CD_ID_OBJETO) %>%
+#   summarise(p_visivel = mean(VISIVEL, na.rm = TRUE))
+
+# ggplot(
+#   vis_df,
+#   aes(x = factor(CD_ID_OBJETO),
+#       y = p_visivel,
+#       fill = factor(CD_ID_OBJETO))
+# ) +
+#   geom_col() +
+#   scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
+#   labs(
+#     title = "Percentual VISIVEL por objeto",
+#     x     = "CD_ID_OBJETO",
+#     y     = "% VISÍVEL",
+#     fill  = "CD_ID_OBJETO"
+#   ) +
+#   theme_minimal()
+
+
+# # -------------------------------------------------
+# # 5. Desconectar
+# # -------------------------------------------------
+# dbDisconnect(con)

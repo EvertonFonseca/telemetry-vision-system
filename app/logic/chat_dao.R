@@ -1,3 +1,12 @@
+
+# SELECT  oc.DATA_OC AS ATRIBUTOS, 
+#         oc.DT_HR_LOCAL AS DATE_TIME, 
+# 		  o.NAME_OBJETO AS OBJETO, 
+# 		  s.NAME_SETOR AS SETOR
+# 		  from objeto_contexto oc
+# 		  LEFT JOIN objeto o ON o.CD_ID_OBJETO = oc.CD_ID_OBJETO
+# 		  LEFT JOIN setor  s ON s.CD_ID_SETOR  = o.CD_ID_SETOR
+
 box::use(
   DBI,
   RMariaDB,
@@ -852,7 +861,7 @@ gpt_build_sql <- function(user_msg,
     "REGRAS MUITO IMPORTANTES:",
     "1. Responda APENAS em JSON, exatamente assim: {\"sql\": \"SELECT ...\"}",
     "2. NÃO use ```sql, não explique, não comente.",
-    "3. SEMPRE termine com: ORDER BY oc.DT_HR_LOCAL DESC LIMIT 300",
+    "3. SEMPRE termine com: ORDER BY oc.DT_HR_LOCAL DESC",
     "4. APENAS SELECT. Proibido: UPDATE, DELETE, INSERT, CREATE, DROP.",
     "",
     "FILTROS QUE VOCÊ PODE USAR (APENAS ESTES):",
@@ -930,7 +939,7 @@ gpt_build_sql <- function(user_msg,
       "LEFT JOIN objeto o ON o.CD_ID_OBJETO = oc.CD_ID_OBJETO",
       "LEFT JOIN setor s ON s.CD_ID_SETOR = o.CD_ID_SETOR",
       "ORDER BY oc.DT_HR_LOCAL DESC",
-      "LIMIT 1000;"
+      ""
     )
     return(list(
       sql   = sql_txt,
@@ -1082,7 +1091,7 @@ gpt_answer_from_rows <- function(user_msg,
   }
   
   df_preview <- if (nrow(df)) {
-    head_n <- min(40L, nrow(df))
+    head_n <- min(100L, nrow(df))
     jsonlite::toJSON(df[seq_len(head_n), , drop = FALSE], auto_unbox = TRUE)
   } else {
     "[]"
@@ -1101,12 +1110,12 @@ gpt_answer_from_rows <- function(user_msg,
     "REGRAS DE INTERPRETAÇÃO:",
     "- Se o usuário pedir **nomes de máquinas / objetos / ativos / equipamentos**, responda usando APENAS os valores distintos de NAME_OBJETO que vieram nos dados.",
     "- NESSA SITUAÇÃO, NÃO use os componentes do JSON (DATA_OC) como se fossem máquinas.",
-    "- Só use DATA_OC quando o usuário falar de 'componentes', 'partes', 'itens dentro do objeto', 'atributos do objeto' ou pedir estado/força/volume.",
+    "- Só use DATA_OC quando o usuário falar de 'componentes', 'partes', 'itens dentro do objeto', 'atributos do objeto'.",
     #"- Se existir apenas 1 objeto nos dados, diga isso claramente: 'Nos registros há apenas o objeto X'.",
     "",
     "NOMES DE COLUNAS:",
     "- Quando devolver código de gráfico (ggplot), use EXATAMENTE os nomes das colunas como aparecem nos dados.",
-    "- Os campos expandidos do JSON são sempre gerados em MAIÚSCULO e com '_' (ex.: PRENSA_ESTADO, BOBINA_VOLUME, CABINE_TEMPERATURA).",
+    "- Os campos expandidos do JSON são sempre gerados em MAIÚSCULO e com '_' (ex.: PRENSA_ESTADO, BOBINA_VOLUME, CABINE_TEMPERATURA e ETC...).",
     "- Portanto, **NÃO use nomes em minúsculo** como data_oc_estado ou prensa_estado.",
     "- Se precisar criar um gráfico com componente do JSON, escreva: ggplot(df_ctx, aes(x = DT_HR_LOCAL, y = PRENSA_ESTADO)) ...",
     "",
