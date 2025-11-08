@@ -1,0 +1,126 @@
+---
+title: "Untitled"
+format: html
+---
+
+
+```{r}
+library(RMariaDB)
+library(DBI)
+library(tidyverse)
+library(magick)
+
+# Requer: DBI, RMariaDB
+# con: conexão ativa DBI::dbConnect(RMariaDB::MariaDB(), ...)
+# cd_id_frame: BIGINT do frame "alvo"
+# janela: quantos registros trazer (inclui o alvo)
+# include_blob: se TRUE, junta tabela FRAME_CAMERA_BLOB
+# ascending: se TRUE, reordena crescente ao final (útil p/ processar do mais antigo p/ o mais novo)
+get_frames_window <- function(con, cd_id_frame, janela = 10L, include_blob = TRUE, ascending = TRUE) {
+  stopifnot(janela >= 1L)
+
+  # 1) Pega câmera e timestamp do frame alvo
+  seed <- DBI::dbGetQuery(
+    con,
+    "SELECT CD_ID_CAMERA, DT_HR_LOCAL
+       FROM FRAME_CAMERA
+      WHERE CD_ID_FRAME = ?",
+    params = list(as.numeric(cd_id_frame))
+  )
+  if (!nrow(seed)) stop("CD_ID_FRAME não encontrado: ", cd_id_frame)
+
+  cam_id <- seed$CD_ID_CAMERA[1]
+  dt_ref <- seed$DT_HR_LOCAL[1]
+
+  # 2) Monta a query de janela na mesma câmera
+  select_blob <- if (isTRUE(include_blob)) ", fcb.ID_FRAME_BLOB, fcb.DATA_FRAME" else ""
+  join_blob   <- if (isTRUE(include_blob)) " LEFT JOIN FRAME_CAMERA_BLOB fcb ON fcb.CD_ID_FRAME = fc.CD_ID_FRAME " else ""
+
+  sql <- paste0(
+    "SELECT fc.CD_ID_FRAME, fc.DT_HR_LOCAL, fc.CD_ID_CAMERA",
+    select_blob, "
+       FROM FRAME_CAMERA fc",
+    join_blob, "
+      WHERE fc.CD_ID_CAMERA = ?
+        AND fc.DT_HR_LOCAL <= ?
+      ORDER BY fc.DT_HR_LOCAL DESC, fc.CD_ID_FRAME DESC
+      LIMIT ?"
+  )
+
+  df <- DBI::dbGetQuery(
+    con, sql,
+    params = list(as.numeric(cam_id), as.character(dt_ref), as.integer(janela))
+  )
+
+  # 3) Opcional: reordenar crescente para processamento temporal
+  if (isTRUE(ascending) && nrow(df)) {
+    df <- df[order(df$DT_HR_LOCAL, df$CD_ID_FRAME), , drop = FALSE]
+  }
+  df
+}
+
+build_gif_from_blob <- function(frames,out_gif = "frames.gif", annotate_ts = FALSE) {
+
+  imgs <- lapply(seq_len(nrow(frames)), function(i) {
+    img <- magick::image_read(frames$DATA_FRAME[[i]])
+    if (isTRUE(annotate_ts)) {
+      ts <- format(frames$DT_HR_LOCAL[i], "%Y-%m-%d %H:%M:%OS3")
+      img <- magick::image_annotate(img, ts, gravity = "SouthEast", size = 16, color = "white", boxcolor = "rgba(0,0,0,0.45)")
+    }
+    img
+  })
+
+  anim <- magick::image_animate(magick::image_join(imgs), fps = 1L, dispose = "previous")
+ # magick::image_write(anim, out_gif)
+  message("GIF gerado: ", normalizePath(out_gif, winslash = "/"))
+  anim 
+}
+
+selectAllContext <- function(con){
+
+    sql <- paste0("SELECT 
+                    oc.DATA_OC,
+                    oc.DT_HR_LOCAL,
+                    o.NAME_OBJETO,
+                    s.NAME_SETOR,
+                    oc.CD_ID_FRAME
+                    FROM objeto_contexto oc
+                    LEFT JOIN objeto o ON o.CD_ID_OBJETO = oc.CD_ID_OBJETO
+                    LEFT JOIN setor s ON s.CD_ID_SETOR = o.CD_ID_SETOR
+                    #WHERE name_objeto = 'SETREMA'
+                    ORDER BY DT_HR_LOCAL DESC")
+    DBI::dbGetQuery(con,sql)
+}
+
+
+```
+
+# Open connection
+
+
+```{r}
+con <- DBI::dbConnect(
+            RMariaDB::MariaDB(),
+            dbname = 'system',
+            username = 'root',
+            password = 'ssbwarcq',
+            host = '127.0.0.1',
+            port = 3306
+        )
+
+```
+
+## Frames
+
+
+```{r}
+frames <- get_frames_window(con,289621)
+frames$DATE_TIME <- format(frames$DT_HR_LOCAL,"%d/%m/%y %H:%M:%S:%OS3")
+```
+
+# Video
+
+```{r}
+codigo <- 315758
+build_gif_from_blob( get_frames_window(con,codigo))
+```
