@@ -159,34 +159,55 @@ new_player_ctx <- function(session, pool, lru_cache) {
     uri
   }
 
-  env$render_current <- function(seq_df, i, w, h, id_map, fit_bounds = FALSE) {
+
+ env$render_current <- function(seq_df, i, w, h, id_map, fit_bounds = FALSE) {
     if (is.null(seq_df) || !nrow(seq_df)) return(list(ok = FALSE, w = w, h = h))
     i <- max(1L, min(nrow(seq_df), as.integer(i)))
-    cur <- seq_df[i, ]
-    uri <- env$fetch_dataurl_single(cur$CD_ID_CAMERA, cur$DT_HR_LOCAL)
-    if (is.null(uri)) return(list(ok = FALSE, w = w, h = h))
-    dom_id <- id_map[[as.character(cur$CD_ID_CAMERA)]]
-    if (is.null(dom_id) || is.na(dom_id)) return(list(ok = FALSE, w = w, h = h))
 
-    env$session$sendCustomMessage("set_frame_to", list(
-      id = dom_id, url = uri, w = as.integer(w), h = as.integer(h), fit = isTRUE(fit_bounds)
-    ))
-    list(ok = TRUE, w = w, h = h)
+    # Timestamp de referência do "passo" atual
+    ts_ref <- as.POSIXct(seq_df$DT_HR_LOCAL[i], tz = "UTC")
+
+    # Todas as linhas do mesmo timestamp (potencialmente várias câmeras)
+    same_ts <- seq_df[seq_df$DT_HR_LOCAL == ts_ref, , drop = FALSE]
+    if (!nrow(same_ts)) return(list(ok = FALSE, w = w, h = h))
+
+    ok_any <- FALSE
+
+    # Renderiza cada câmera desse timestamp
+    for (row in seq_len(nrow(same_ts))) {
+      cam    <- as.integer(same_ts$CD_ID_CAMERA[row])
+      dom_id <- id_map[[as.character(cam)]]
+      if (is.null(dom_id) || is.na(dom_id)) next
+
+      uri <- env$fetch_dataurl_single(cam, ts_ref)
+      if (is.null(uri)) next
+
+      env$session$sendCustomMessage("set_frame_to", list(
+        id  = dom_id,
+        url = uri,
+        w   = as.integer(w),
+        h   = as.integer(h),
+        fit = isTRUE(fit_bounds)
+      ))
+      ok_any <- TRUE
+    }
+
+    list(ok = ok_any, w = w, h = h)
   }
 
   env$prefetch_ahead_batch <- function(seq_df, i, N = PREFETCH_AHEAD) {
     if (is.null(seq_df) || !nrow(seq_df)) return(invisible(FALSE))
     n <- nrow(seq_df); i <- as.integer(i)
     if (i >= n) return(invisible(FALSE))
+
+    # Mantém seu prefetch por índice, mas isso já cobre multi-câmera
     tgt_idx <- seq.int(i + 1L, min(n, i + N))
     if (!length(tgt_idx)) return(invisible(FALSE))
-
     seg <- seq_df[tgt_idx, , drop = FALSE]
     seg$k <- mapply(key_of, seg$CD_ID_CAMERA, seg$DT_HR_LOCAL)
     seg <- seg[!vapply(seg$k, function(z) !is.null(env$cache$get(z)), logical(1L)), , drop = FALSE]
     if (!nrow(seg)) return(invisible(TRUE))
 
-    # Busca em lote por câmera
     groups <- split(seg, seg$CD_ID_CAMERA)
     for (cam_str in names(groups)) {
       g      <- groups[[cam_str]]
@@ -204,8 +225,6 @@ new_player_ctx <- function(session, pool, lru_cache) {
           }
         }
       }
-
-      # Falhas de cache: fallback single
       for (j in seq_along(ts_vec)) {
         if (is.null(env$cache$get(key_of(cam, ts_vec[j])))) {
           invisible(env$fetch_dataurl_single(cam, ts_vec[j]))
@@ -262,7 +281,6 @@ clip_limit_exceeded <- function(rv, max_min, now_ts = NULL) {
 # ==================================================
 # Overlay resumo do clip + PLAYER DO CLIP
 # ==================================================
-# >>> NOVO: agora o overlay também inclui:
 # - preview do frame atual do clip
 # - botões Reverse / Prev / Play / Pause / Next
 # - numericInput pra velocidade (ms)
@@ -281,21 +299,27 @@ clip_summary_overlay <- function(ns, session, input, objeto, ts_start, ts_end, n
 
   try(removeUI(selector = paste0("#", overlay_id), multiple = TRUE, immediate = TRUE), silent = TRUE)
 
-  atributos_mem <- collect_clip_attributes(input,objeto,ts_start,ts_end)
+  # --- Formulário de atributos (igual ao teu) ---
+  camera_ids    <- NULL
+  camera_names  <- NULL
 
-  componentes <- objeto$CONFIG[[1]]$COMPONENTES[[1]]
-  divLista    <- fluidRow()
+  atributos_mem <- collect_clip_attributes(input,objeto,ts_start,ts_end)
+  componentes   <- objeto$CONFIG[[1]]$COMPONENTES[[1]]
+  divLista      <- fluidRow()
+
   for (i in seq_len(nrow(componentes))) {
+
     comp          <- componentes[i,]
     estrutura     <- comp$ESTRUTURA[[1]]
     atributos     <- estrutura$CONFIGS[[1]]$ATRIBUTOS[[1]]
+    camera_ids    <- c(camera_ids,comp$CD_ID_CAMERA)
     listAtributos <- tagList()
     for (k in seq_len(nrow(atributos))) {
       atributo  <- atributos[k,]
       id_html   <- ns(paste0(codigo_date,comp$NAME_COMPONENTE, "_", atributo$NAME_ATRIBUTO, "_", k))
       value     <- atributos_mem$VALUE[which(atributos_mem$CD_ID_ATRIBUTO == atributo$CD_ID_ATRIBUTO)]
 
-      if(is.na(value)) value <- NULL
+      if(any(is.na(value))) value <- NULL
 
       if (atributo$NAME_DATA == "QUALITATIVE") {
         classes       <- stringr::str_split(atributo$CLASSE_ATRIBUTO, ",")[[1]]
@@ -329,71 +353,90 @@ clip_summary_overlay <- function(ns, session, input, objeto, ts_start, ts_end, n
     )
   }
 
-  # >>> NOVO: bloco de player do clip dentro do modal
-  # usamos IDs fixos com ns(): clipOverlayImg, clipOverlay_step_ms
-  # botões: eles disparam Shiny.setInputValue(ns("clipOverlay_action"), {...})
-  player_block <- div(
+  # --- PREVIEW MULTI-CÂMERA ---
+  # ids e nomes
+  camera_ids   <- as.integer(unique(camera_ids))
+  if (is.null(camera_names)) {
+    cam_tbl <- purrr::map_df(componentes$CAMERA, ~ .x) |>
+               dplyr::distinct(CD_ID_CAMERA, NAME_CAMERA)
+    camera_names <- vapply(camera_ids, function(cid){
+      nm <- cam_tbl$NAME_CAMERA[cam_tbl$CD_ID_CAMERA == cid]
+      if (length(nm)) nm[[1]] else paste("Câmera", cid)
+    }, character(1))
+  }
+
+  # cards: título + <img id="clipOverlayImg_<cam>">
+  img_cards <- tagList()
+  for (k in seq_along(camera_ids)) {
+    cid  <- camera_ids[k]
+    name <- camera_names[k]
+    img_cards <- tagAppendChildren(
+      img_cards,
+      column(
+        width = 6,
+        panelTitle(
+          title = paste0("Preview – ", name, " (", cid, ")"),
+          background.color.title = "white",
+          title.color  = "black",
+          border.color = "lightgray",
+          children = div(
+            style = "padding: 10px; text-align:center;",
+            tags$img(
+              id = ns(paste0("clipOverlayImg_", cid)),
+              style = "max-width:100%; max-height:300px; border:1px solid #ccc; border-radius:6px; background:#000;"
+            )
+          )
+        )
+      )
+    )
+  }
+
+  # bloco de botões (mantido)
+  controls_block <- div(
     style = "padding: 10px; text-align:center;",
-    tags$img(
-      id = ns("clipOverlayImg"),
-      style = "max-width:100%; max-height:300px; border:1px solid #ccc; border-radius:6px; background:#000;"
-    ),
-    br(), br(),
     splitLayout(
       cellWidths = c("auto","auto","auto","auto","auto","120px"),
       tags$button(
         class="btn btn-outline-secondary btn-sm",
         title="Reverse",
-        onclick = sprintf(
-          "Shiny.setInputValue('%s',{action:'reverse',nonce:Math.random()},{priority:'event'})",
-          ns("clipOverlay_action")
-        ),
+        onclick = sprintf("Shiny.setInputValue('%s',{action:'reverse',nonce:Math.random()},{priority:'event'})",
+                          ns("clipOverlay_action")),
         shiny::icon("backward"), " Reverse"
       ),
       tags$button(
         class="btn btn-outline-secondary btn-sm",
         title="Prev",
-        onclick = sprintf(
-          "Shiny.setInputValue('%s',{action:'prev',nonce:Math.random()},{priority:'event'})",
-          ns("clipOverlay_action")
-        ),
+        onclick = sprintf("Shiny.setInputValue('%s',{action:'prev',nonce:Math.random()},{priority:'event'})",
+                          ns("clipOverlay_action")),
         shiny::icon("step-backward"), " Prev"
       ),
       tags$button(
         class="btn btn-outline-secondary btn-sm",
         title="Play",
-        onclick = sprintf(
-          "Shiny.setInputValue('%s',{action:'play',nonce:Math.random()},{priority:'event'})",
-          ns("clipOverlay_action")
-        ),
+        onclick = sprintf("Shiny.setInputValue('%s',{action:'play',nonce:Math.random()},{priority:'event'})",
+                          ns("clipOverlay_action")),
         shiny::icon("play"), " Play"
       ),
       tags$button(
         class="btn btn-outline-secondary btn-sm",
         title="Pause",
-        onclick = sprintf(
-          "Shiny.setInputValue('%s',{action:'pause',nonce:Math.random()},{priority:'event'})",
-          ns("clipOverlay_action")
-        ),
+        onclick = sprintf("Shiny.setInputValue('%s',{action:'pause',nonce:Math.random()},{priority:'event'})",
+                          ns("clipOverlay_action")),
         shiny::icon("pause"), " Pause"
       ),
       tags$button(
         class="btn btn-outline-secondary btn-sm",
         title="Next",
-        onclick = sprintf(
-          "Shiny.setInputValue('%s',{action:'next',nonce:Math.random()},{priority:'event'})",
-          ns("clipOverlay_action")
-        ),
+        onclick = sprintf("Shiny.setInputValue('%s',{action:'next',nonce:Math.random()},{priority:'event'})",
+                          ns("clipOverlay_action")),
         shiny::icon("step-forward"), " Next"
       ),
-      numericInput(
-        ns("clipOverlay_step_ms"),
-        label = "Intervalo (ms)",
-        value = 50, min = 1, step = 1, width = "120px"
-      ) |> tagAppendAttributes(style=';margin-top: -25px;')
+      numericInput(ns("clipOverlay_step_ms"), label="Intervalo (ms)", value=50, min=1, step=1, width="120px") |>
+        tagAppendAttributes(style=';margin-top: -25px;')
     )
   )
 
+  # injeta o overlay
   insertUI(
     selector = parent_sel,
     where    = "beforeEnd",
@@ -405,8 +448,8 @@ clip_summary_overlay <- function(ns, session, input, objeto, ts_start, ts_end, n
       ),
       div(
         style = paste(
-          "background:#fff; border-radius:10px; width:min(800px,92%);",
-          "height:90vh; min-height:350px; box-shadow:0 12px 30px rgba(0,0,0,.25);",
+          "background:#fff; border-radius:10px; width:min(1100px,96%);",
+          "height:92vh; min-height:420px; box-shadow:0 12px 30px rgba(0,0,0,.25);",
           "display:flex; flex-direction:column;"
         ),
         div(
@@ -414,18 +457,13 @@ clip_summary_overlay <- function(ns, session, input, objeto, ts_start, ts_end, n
           tags$h4("Clip selecionado", style = "margin:0;")
         ),
         div(
-          style = paste(
-            "padding:10px;",
-            "flex:1 1 auto;",
-            "min-height:0;",
-            "overflow-y:auto; overflow-x:hidden;"
-          ),
+          style = "padding:10px; flex:1 1 auto; min-height:0; overflow-y:auto; overflow-x:hidden;",
           panelTitle(
-            title = "Preview do Clip",
+            title = "Preview do Clip (multi-câmera)",
             background.color.title = "white",
             title.color  = "black",
             border.color = "lightgray",
-            children = player_block
+            children = tagList(controls_block, br(), fluidRow(img_cards))
           ),
           br(),
           panelTitle(
@@ -762,7 +800,7 @@ uiNewTreinar <- function(ns, input, output, session, callback){
   if (is.null(session$userData$lru_cache))   session$userData$lru_cache   <- new_lru_cache(MAX_CACHE_ITEMS)
   if (is.null(session$userData$player_ctx))  session$userData$player_ctx  <- new_player_ctx(session, dbp$get_pool(), session$userData$lru_cache)
   ctx <- session$userData$player_ctx
-
+  
   # ---------- Player do CLIP no modal (preview independente) ----------
   # >>> NOVO
   clipOverlayPlayer <- reactiveValues(
@@ -771,19 +809,27 @@ uiNewTreinar <- function(ns, input, output, session, callback){
     dir = +1L,            # direção +1 / -1
     playing = FALSE       # se está rodando loop
   )
-
+  
   # desenha frame atual do clipOverlayPlayer na <img> do modal
-  render_clip_overlay_frame <- function() {  # >>> NOVO
+  render_clip_overlay_frame <- function() {
     isolate({
       if (is.null(clipOverlayPlayer$seq) || !nrow(clipOverlayPlayer$seq)) return(invisible())
-      j <- max(1L, min(nrow(clipOverlayPlayer$seq), as.integer(clipOverlayPlayer$i)))
-      cur <- clipOverlayPlayer$seq[j, ]
-      uri <- ctx$fetch_dataurl_single(cur$CD_ID_CAMERA, cur$DT_HR_LOCAL)
-      if (!is.null(uri)) {
-        session$sendCustomMessage("set_clip_overlay_frame", list(
-          img_id = ns("clipOverlayImg"),
-          url    = uri
-        ))
+      j  <- max(1L, min(nrow(clipOverlayPlayer$seq), as.integer(clipOverlayPlayer$i)))
+      ts <- as.POSIXct(clipOverlayPlayer$seq$DT_HR_LOCAL[j], tz = "UTC")
+      
+      # todas as linhas com o mesmo timestamp no sub-seq (multi-câmera)
+      same_ts <- clipOverlayPlayer$seq[clipOverlayPlayer$seq$DT_HR_LOCAL == ts, , drop = FALSE]
+      if (!nrow(same_ts)) return(invisible())
+      
+      for (r in seq_len(nrow(same_ts))) {
+        cam <- as.integer(same_ts$CD_ID_CAMERA[r])
+        uri <- ctx$fetch_dataurl_single(cam, ts)
+        if (!is.null(uri)) {
+          session$sendCustomMessage("set_clip_overlay_frame", list(
+            img_id = ns(paste0("clipOverlayImg_", cam)),
+            url    = uri
+          ))
+        }
       }
     })
     invisible()

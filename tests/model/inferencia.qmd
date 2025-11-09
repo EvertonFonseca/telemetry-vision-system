@@ -107,20 +107,40 @@ con <- DBI::dbConnect(
             host = '127.0.0.1',
             port = 3306
         )
-
 ```
 
 ## Frames
 
 
 ```{r}
-frames <- get_frames_window(con,289621)
+frames <- get_frames_window(con,347044,janela = 10)
 frames$DATE_TIME <- format(frames$DT_HR_LOCAL,"%d/%m/%y %H:%M:%S:%OS3")
+
+difftime(last(frames$DT_HR_LOCAL),first(frames$DT_HR_LOCAL))
+
 ```
 
 # Video
 
 ```{r}
-codigo <- 315758
+codigo <- 351756
 build_gif_from_blob( get_frames_window(con,codigo))
+```
+
+
+```{r}
+# | eval: false
+df <- dbGetQuery(con,"SELECT 
+ oc.DATA_OC,
+ oc.DT_HR_LOCAL,
+ o.NAME_OBJETO,
+ s.NAME_SETOR,
+ oc.CD_ID_FRAME
+ FROM objeto_contexto oc
+ LEFT JOIN objeto o ON o.CD_ID_OBJETO = oc.CD_ID_OBJETO
+ LEFT JOIN setor s ON s.CD_ID_SETOR = o.CD_ID_SETOR
+ ORDER BY DT_HR_LOCAL ASC")
+
+df$DATA_OC <- str_replace_all(df$DATA_OC,"SODA","SOLDA")
+write.csv(df,"telemetria.csv")
 ```

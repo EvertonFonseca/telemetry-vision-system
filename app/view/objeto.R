@@ -291,16 +291,11 @@ initMap <- FALSE
         }, ignoreNULL = TRUE, ignoreInit = TRUE))
 
         obs2$add(observeEvent(input$comboCameras,{
-          camera      <- cameras |> filter(NAME_CAMERA == input$comboCameras)
-          componentes <- frame_data$componente[[1]]          
+          camera          <- cameras |> filter(NAME_CAMERA == input$comboCameras)
+          componentes     <- map_df(frame_data$componente,~ .x)         
           output$mapFrame <- renderLeaflet({uiMapa(ns,camera,cameras,frame_data,componentes = componentes)})
-        },ignoreNULL = TRUE,ignoreInit = TRUE))
+        },ignoreNULL = TRUE))
         
-        output$mapFrame <- renderLeaflet({
-          
-          camera   <- cameras |> filter(NAME_CAMERA == isolate(input$comboCameras))
-          uiMapa(ns,camera,cameras,frame_data)
-        })
         
         tagList(
           selectizeInput(ns('comboCameras'),label = 'Câmera',choices = camerasTargets,options  = list(
@@ -436,6 +431,7 @@ initMap <- FALSE
             obj$FG_ATIVO      <- as.integer(ativoObjeto)
             obj$CD_ID_SETOR   <- setor$CD_ID_SETOR
             obj$CD_ID_OBJETO_TIPO <- tipoObjeto$CD_ID_OBJETO_TIPO
+            obj$TIMELINE_CONTEXT_SEC <- isolate(input$sliderTimeContexto)
             id_obj             <- db$nextSequenciaID(conn,'OBJETO')
             obj$CD_ID_OBJETO   <- insertNewObjeto(conn,id_obj,obj)
             
@@ -677,7 +673,7 @@ uiEditObjeto <- function(ns,input,output,session,callback){
       session$onFlushed(function(){
         disable(ns("comboTipoObjeto"))
       }, once = TRUE)
-      
+
       uiMain(ns,
         setores,
         cameras,
@@ -686,7 +682,8 @@ uiEditObjeto <- function(ns,input,output,session,callback){
         valueAtivo       = as.logical(objetoSelect$FG_ATIVO),
         valueTextName    = objetoSelect$NAME_OBJETO,
         valueTipoObjeto  = objetoSelect$NAME_OBJETO_TIPO,
-        valueMultiCamera = cameraComponetes
+        valueMultiCamera = cameraComponetes,
+        valueTempoContexto  = objetoSelect$TIMELINE_CONTEXT_SEC
       )
       
     })
@@ -817,18 +814,10 @@ uiEditObjeto <- function(ns,input,output,session,callback){
       
       
       obs2$add(observeEvent(input$comboCameras,{
-        camera      <- cameras |> filter(NAME_CAMERA == input$comboCameras)
-        componentes <- frame_data$componente[[1]]          
+        camera          <- cameras |> filter(NAME_CAMERA == input$comboCameras)
+        componentes     <- map_df(frame_data$componente,~ .x)
         output$mapFrame <- renderLeaflet({uiMapa(ns,camera,cameras,frame_data,componentes = componentes)})
-      },ignoreNULL = TRUE,ignoreInit = TRUE))
-      
-      output$mapFrame <- renderLeaflet({
-        
-        req(input$comboCameras)
-        
-        camera   <- cameras |> filter(NAME_CAMERA == isolate(input$comboCameras))
-        uiMapa(ns,camera,cameras,frame_data,objetoSelect$CONFIG[[1]]$COMPONENTES[[1]])
-      })
+      },ignoreNULL = TRUE))
       
       tagList(
         selectizeInput(ns('comboCameras'),label = 'Câmera',choices = camerasTargets,options  = list(
@@ -1004,10 +993,11 @@ uiEditObjeto <- function(ns,input,output,session,callback){
             tipoObjeto     <- tiposObjeto |> filter(NAME_OBJETO_TIPO == isolate(input$comboTipoObjeto))
             setor          <- setores |> filter(NAME_SETOR == isolate(input$comboSetor))
             
-            obj                   <- list()
-            obj$NAME_OBJETO       <- nomeObjeto
-            obj$FG_ATIVO          <- as.integer(ativoObjeto)
-            obj$CD_ID_SETOR       <- setor$CD_ID_SETOR
+            obj                      <- list()
+            obj$NAME_OBJETO          <- nomeObjeto
+            obj$FG_ATIVO             <- as.integer(ativoObjeto)
+            obj$CD_ID_SETOR          <- setor$CD_ID_SETOR
+            obj$TIMELINE_CONTEXT_SEC <- isolate(input$sliderTimeContexto)
             
             db$updateTable(conn,"OBJETO",obj,"CD_ID_OBJETO",objetoSelect$CD_ID_OBJETO)
             
@@ -1057,14 +1047,18 @@ uiMain <- function(ns,
                    valueAtivo      = TRUE,
                    valueTextName   = NULL,
                    valueTipoObjeto = NULL,
-                   valueMultiCamera = NULL
+                   valueMultiCamera = NULL,
+                   valueTempoContexto = 5
                   ){
 
      changetextPlaceHolder()
       
       div(
           inlineCSS(paste0("#",ns("textNameObjeto")," {text-transform: uppercase;}")),
-          selectizeInput(ns('comboSetor'),label = 'Setor',choices = setores$NAME_SETOR,selected = valueComboSetor),
+          fluidRow(
+           column(6,selectizeInput(ns('comboSetor'),label = 'Setor',choices = setores$NAME_SETOR,selected = valueComboSetor)),
+           column(6,sliderInput(ns('sliderTimeContexto'),label = 'Tempo Contexto Segundo',min = 1,step = 1,max = 10,round = TRUE,value = valueTempoContexto))
+          ),
           splitLayout(
             cellWidths = c("10%", "60%","30%"),
             tagList(          
@@ -1101,7 +1095,6 @@ uiMain <- function(ns,
 
 uiMapa <-function(ns,camera,cameras,frame_data,componentes = NULL){
 
-    
   data     <- frame_data |> filter(id == camera$CD_ID_CAMERA)
   data_uri <- base64enc$dataURI(file = data$img_path, mime = "image/png")
   
@@ -1235,6 +1228,7 @@ proxy_update_componentes <- function(session,ns,map_id,camera, componentes){
 
   invisible(TRUE)
 }
+
 
 searchFramesByCamerasSelected <- function(conn,camerasTargets,cameras,objeto = NULL){
 

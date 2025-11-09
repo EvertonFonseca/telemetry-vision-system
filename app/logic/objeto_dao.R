@@ -19,14 +19,15 @@ checkifExistNameObjetoEdit <- function(con,id,name){
 #' @export
 insertNewObjeto <- function(con,id,objeto){
 
-    query <- 'INSERT INTO OBJETO (CD_ID_OBJETO,NAME_OBJETO,FG_ATIVO,CD_ID_SETOR,CD_ID_OBJETO_TIPO) VALUES (?,?,?,?,?)'
+    query <- 'INSERT INTO OBJETO (CD_ID_OBJETO,NAME_OBJETO,FG_ATIVO,CD_ID_SETOR,CD_ID_OBJETO_TIPO,TIMELINE_CONTEXT_SEC) VALUES (?,?,?,?,?,?)'
     result <-  DBI$dbSendStatement(con,query)
     DBI$dbBind(result, c(
       as.integer(id),
       objeto$NAME_OBJETO,
       objeto$FG_ATIVO,
       objeto$CD_ID_SETOR,
-      objeto$CD_ID_OBJETO_TIPO
+      objeto$CD_ID_OBJETO_TIPO,
+      objeto$TIMELINE_CONTEXT_SEC
     ))
     DBI$dbClearResult(result)
 
