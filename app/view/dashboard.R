@@ -1,14 +1,16 @@
 box::use(
   shiny[...],
   shinyjs,
-  plotly[...],
+  ggplot2,
+  plotly,
   jsonlite,
-  dplyr[filter, arrange, mutate, select, across, everything, distinct, relocate, rename, bind_rows],
+  dplyr[filter, arrange, mutate, select, across, everything, distinct, relocate, rename, bind_rows,tibble],
   tidyr[unnest_wider],
   lubridate,
+  shinydashboardPlus[box],
   DBI,
   dbp  = ../infra/db_pool,
-  ./global[ actionWebUser]
+  ./global[ actionWebUser,tagAppendAttributesFind,debugLocal]
 )
 
 
@@ -46,38 +48,25 @@ safe_parse_atributos <- function(txt) {
 }
 
 # Constrói SQL base; aplica filtros opcionais.
-build_sql <- function(minutos, setor = NULL, objeto = NULL, limite = 2000L) {
+build_sql <- function(minutos, setor = NULL, objeto = NULL) {
   # Usa COALESCE para suportar esquemas com oc.ATRIBUTOS OU oc.DATA_OC
-  base <- paste(
-    "SELECT",
-    "  COALESCE(oc.ATRIBUTOS, oc.DATA_OC) AS ATRIBUTOS,",
-    "  oc.DT_HR_LOCAL                      AS DATE_TIME,",
-    "  o.NAME_OBJETO                       AS OBJETO,",
-    "  s.NAME_SETOR                        AS SETOR",
-    "FROM objeto_contexto oc",
-    "LEFT JOIN objeto o ON o.CD_ID_OBJETO = oc.CD_ID_OBJETO",
-    "LEFT JOIN setor  s ON s.CD_ID_SETOR  = oc.CD_ID_SETOR",
-    "WHERE oc.DT_HR_LOCAL >= NOW() - INTERVAL ? MINUTE",
-    sep = "
-"
-  )
-  cond <- character()
-  if (!is.null(setor) && nzchar(setor)) cond <- c(cond, "s.NAME_SETOR = ?")
-  if (!is.null(objeto) && nzchar(objeto)) cond <- c(cond, "o.NAME_OBJETO = ?")
-  if (length(cond)) base <- paste(base, "AND", paste(cond, collapse = " AND "))
-  base <- paste(base, "ORDER BY oc.DT_HR_LOCAL DESC")
-  if (!is.null(limite) && limite > 0) base <- paste(base, sprintf("LIMIT %d", as.integer(limite)))
+  base <- paste("SELECT 
+        oc.DATA_OC AS ATRIBUTOS,
+        f.DT_HR_LOCAL AS DATE_TIME,
+        o.NAME_OBJETO AS OBJETO,
+        s.NAME_SETOR AS SETOR
+        FROM objeto_contexto oc
+        LEFT JOIN objeto o ON o.CD_ID_OBJETO = oc.CD_ID_OBJETO
+        LEFT JOIN setor s ON s.CD_ID_SETOR = o.CD_ID_SETOR
+        LEFT JOIN frame_camera f ON f.CD_ID_FRAME = oc.CD_ID_FRAME")
   base
 }
 
 # Executa consulta de forma segura
-run_query <- function(pool, minutos, setor = NULL, objeto = NULL, limite = 2000L) {
-  sql <- build_sql(minutos, setor, objeto, limite)
-  # Bind params na mesma ordem: minutos, (setor?), (objeto?)
-  params <- list(as.integer(minutos))
-  if (!is.null(setor) && nzchar(setor))  params <- c(params, setor)
-  if (!is.null(objeto) && nzchar(objeto)) params <- c(params, objeto)
-  DBI::dbGetQuery(pool, sql, params = params)
+run_query <- function(pool, minutos) {
+  sql <- build_sql(minutos, setor, objeto)
+
+  DBI::dbGetQuery(pool, sql)
 }
 
 # Transforma tabela "longa" expandindo ATRIBUTOS -> colunas dinâmicas
@@ -93,7 +82,7 @@ expand_atributos <- function(df_raw) {
   out <- dplyr::bind_rows(rows)
   # Ordena por tempo asc p/ gráficos
   out <- out |>
-    dplyr::mutate(DATE_TIME = lubridate::as_datetime(DATE_TIME)) |>
+    dplyr::mutate(DATE_TIME = as.POSIXct(DATE_TIME,Sys.timezone())) |>
     dplyr::arrange(DATE_TIME)
   out
 }
@@ -113,103 +102,66 @@ split_metrics <- function(df) {
 # ===============================
 #' @export
 ui <- function(ns) {
-  # Paleta do tema (combina com Telemetry Vision)
-  THEME <- list(
-    bg      = "#EEF3F8",
-    card_bg = "#FFFFFF",
-    border  = "#E6EDF3",
-    text    = "#243746",
-    subtext = "#5F6B76",
-    primary = "#2F7EA2",
-    primary_hover = "#2A6E8F"
-  )
-  shiny::tagList(
-    shinyjs::useShinyjs(),
-    # CSS extra para cards de KPI coloridos e lista de atividades
-    tags$head(tags$style(HTML('
-      .tv-kpi { border:0; border-radius:12px; padding:18px; color:#fff; }
-      .tv-kpi.kpi-orange { background: linear-gradient(135deg, #F2994A, #F2C94C); }
-      .tv-kpi.kpi-green  { background: linear-gradient(135deg, #27AE60, #6FCF97); }
-      .tv-kpi.kpi-red    { background: linear-gradient(135deg, #EB5757, #F2994A); }
-      .tv-kpi.kpi-teal   { background: linear-gradient(135deg, #2F7EA2, #56CCF2); }
-      .tv-kpi .k-title { font-size:12px; opacity:.9; }
-      .tv-kpi .k-value { font-size:26px; font-weight:700; }
-      .ua-item { display:flex; gap:10px; align-items:center; padding:10px 0; border-bottom:1px dashed #E6EDF3; }
-      .ua-item:last-child { border-bottom:0; }
-      .ua-avatar { width:36px; height:36px; border-radius:50%; background:#E0EDF5; display:flex; align-items:center; justify-content:center; font-weight:700; color:#2F7EA2; }
-      .ua-meta { font-size:12px; color:#5F6B76; }
-    '))),
-    # CSS do tema
-    tags$head(tags$style(HTML(sprintf('
-      body { background:%s; }
-      .tv-card { background:%s; border:1px solid %s; border-radius:10px; box-shadow:0 6px 12px rgba(0,0,0,.03); padding:14px; }
-      .tv-card h5 { margin:0 0 8px 0; color:%s; font-weight:600; }
-      .tv-kpi { border:1px solid %s; border-radius:10px; background:%s; padding:16px; text-align:center; }
-      .tv-kpi .k-title { font-size:12px; color:%s; }
-      .tv-kpi .k-value { font-size:26px; font-weight:700; color:%s; }
-      .btn-primary { background:%s; border-color:%s; }
-      .btn-primary:hover, .btn-primary:focus { background:%s; border-color:%s; }
-      .dataTables_wrapper .dataTables_paginate .paginate_button.current { background:%s !important; color:#fff !important; border:1px solid %s !important; }
-      .form-select, .form-control { border-radius:8px; }
-    ', THEME$bg, THEME$card_bg, THEME$border, THEME$text, THEME$border, THEME$card_bg, THEME$subtext, THEME$text, THEME$primary, THEME$primary, THEME$primary_hover, THEME$primary_hover, THEME$primary, THEME$primary))),
-    div(class = "p-4",
-      div(class = "tv-card mb-3",
-        div(class = "d-flex flex-wrap gap-2 align-items-end",
-          div(style = "min-width:220px", selectInput(ns("setor"), "Setor (opcional)", choices = c(""), selected = "")),
-          div(style = "min-width:220px", selectInput(ns("objeto"), "Objeto (opcional)", choices = c(""), selected = "")),
-          div(style = "min-width:200px", numericInput(ns("janela"), "Janela (min)", value = 60, min = 1, step = 1)),
-          div(style = "min-width:220px", numericInput(ns("auto_refresh"), "Auto-refresh (seg)", value = 30, min = 5, step = 5)),
-          actionButton(ns("btn_refresh"), "Atualizar agora", class = "btn btn-primary")
-        )
-      ),
-      div(class = "tv-card mb-3",
-        div(class = "row g-3",
-          div(class = "col-12 col-md-3", uiOutput(ns("kpi_total_linhas"))),
-          div(class = "col-12 col-md-3", uiOutput(ns("kpi_objetos"))),
-          div(class = "col-12 col-md-3", uiOutput(ns("kpi_setores"))),
-          div(class = "col-12 col-md-3", uiOutput(ns("kpi_metricas")))
-        )
-      ),
-      div(class = "tv-card mb-3",
-        h5("Sales Analytics"),
-        div(class = "row g-3 align-items-end",
-          div(class = "col-md-4", selectInput(ns("metric_select"), "Métrica numérica (Y)", choices = c(), selected = NULL)),
-          div(class = "col-md-4", selectInput(ns("group_by"), "Agrupar por", choices = c("OBJETO", "SETOR"), selected = "OBJETO")),
-          div(class = "col-md-4", sliderInput(ns("downsample"), "Amostragem p/ gráfico", min = 1, max = 10, value = 1, step = 1))
-        ),
-        plotlyOutput(ns("ts_plot"), height = "320px")
-      ),
-      div(class = "tv-card mb-3",
-        h5("Project Risk"),
-        plotlyOutput(ns("risk_gauge"), height = "220px"),
-        div(class = "d-grid", actionButton(ns("btn_download_report"), "Download Overall Report", class = "btn btn-primary"))
-      ),
-      div(class = "tv-card mb-3",
-        h5("Application Metrics"),
-        dataTableOutput(ns("tbl_apps"))
-      ),
-      div(class = "tv-card",
-        h5("User Activity"),
-        uiOutput(ns("user_activity"))
-      )
-    )
-  ))
+ tagList(
   
-}
-
-# Componente simples de KPI
-kpi_card <- function(title, value, variant = c("orange","green","red","teal")) {
-  variant <- match.arg(variant)
-  cls <- switch(variant,
-    orange = "kpi-orange",
-    green  = "kpi-green",
-    red    = "kpi-red",
-    teal   = "kpi-teal"
-  )
-  div(class = paste("tv-kpi", cls),
-      div(class = "k-title", title),
-      div(class = "k-value", value)
-  )
+  fluidRow(
+    style = "margin-top: 50px;",
+    column(3,
+      shinydashboard::valueBox(
+        width = '100%',
+        value = span(paste0(
+          10,
+          ' ',
+         10,'(s)'
+        ),style = 'font-size: 25px;'),
+        subtitle = 'Real Time',
+        icon = icon('clock'),
+        color = "light-blue"
+      )  |> tagAppendAttributesFind(target = 1,style = 'min-height: 102px')
+    ),
+    column(3,
+      shinydashboard::valueBox(
+        width = '100%',
+        value = span(paste0(
+          10,
+          ' ',
+          10,'(s)'
+        ),style = 'font-size: 25px;'),
+        subtitle = 'Olhar para atrás',
+        icon = icon('eye'),
+        color = "orange"
+      )  |> tagAppendAttributesFind(target = 1,style = 'min-height: 102px')
+    ),
+    column(3,
+      shinydashboard::valueBox(
+        width = '100%',
+        value = uiOutput(paste0('notificacaoValueBox',1)),
+        subtitle = paste0(
+          'Nos ultimos ',20,
+          ' ',
+          20,'(s)'
+        ),
+        icon = icon('bell'),
+        color = "red"
+      ) |> tagAppendAttributesFind(target = 1,style = 'min-height: 102px')
+    ),
+    column(3,
+      shinydashboard::valueBox(
+        width = '100%',
+        value = uiOutput(paste0('communicationValueBox',1)),
+        subtitle = paste0(
+          'Falha de conexão nos ultimos ',20,
+          ' ',
+          20,'(s)'
+        ),
+        icon = icon('satellite-dish'),
+        color = "yellow"
+      ) |> tagAppendAttributesFind(target = 1,style = 'min-height: 102px')
+    ),
+    column(12,uiOutput(ns("dashbody")))
+  ),
+  br()
+ )
 }
 
 # ===============================
@@ -217,205 +169,146 @@ kpi_card <- function(title, value, variant = c("orange","green","red","teal")) {
 # ===============================
 #' @export
 server <- function(ns, input, output, session) {
+  
   pool <- dbp$get_pool()
-
-  # Atualização automática
-  timer <- reactiveTimer(1000)
-  observe({
-    timer()
-    ar <- as.integer(input$auto_refresh %||% 0)
-    if (!is.na(ar) && ar > 0) invalidateLater(ar * 1000, session)
+  
+  df <- run_query(pool,minutos = 10000)
+  df <- expand_atributos(df)
+  
+  output$dashbody <- renderUI({
+    
+    tagList(
+      insertNewPlotComponent(ns,"Dobra e Solda",1),
+      insertNewPlotComponent(ns,"Setrema",2)
+    )
+    
+  })
+  
+  output[[paste0("plotout_",1)]] <- plotly$renderPlotly({
+    
+    df_plot <- bind_rows(
+      tibble(MAQUINA = "SOLDA", ESTADO = df$`SOLDA.ESTADO`),
+      tibble(MAQUINA = "DOBRA", ESTADO = df$`DOBRA.ESTADO`)
+    ) |>
+    filter(!is.na(ESTADO))
+    
+    ggplot2$ggplot(df_plot,ggplot2$aes(x = ESTADO, fill = MAQUINA)) +
+    ggplot2$geom_bar(position = ggplot2$position_dodge(width = 0.8), width = 0.7) +
+    ggplot2$labs(x = "ESTADO", y = "FREQ", fill = "Máquina")
+    
+  })
+  
+  output[[paste0("plotout_",2)]] <- plotly$renderPlotly({
+    
+    df_plot <- bind_rows(
+      tibble(COMPONENTE = "BOBINA", ESTADO = df$`BOBINA.ESTADO`),
+      tibble(COMPONENTE = "PRENSA", ESTADO = df$`PRENSA.ESTADO`)
+    ) |>
+    filter(!is.na(ESTADO))
+    
+    ggplot2$ggplot(df_plot,ggplot2$aes(x = ESTADO, fill = COMPONENTE)) +
+    ggplot2$geom_bar(position = ggplot2$position_dodge(width = 0.8), width = 0.7) +
+    ggplot2$labs(x = "ESTADO", y = "FREQ", fill = "Componente")
+    
   })
 
-  # Dispara consultas
-  trigger <- reactiveVal(Sys.time())
-  observeEvent(input$btn_refresh, { trigger(Sys.time()) })
-  observeEvent(input$auto_refresh, { trigger(Sys.time()) })
-
-  # Consulta base (raw)
-  df_raw <- reactive({
-    req(pool)
-    # mantém janela mínima válida
-    janela <- as.integer(input$janela %||% 60)
-    if (is.na(janela) || janela <= 0) janela <- 60L
-
-    # Re-dispara periodicamente
-    trigger();
-
-    out <- tryCatch({
-      run_query(
-        pool = pool,
-        minutos = janela,
-        setor   = input$setor %||% NULL,
-        objeto  = input$objeto %||% NULL,
-        limite  = 5000L
-      )
-    }, error = function(e) {
-      warning("DB query error: ", e$message)
-      data.frame()
-    })
-
-    out
-  })
-
-  # Popular filtros (setor/objeto) a partir do retorno
-  observe({
-    d <- df_raw()
-    if (!nrow(d)) return()
-    updateSelectInput(session, "setor", choices = c("", sort(unique(d$SETOR))), selected = isolate(input$setor))
-    updateSelectInput(session, "objeto", choices = c("", sort(unique(d$OBJETO))), selected = isolate(input$objeto))
-  })
-
-  # Data expandida
-  df_exp <- reactive({
-    d <- df_raw()
-    if (!nrow(d)) return(d)
-    expand_atributos(d)
-  })
-
-  # Métricas disponíveis
-  metrics <- reactive({
-    d <- df_exp()
-    split_metrics(d)
-  })
-
-  observe({
-    m <- metrics()
-    updateSelectInput(session, "metric_select", choices = m$numeric, selected = isolate(input$metric_select %||% (m$numeric[1] %||% NA)))
-  })
-
-  # KPIs
-  output$kpi_total_linhas <- renderUI({
-    d <- df_raw(); kpi_card("All Earnings (regs)", format(nrow(d), big.mark = ".", decimal.mark = ","), "orange")
-  })
-  output$kpi_objetos <- renderUI({
-    d <- df_raw(); kpi_card("Objetos ativos", length(unique(d$OBJETO)), "green")
-  })
-  output$kpi_setores <- renderUI({
-    d <- df_raw(); kpi_card("Setores", length(unique(d$SETOR)), "teal")
-  })
-  output$kpi_metricas <- renderUI({
-    m <- metrics(); kpi_card("Métricas numéricas", length(m$numeric), "red")
-  })
-
-  # Gráfico de séries
-  output$ts_plot <- renderPlotly({
-    d <- df_exp()
-    req(nrow(d))
-    met <- req(input$metric_select)
-    grp <- input$group_by %||% "OBJETO"
-    k   <- as.integer(input$downsample %||% 1)
-    if (!met %in% names(d)) return(NULL)
-
-    dd <- d |>
-      select(DATE_TIME, all_of(grp), all_of(met)) |>
-      filter(!is.na(.data[[met]])) |>
-      arrange(DATE_TIME)
-
-    if (!is.na(k) && k > 1) {
-      dd <- dd |>
-        dplyr::group_by(.data[[grp]]) |>
-        dplyr::mutate(.row = dplyr::row_number()) |>
-        dplyr::filter(.row %% k == 0) |>
-        dplyr::ungroup() |>
-        select(-.row)
-    }
-
-    plot_ly(dd, x = ~DATE_TIME, y = dd[[met]], color = dd[[grp]], type = "scatter", mode = "lines+markers") |>
-      layout(
-        xaxis = list(title = "Data/Hora", gridcolor = "#E8EEF5"),
-        yaxis = list(title = met, gridcolor = "#E8EEF5"),
-        legend = list(orientation = "h"),
-        paper_bgcolor = "#FFFFFF",
-        plot_bgcolor  = "#F6FAFE",
-        font = list(color = "#243746"),
-        colorway = c("#F2994A", "#27AE60", "#9B59B6", "#2D9CDB", "#EB5757")
-      )
-  })
-
-  # Tabela
-  output$tbl <- renderDataTable({
-    d <- df_exp()
-    req(nrow(d))
-    # Reordena base first
-    base_cols <- c("DATE_TIME","OBJETO","SETOR")
-    extra <- setdiff(names(d), base_cols)
-    d <- d |>
-      relocate(all_of(base_cols)) |>
-      arrange(desc(DATE_TIME))
-    d
-  }, options = list(scrollX = TRUE, pageLength = 15))
-
-  # Download CSV
-  output$btn_csv <- downloadHandler(
-    filename = function() sprintf("contexto_%s.csv", format(Sys.time(), "%Y%m%d_%H%M%S")),
-    content  = function(file) {
-      d <- df_exp(); utils::write.csv(d, file, row.names = FALSE, na = "")
-    }
-  )
-
-  # Encerramento
-  # ---- Application table & User Activity ----
-  output$tbl_apps <- renderDataTable({
-    d <- df_exp(); req(nrow(d))
-    met <- input$metric_select %||% (metrics()$numeric[1] %||% NULL)
-    grp <- input$group_by %||% "OBJETO"
-    if (is.null(met) || !met %in% names(d)) return(data.frame())
-    dplyr::group_by(d, .data[[grp]]) |>
-      dplyr::summarise(
-        Registros = dplyr::n(),
-        Media = suppressWarnings(mean(as.numeric(.data[[met]]), na.rm = TRUE)),
-        `.Última leitura` = max(DATE_TIME, na.rm = TRUE),
-        .groups = "drop"
-      ) |>
-      dplyr::arrange(desc(Registros))
-  }, options = list(scrollX = TRUE, pageLength = 8))
-
-  output$user_activity <- renderUI({
-    d <- df_raw(); req(nrow(d))
-    dd <- d |>
-      arrange(desc(DATE_TIME)) |>
-      utils::head(8)
-    tagList(lapply(seq_len(nrow(dd)), function(i) {
-      who <- dd$OBJETO[i]
-      initials <- toupper(substr(who %||% "?", 1, 1))
-      div(class = "ua-item",
-          div(class = "ua-avatar", initials),
-          div(
-            strong(who %||% "—"), br(),
-            span(class = "ua-meta", paste(format(dd$DATE_TIME[i], "%d/%m %H:%M"), "—", dd$SETOR[i]))
-          )
-      )
-    }))
-  })
-
-  # Risk gauge (0-10). Se houver coluna com 'ESTADO', usa % PARADO como risco; senão, usa missingness
-  output$risk_gauge <- renderPlotly({
-    d <- df_exp(); req(nrow(d))
-    # tenta localizar alguma coluna categórica com ESTADO
-    cats <- metrics()$categorical
-    estado_col <- cats[grepl("ESTADO", cats, ignore.case = TRUE)][1]
-    score <- 5
-    if (!is.na(estado_col) && estado_col %in% names(d)) {
-      tab <- table(toupper(as.character(d[[estado_col]])))
-      p_parado <- as.numeric(tab["PARADO"]) / sum(tab)
-      p_parado[is.na(p_parado)] <- 0
-      score <- round(10 * p_parado, 1)
-    } else {
-      miss_rate <- mean(is.na(d[[metrics()$numeric[1] %||% names(d)[1]]]))
-      score <- round(10 * miss_rate, 1)
-    }
-    plot_ly(type = "indicator", mode = "gauge+number", value = score,
-            gauge = list(axis = list(range = list(NULL, 10)),
-                         bar = list(color = "#EB5757"),
-                         steps = list(list(range = c(0,3), color = "#6FCF97"),
-                                      list(range = c(3,7), color = "#F2C94C"),
-                                      list(range = c(7,10), color = "#EB5757"))))
-  })
-
-  observeEvent(input$btn_download_report, { showModal(modalDialog(title = "Relatório", "Em breve.", easyClose = TRUE)) })
-
-  session$onSessionEnded(function() {
-    # Pool é gerenciado globalmente; não fechar aqui.
-  })
 }
+
+insertNewPlotComponent <- function(ns,title,id){
+  
+  child         <- ns(paste0('plot_',id))
+  boxid         <- ns(paste0('plotbox_',id))
+
+  div(
+    id = ns(paste0('child-',child)),
+    box(
+      id = boxid,
+      solidHeader = T,
+      collapsible = T,
+      title = tags$span(title,style = 'font-size: 16px;'),
+      width = 6,
+      absolutePanel(
+        height = 45,
+        width = 'auto',
+        top   = 5,
+        right = 35,
+        div(
+          # actionButton(inputId = ns(paste0('btEraser',id)),
+          #              label = '',
+          #              icon = icon('eraser')
+          # ),
+          actionButton(inputId = ns(paste0('bteye',id)),
+                       label = '',
+                       icon = icon('window-maximize')
+          )#,
+          # shinyWidgets::dropdownButton(
+          #   inputId = paste0('btgears', plot$CD_ID_PLOT),
+          #   tags$h2("List of Input"),
+          #   selectInput(inputId = 'xcol', label = 'X Variable', choices = names(iris)),
+          #   selectInput(inputId = 'ycol', label = 'Y Variable', choices = names(iris), selected = names(iris)[[2]]),
+          #   sliderInput(inputId = 'clusters', label = 'Cluster count', value = 3, min = 1, max = 9),
+          #   circle = FALSE,
+          #   icon = icon("gear"),
+          #   width = "300px",
+          #   tooltip = tooltipOptions(title = "Configuração extras")) |>
+          #   tagAppendAttributes( style = 'float: right; margin-left: 5px;') |>
+          #   tagAppendAttributesFind(2,style = 'margin-left: -250px; border-color: gray;')
+        )
+      ), 
+      div(style = 'padding: 15px; height: auto; width: 100%;',plotly$plotlyOutput(ns(paste0("plotout_",id))))
+    ))
+}
+
+themasPlotyGGplot <- function(args = NULL,text.x.angle = 0){
+  
+  return(
+    ggplot2::theme(args,
+                   axis.text.x = ggplot2::element_text(angle = text.x.angle),
+                   #legend.background = element_rect(fill = 'transparent'),
+                   legend.title = ggplot2::element_blank(),
+                   #legend.text  = element_text(colour = 'white'),
+                   #axis.text = element_text(colour = 'white'),
+                   #axis.title = element_text(colour = 'white',size = 10),
+                   axis.line = ggplot2::element_line(colour = 'gray'),
+                   panel.grid.major = ggplot2::element_line(size = 0.5, linetype  = 'solid', colour = "lightgray")
+    )
+    
+  )
+}
+
+layoutPloty <- function(x,legend.text = ''){
+  
+  return(plotly::layout(
+    x,
+    plot_bgcolor = 'transparent',
+    paper_bgcolor = 'transparent',
+    modebar = list(
+      bgcolor = 'transparent',
+      color = 'transparent',
+      activecolor = 'transparent'
+    ),
+    showlegend = TRUE,
+    legend  = list(title= list(text=legend.text,font = list(color = 'black',size = 12)),font = list(color = 'black',size = 10)),
+    xaxis=list(fixedrange=TRUE),
+    yaxis=list(fixedrange=TRUE)
+  ) |>  htmlwidgets::onRender("function(el,x){
+                               el.on('plotly_legendclick', function(){ return false; })
+                               }"))
+}
+
+layoutPlotyDefault <- function(x,legend.text = ''){
+  
+  plotly::layout(
+    x,
+    plot_bgcolor = 'transparent',
+    paper_bgcolor = 'transparent',
+    showlegend = TRUE,
+    modebar = list(
+      bgcolor = 'transparent',
+      color = 'lightgray',
+      activecolor = 'darkgray'
+    ),
+    legend  = list(title= list(text=legend.text,font = list(color = 'black',size = 12)),font = list(color = 'black',size = 10))
+  )
+}
+
