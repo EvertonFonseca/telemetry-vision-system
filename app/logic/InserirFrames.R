@@ -50,7 +50,7 @@ library(dplyr)
 library(tidyr)
 library(purrr)
 
-fetch_frames <- function(conn, tb, te, camera_id_vec, limit = 50L) {
+fetch_frames <- function(conn, tb, te, camera_id_vec, limit = 1000L) {
   stopifnot(length(camera_id_vec) >= 1)
 
   # normaliza datas para UTC
@@ -63,6 +63,7 @@ fetch_frames <- function(conn, tb, te, camera_id_vec, limit = 50L) {
   sql <- paste0(
     "
     SELECT
+      b.CD_ID_FRAME,
       fc.DT_HR_LOCAL,
       fc.CD_ID_CAMERA,
       b.DATA_FRAME
@@ -123,13 +124,16 @@ query <- paste0("WITH oc_latest AS (
           JSON_OBJECT(
             'CD_ID_CAMERA', c.CD_ID_CAMERA,
             'CD_ID_COMPONENTE', c.CD_ID_COMPONENTE,
-            'POLIGNO_COMPONENTE', c.POLIGNO_COMPONENTE
+            'NAME_COMPONENTE',c.NAME_COMPONENTE,
+            'POLIGNO_COMPONENTE', c.POLIGNO_COMPONENTE,
+            'CD_ID_ESTRUTURA', e.CD_ID_ESTRUTURA
           )
         ) AS POLIGNOS_COMPONENTES
 
       FROM oc_latest ol
       LEFT JOIN COMPONENTE c
         ON c.CD_ID_OBJ_CONF = ol.CD_ID_OBJ_CONF
+      LEFT JOIN ESTRUTURA e ON e.CD_ID_ESTRUTURA = c.CD_ID_ESTRUTURA
       GROUP BY ol.CD_ID_OBJETO
     )
 
@@ -146,7 +150,7 @@ query <- paste0("WITH oc_latest AS (
     ")
 
 frames <- DBI::dbGetQuery(con,query) 
-limit  <- 50
+limit  <- 150L
 
 dataset <- frames |> 
   group_by(CD_ID_OBJETO) |> 
@@ -159,18 +163,19 @@ dataset <- frames |>
       nest() |> 
       ungroup() |> 
       mutate(DATAS = map(data,function(y){
-        polignos    <- jsonlite::fromJSON(y$POLIGNOS_COMPONENTES)
+        comps       <- jsonlite::fromJSON(y$POLIGNOS_COMPONENTES)
         cameras     <- stringr::str_split(y$CD_ID_CAMERAS,",")[[1]]
         payload     <- purrr::map(cameras,function(camera){
-          componentes <- polignos |> filter(CD_ID_CAMERA == camera)
+          componentes <- comps |> filter(CD_ID_CAMERA == camera)
           frames_db   <- fetch_frames(con,tb = y$DT_HR_LOCAL_BEGIN,te = y$DT_HR_LOCAL_END,camera_id_vec = camera,limit = limit)
           tibble(COMPONENTES = list(componentes),FRAMES = list(frames_db))
         })
         status <- map_vec(payload,~ nrow(.x$FRAMES[[1]]) > 0)
-        if(status)
-         y |> mutate(PAYLOAD = list(payload),LIMIT = limit)
-        else
-         NULL
+        if(all(status)){
+          y |> mutate(PAYLOAD = list(payload),LIMIT = limit)
+        }else{
+          NULL
+        }
       })) |> 
       unnest(data)
   
@@ -178,92 +183,7 @@ dataset <- frames |>
   unnest(data) |> 
   filter(map_vec(DATAS,~ !is.null(.x)))
 
-objeto <- dataset$
-saveRDS(dataset,paste0("dataset_train.rds"))
-
-dataset <- rbind(df,dataset)
-
-
-library(torch)
-library(torchvision)
-library(tidyverse)
-library(magick)
-library(gtools)
-library(tokenizers)
-library(purrr)
-library(dplyr)
-library(tidyr)
-
-df <- readRDS("dataset_train.rds")
-df <- map_df(seq_along(df$DATAS),function(i){
-  datas <- df$DATAS[[i]]
-  datas |> mutate(CD_ID_OBJETO = df$CD_ID_OBJETO[i],CD_ID_IA = df$CD_ID_IA[i])
-})
-
-rows <- list()
-idx  <- 1L
-
-df_tmp <- NULL
-#pacotes
-for(i in seq_along(df$PAYLOAD)){
-
-  cd_id_objeto    <- df$CD_ID_OBJETO[i]
-  pacote_ia       <- df$CD_ID_IA[i]
-  input           <- df$INPUT_IA[i]
-  output          <- df$OUTPUT_IA[i]
-  pacotes_camera  <- df$PAYLOAD[[i]]
-  limit           <- df$LIMIT[i]
-  
-  for(j in 1:limit){
-    camera_frame_list <- list()
-    for(camera in length(pacotes_camera)){ # aqui vai pegar os frames por camera do objeto 
-      frames          <- pacotes_camera[[camera]]$FRAMES[[1L]]
-      componentes     <- pacotes_camera[[camera]]$COMPONENTES[[1L]]
-      
-      camera_frame_list[[camera]] <- tibble(
-        componentes = list(componentes),
-        frame       = list(frames$DATA_FRAME[j]),
-        date_time   = frames$DT_HR_LOCAL[j]
-      )
-    }
-    df_camera <- tibble(
-      pacote_ia     = pacote_ia,
-      cd_id_objeto  = cd_id_objeto,
-      input         = input,
-      output        = output,
-      info          = list(camera_frame_list),
-      time          = j
-    )
-    df_tmp <- rbind(df_tmp,df_camera)
-  }
-
-}
-
-df_tmp <- df_tmp |> 
-  group_by(cd_id_objeto,pacote_ia) |>
-  nest() |> 
-  ungroup() |> 
-  mutate(data = map(data,~ .x |> mutate(time = row_number()))) |> 
-  unnest(data)
- 
-
-# df_tmp  <- df_tmp |> 
-# group_by(cd_id_objeto,pacote_ia) |> 
-# nest() |> 
-# ungroup() |> 
-# mutate(data = map(data,function(x){
-#   min_amostra = min(table(x$output)) 
-#   x |> 
-#   group_by(output) |> 
-#   nest() |> 
-#   ungroup() |> 
-#   mutate(data = map(data,function(y){
-#      counter <- nrow(y)
-#      begin   <- sample(1:max(1,counter - min_amostra),1)
-#      end     <- begin + min_amostra - 1L
-#      y       <- y |> arrange(time)
-#      y[begin:end,]
-#   })) |> 
-#     unnest(data)
-# })) |> 
-#  unnest(data)
+saveRDS(dataset,paste0("train/dataset_train.rds"))
+# for(i in 1:nrow(dataset)){
+#   saveRDS(dataset[i,],paste0("train/",i,"_dataset_train.rds"))
+# }

@@ -20,150 +20,152 @@ dbp$init()
 #' @export
 ui <- function(id) {
   ns <- NS(id)
-  sidebar <-  shinydashboardPlus::dashboardSidebar(
+
+  sidebar <- shinydashboardPlus::dashboardSidebar(
     width = 230,
     uiOutput(ns('menuSideBarMain'))
-    #sidebarMenuOutput(ns("menuSideBarMain"))
+    # sidebarMenuOutput(ns("menuSideBarMain"))
   )
   sidebar$attribs$`data-collapsed` <- "true"
 
-    shinydashboardPlus::dashboardPage(
-      title = 'Telemetry Vision System',
-      header = shinydashboardPlus::dashboardHeader(
-        fixed = T,
-        controlbarIcon  = "gears",
-        title = tagList(
-          span(class = "logo-lg",style="font-size: 17px;",img(src = "static/favicon.png",height = '20px',width = '20px'),'Telemetry Vision'),
-          img(src = "static/favicon.png",height = '20px',width = '20px')),
-          uiOutput(ns('containerPlay'),class = 'dropdown-toggle',style = 'position: absolute; left: 50px; margin-top: 10px;'),
-          uiOutput(ns('containerHeader')),
-          dropdownMenuOutput(ns('dropsMensagem')),
-          dropdownMenuOutput(ns('dropsAlertas'))
+  shinydashboardPlus::dashboardPage(
+    title = 'Telemetry Vision System',
+    header = shinydashboardPlus::dashboardHeader(
+      fixed = TRUE,
+      controlbarIcon  = "gears",
+      title = tagList(
+        span(class = "logo-lg", style="font-size: 17px;",
+             img(src = "static/favicon.png", height = '20px', width = '20px'),
+             'Telemetry Vision'),
+        img(src = "static/favicon.png", height = '20px', width = '20px')
       ),
-      sidebar = sidebar,
-      body = dashboardBody(
-        id = 'root',
-        useShinyjs(),
-        use_vov(),
-        includeScript('app/js/swiper.min.js'),
-        includeScript('app/js/main.js'),
-        includeCSS('app/styles/config.css'),
-        includeCSS('app/styles/swiper.min.css'),
-        shinyDashboardThemes(theme = ""),
-        tags$head(
-          tags$meta(name="viewport", content="initial-scale=1, maximum-scale=1"),
-          tags$link(rel = "shortcut icon", href = "favicon.png"),
-          tags$script(HTML('
-          
+      uiOutput(ns('containerPlay'), class = 'dropdown-toggle',
+               style = 'position: absolute; left: 50px; margin-top: 10px;'),
+      uiOutput(ns('containerHeader')),
+      dropdownMenuOutput(ns('dropsMensagem')),
+      dropdownMenuOutput(ns('dropsAlertas'))
+    ),
+    sidebar = sidebar,
+    body = dashboardBody(
+      id = 'root',
+      useShinyjs(),
+      use_vov(),
+      includeScript('app/js/swiper.min.js'),
+      includeScript('app/js/main.js'),
+      includeCSS('app/styles/config.css'),
+      includeCSS('app/styles/swiper.min.css'),
+      shinyDashboardThemes(theme = ""),
+      tags$head(
+        tags$meta(name="viewport", content="initial-scale=1, maximum-scale=1"),
+        tags$link(rel = "shortcut icon", href = "favicon.png"),
+        tags$script(HTML('
           function reportWindowSize() {
             Shiny.setInputValue("onResized",[window.innerWidth,window.innerHeight], {priority: "event"});
           }
-  
           window.addEventListener("resize", reportWindowSize);
-  
-         /* $(function() {
-           $(this).bind("contextmenu", function(e) {
-                e.preventDefault();
-                Shiny.setInputValue("onMouseRightClicked","", {priority: "event"});
-                return false;
-              });
-          });*/ \n
+        '))
+      ),
 
-      ')),
-        tags$style(
-            HTML(" 
-            html {overflow: hidden;}
-            .selectize-dropdown { z-index: 2147483647 !important; }
-            body{
-                 font-family: 'Segoe UI', serif;
-            }
-            .shiny-split-layout > div {overflow: visible;}
-           
-            .form-control[disabled], .form-control[readonly], fieldset[disabled] .form-control {
-              background-color: white;
-              color: #696767;
-              opacity: 1;
-            }
-            
-            .selectize-control.single .selectize-input:after {
-               right: 5px!important;
-            }
-           
-           .main-header .navbar-custom-menu, .main-header .navbar-right {
+      # ====== ESTILOS ======
+      # ATENÇÃO: removido "html {overflow: hidden;}"
+      # e adicionadas regras para permitir o scroll vertical
+      tags$head(
+        tags$style(HTML("
+          /* --- Regras gerais para permitir rolagem vertical --- */
+          html, body {
+            height: 100%;
+            overflow-y: auto !important;
+          }
 
-               margin-right: 10px!important;;
-           }
-        
-            .tabbable > .nav > li > a {color: gray;}
-            
-            .tabbable > .nav > li > a:hover{color: gray;}
-            
-            .skin-blue .main-header .navbar .sidebar-toggle{
-        
-               color: white;
-            }
-            
-            //.tab-content{margin-top: -30px !important;}
-            
-            .skin-blue .main-header .navbar .sidebar-toggle:hover{
-        
-               color: gray;
-             }
-              .box-header {
-                  margin-left: 25px;
-              }
-              
-              .recalculating {
-               opacity: 1!important;
-               }
-              .js-plotly-plot .plotly .modebar {
-                left: 2px;
-               }
-             /*.shiny-notification {
-               position:fixed;
-               top: 10px;
-               right: 5px;
-             }*/
-             .main-footer{
-              color: gray;
-              border-top-style: solid;
-              background-color: white;
-             }
-             .skin-blue .sidebar-menu > li > .treeview-menu {
-              background: rgb(52,62,72)!important;
-             }" )
-          )
-        ),
-        # Set up shinyjs
-        tags$head(tags$title("Telemetry Vision System")),
-        tags$head(tags$link(rel = "shortcut icon", href = "favicon.png")),
-        uiOutput(ns('painelTabSetores')),
-        # Áudio (em módulo, use ns(...))
-        tagList(
-          tags$audio(id = "soundNotificationOn",
-                    src = "static/sounds/bell_warning.mp3",
-                    type = "audio/mp3", preload = "auto", style = "display:none;"),
-          tags$audio(id =  "soundLoginOn",
-                    src = "static/sounds/login_on.wav",
-                    type = "audio/wav", preload = "auto", style = "display:none;"),
-          tags$audio(id =  "soundSessionDialog",
-                    src = "static/sounds/dialog_open.mp3",
-                    type = "audio/mp3", preload = "auto", style = "display:none;"),
-          tags$audio(id =  "soundBoxMessage",
-                    src = "static/sounds/letterbox.mp3",
-                    type = "audio/mp3", preload = "auto", style = "display:none;")
-        ),
-        br(),
-         tags$head(tags$style(
-          ".sidebar-menu a[data-value='noop'] { display:none !important; }"
-        )),
-        chatia$ui(ns)
-      ), 
-      footer = dashboardFooter(
-        left  = "Version 1.0.0",
-        right = tags$i(style = 'color: gray; font-size: 12px;',paste0("Copyright © 2020-",format(Sys.Date(),'%Y')," AnalytIA, All Rights Reserved."))
+          /* O corpo principal do shinydashboard */
+          .content-wrapper, .right-side {
+            height: auto !important;
+            min-height: 100vh;
+            overflow-x: hidden;
+            overflow-y: auto;
+          }
+
+          /* Evita que algum container pai esconda a barra de rolagem */
+          .wrapper {
+            overflow: visible !important;
+          }
+
+          /* ====== Seu tema/base ====== */
+          .selectize-dropdown { z-index: 2147483647 !important; }
+          body { font-family: 'Segoe UI', serif; }
+          .shiny-split-layout > div { overflow: visible; }
+
+          .form-control[disabled], .form-control[readonly], fieldset[disabled] .form-control {
+            background-color: white;
+            color: #696767;
+            opacity: 1;
+          }
+
+          .selectize-control.single .selectize-input:after { right: 5px!important; }
+
+          .main-header .navbar-custom-menu, .main-header .navbar-right { margin-right: 10px!important; }
+
+          .tabbable > .nav > li > a { color: gray; }
+          .tabbable > .nav > li > a:hover { color: gray; }
+
+          .skin-blue .main-header .navbar .sidebar-toggle { color: white; }
+          .skin-blue .main-header .navbar .sidebar-toggle:hover { color: gray; }
+
+          .box-header { margin-left: 25px; }
+
+          .recalculating { opacity: 1!important; }
+
+          .js-plotly-plot .plotly .modebar { left: 2px; }
+
+          .main-footer {
+            color: gray;
+            border-top-style: solid;
+            background-color: white;
+          }
+
+          .skin-blue .sidebar-menu > li > .treeview-menu {
+            background: rgb(52,62,72)!important;
+          }
+        "))
+      ),
+
+      # Título & favicon
+      tags$head(tags$title("Telemetry Vision System")),
+      tags$head(tags$link(rel = "shortcut icon", href = "favicon.png")),
+
+      # Áudios
+      tagList(
+        tags$audio(id = "soundNotificationOn",
+                   src = "static/sounds/bell_warning.mp3",
+                   type = "audio/mp3", preload = "auto", style = "display:none;"),
+        tags$audio(id =  "soundLoginOn",
+                   src = "static/sounds/login_on.wav",
+                   type = "audio/wav", preload = "auto", style = "display:none;"),
+        tags$audio(id =  "soundSessionDialog",
+                   src = "static/sounds/dialog_open.mp3",
+                   type = "audio/mp3", preload = "auto", style = "display:none;"),
+        tags$audio(id =  "soundBoxMessage",
+                   src = "static/sounds/letterbox.mp3",
+                   type = "audio/mp3", preload = "auto", style = "display:none;")
+      ),
+
+      br(),
+      tags$head(tags$style(".sidebar-menu a[data-value='noop'] { display:none !important; }")),
+
+      # ---- Conteúdo do dashboard ----
+      # Se preferir que apenas o conteúdo role (mantendo header/footer fixos),
+      # troque 'dash$ui(ns)' pela div abaixo e ajuste o calc():
+      # div(style = 'max-height: calc(100vh - 120px); overflow-y: auto;', dash$ui(ns))
+      dash$ui(ns)
+    ),
+    footer = dashboardFooter(
+      left  = "Version 1.0.0",
+      right = tags$i(
+        style = 'color: gray; font-size: 12px;',
+        paste0("Copyright © 2020-", format(Sys.Date(),'%Y'), " AnalytIA, All Rights Reserved.")
       )
-    )  #|> tagAppendAttributes(class = 'sidebar-collapse')
+    )
+  )
 }
 
 #' @export
@@ -175,7 +177,8 @@ server <- function(id) {
     ns <- NS(id)
     dbp$session_register(session)
 
-    chatia$server(ns,input, output, session)
+    #chatia$server(ns,input, output, session)
+    dash$server(ns,input, output, session)
     
     reactiveNotification         <- reactiveVal(NULL)
     reactiveMessageUsers         <- reactiveVal(NULL)
@@ -279,27 +282,27 @@ server <- function(id) {
     },ignoreInit = TRUE,ignoreNULL = TRUE)
     
     # ---- Obsevent Menu Plot
-    observeEvent(input$plot, {
+    # observeEvent(input$plot, {
       
-      box::use(./plot)
-      sel <- input$plot
+    #   box::use(./plot)
+    #   sel <- input$plot
       
-      if (identical(sel, "plotNew")) {
-        plot$uiNewPlot(ns,input,output,session,function(){
-          box::unload(plot)
-          gc()
-        })
-      } else if (identical(sel, "plotTable")) {
-        plot$uiEditPlot(ns,input,output,session,function(){
-          box::unload(plot)
-          gc()
-        })
-      }
-      # reset da seleção para permitir clicar no mesmo item novamente
-      if (!is.null(sel) && sel %in% c("plotNew", "plotTable"))
-      updateTabItems(session, inputId = "plot", selected = "noop")
+    #   if (identical(sel, "plotNew")) {
+    #     plot$uiNewPlot(ns,input,output,session,function(){
+    #       box::unload(plot)
+    #       gc()
+    #     })
+    #   } else if (identical(sel, "plotTable")) {
+    #     plot$uiEditPlot(ns,input,output,session,function(){
+    #       box::unload(plot)
+    #       gc()
+    #     })
+    #   }
+    #   # reset da seleção para permitir clicar no mesmo item novamente
+    #   if (!is.null(sel) && sel %in% c("plotNew", "plotTable"))
+    #   updateTabItems(session, inputId = "plot", selected = "noop")
       
-    },ignoreInit = TRUE,ignoreNULL = TRUE)
+    # },ignoreInit = TRUE,ignoreNULL = TRUE)
     
     # ---- Obsevent Menu Camera
     observeEvent(input$treinar, {
@@ -454,14 +457,14 @@ renderMenuSideBarMain <- function(ns){
             menuSubItem(text = htmltools::HTML("&nbsp;"), tabName = "noop",selected = TRUE)
           )
         ),
-         sidebarMenu(id = ns("plot"),
-          menuItem("Grafico", icon = icon("chart-line"),
-            menuSubItem("Novo",  tabName = "plotNew"),
-            menuSubItem("Lista", tabName = "plotTable"),
-            # subItem oculto para resetar seleção
-            menuSubItem(text = htmltools::HTML("&nbsp;"), tabName = "noop",selected = TRUE)
-          )
-        ),
+        #  sidebarMenu(id = ns("plot"),
+        #   menuItem("Grafico", icon = icon("chart-line"),
+        #     menuSubItem("Novo",  tabName = "plotNew"),
+        #     menuSubItem("Lista", tabName = "plotTable"),
+        #     # subItem oculto para resetar seleção
+        #     menuSubItem(text = htmltools::HTML("&nbsp;"), tabName = "noop",selected = TRUE)
+        #   )
+        # ),
         sidebarMenu(id = ns("treinar"),
           menuItem("Treinar", icon = icon("brain"),
             menuSubItem("Novo",  tabName = "treinarNew"),

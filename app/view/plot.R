@@ -563,7 +563,7 @@ box::use(
 
  }
  
-insertNewPlotComponent <- function(plot,componentPlot){
+insertNewPlotComponent <- function(title,plot,componentPlot){
   
   child         <- paste0('plot', plot$CD_ID_PLOT)
   boxid         <- paste0('plotbox-',plot$CD_ID_PLOT)
@@ -574,7 +574,7 @@ insertNewPlotComponent <- function(plot,componentPlot){
       id = boxid,
       solidHeader = T,
       collapsible = T,
-      title = tags$span(plot$TITLE_PLOT,style = 'font-size: 16px;'),
+      title = tags$span(title,style = 'font-size: 16px;'),
       width = plot$WIDTH_PLOT,
       absolutePanel(
         height = 45,

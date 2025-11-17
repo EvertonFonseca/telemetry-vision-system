@@ -86,7 +86,7 @@ uiNewEstrutura <- function(ns,input,output,session,callback){
               attAtivo   <- attributo$FG_ATIVO
               attNome    <- attributo$NAME_ATRIBUTO
               attTipo    <- attributo$NAME_DATA
-              attClasses <- attributo$CLASSE_ATRIBUTO
+              attClasses <- attributo$VALUE_ATRIBUTO
               
               local({
                 ii <- i
@@ -246,7 +246,7 @@ uiNewEstrutura <- function(ns,input,output,session,callback){
                     tipo_data <- tipoDatas |> filter(NAME_DATA == atributos$NAME_DATA[k])
                     objAtt    <- list()
                     objAtt$NAME_ATRIBUTO    <- atributos$NAME_ATRIBUTO[k] 
-                    objAtt$CLASSE_ATRIBUTO  <- paste0(unlist(atributos$CLASSE_ATRIBUTO[k]),collapse = ",")
+                    objAtt$VALUE_ATRIBUTO  <- paste0(unlist(atributos$VALUE_ATRIBUTO[k]),collapse = ",")
                     objAtt$FG_ATIVO         <- as.integer(atributos$FG_ATIVO[k])
                     objAtt$CD_ID_ESTRUTURA_CONFIG  <- config$CD_ID_ESTRUTURA_CONFIG
                     objAtt$CD_ID_DATA              <- tipo_data$CD_ID_DATA
@@ -426,7 +426,7 @@ uiEditEstrutura <- function(ns,input,output,session,callback){
       
       req(estrutura())
       estruturaSelect <- estrutura()
-      attributoReactive(estruturaSelect$CONFIGS[[1]]$ATRIBUTOS[[1]] |> select(NAME_ATRIBUTO,NAME_DATA,CLASSE_ATRIBUTO,FG_ATIVO))
+      attributoReactive(estruturaSelect$CONFIGS[[1]]$ATRIBUTOS[[1]] |> select(NAME_ATRIBUTO,NAME_DATA,VALUE_ATRIBUTO,FG_ATIVO))
       
       obs2$clear()  # limpa observers antigos
       
@@ -450,7 +450,7 @@ uiEditEstrutura <- function(ns,input,output,session,callback){
             attAtivo   <- attributo$FG_ATIVO
             attNome    <- attributo$NAME_ATRIBUTO
             attTipo    <- attributo$NAME_DATA
-            attClasses <- attributo$CLASSE_ATRIBUTO
+            attClasses <- attributo$VALUE_ATRIBUTO
             
             local({
               ii <- i
@@ -668,7 +668,7 @@ uiEditEstrutura <- function(ns,input,output,session,callback){
                 tipo_data <- tipoDatas |> filter(NAME_DATA == atributos$NAME_DATA[k])
                 objAtt    <- list()
                 objAtt$NAME_ATRIBUTO    <- atributos$NAME_ATRIBUTO[k] 
-                objAtt$CLASSE_ATRIBUTO  <- paste0(unlist(atributos$CLASSE_ATRIBUTO[k]),collapse = ",")
+                objAtt$VALUE_ATRIBUTO  <- paste0(unlist(atributos$VALUE_ATRIBUTO[k]),collapse = ",")
                 objAtt$FG_ATIVO         <- as.integer(atributos$FG_ATIVO[k])
                 objAtt$CD_ID_ESTRUTURA_CONFIG  <- config$CD_ID_ESTRUTURA_CONFIG
                 objAtt$CD_ID_DATA              <- tipo_data$CD_ID_DATA
@@ -703,7 +703,7 @@ uiEditEstrutura <- function(ns,input,output,session,callback){
 
 #template atributo
 modelAtributo <- function() {
-  tibble(NAME_ATRIBUTO = "",NAME_DATA = "QUALITATIVE",CLASSE_ATRIBUTO = list(NULL),FG_ATIVO = TRUE)
+  tibble(NAME_ATRIBUTO = "",NAME_DATA = "QUALITATIVE",VALUE_ATRIBUTO = list(NULL),FG_ATIVO = TRUE)
 }
 
 obterAllAtributos <- function(input,atributos){
@@ -712,7 +712,7 @@ obterAllAtributos <- function(input,atributos){
     atributos$FG_ATIVO[k]         <- input[[sprintf("checkboxAtributoAtivo_%d", k)]]
     atributos$NAME_ATRIBUTO[k]    <- toupper(input[[sprintf("atributo_%d",k)]])
     atributos$NAME_DATA[k]        <- input[[sprintf("comboTipodados_%d",k)]]
-    atributos$CLASSE_ATRIBUTO[k]  <- ajusteTextoClasses(toupper(input[[sprintf("textoClasse_%d",k)]]))
+    atributos$VALUE_ATRIBUTO[k]  <- ajusteTextoClasses(toupper(input[[sprintf("textoClasse_%d",k)]]))
   }
   atributos
 }
@@ -724,7 +724,7 @@ adicionarNewAtributo <- function(input,atributos){
     atributos$FG_ATIVO[k]         <- input[[sprintf("checkboxAtributoAtivo_%d", k)]]
     atributos$NAME_ATRIBUTO[k]    <- toupper(input[[sprintf("atributo_%d",k)]])
     atributos$NAME_DATA[k]        <- input[[sprintf("comboTipodados_%d",k)]]
-    atributos$CLASSE_ATRIBUTO[k]  <- toupper(input[[sprintf("textoClasse_%d",k)]])
+    atributos$VALUE_ATRIBUTO[k]  <- toupper(input[[sprintf("textoClasse_%d",k)]])
   }
   rbind(atributos,att_tmp)
 }
@@ -735,7 +735,7 @@ removerAtributo <- function(input,atributos){
     atributos$FG_ATIVO[k]         <- input[[sprintf("checkboxAtributoAtivo_%d", k)]]
     atributos$NAME_ATRIBUTO[k]    <- toupper(input[[sprintf("atributo_%d",k)]])
     atributos$NAME_DATA[k]        <- input[[sprintf("comboTipodados_%d",k)]]
-    atributos$CLASSE_ATRIBUTO[k]  <- toupper(input[[sprintf("textoClasse_%d",k)]])
+    atributos$VALUE_ATRIBUTO[k]  <- toupper(input[[sprintf("textoClasse_%d",k)]])
   }
   atributos
 }
@@ -754,7 +754,7 @@ checkAtributoValidadao <- function(atributos){
     }else if(!any(att$FG_ATIVO)){
       showNotification("Pelo menos deve possuir algum atributo ativo!", type = "warning")
       return(FALSE)
-    }else if(stringi$stri_isempty(att$CLASSE_ATRIBUTO) && att$NAME_DATA == "QUALITATIVE"){
+    }else if(stringi$stri_isempty(att$VALUE_ATRIBUTO) && att$NAME_DATA == "QUALITATIVE"){
       showNotification(paste0("Nenhuma classe foi preenchida para o atributo ",toupper(att$NAME_ATRIBUTO)), type = "warning")
       return(FALSE)
     }

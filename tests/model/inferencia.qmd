@@ -59,30 +59,104 @@ get_frames_window <- function(con, cd_id_frame, janela = 10L, include_blob = TRU
   df
 }
 
-build_gif_from_blob <- function(frames,out_gif = "frames.gif", annotate_ts = FALSE) {
+get_frames_from_to <- function(con,
+                               from_time,
+                               to_time,
+                               camera_ids  = NULL,   # NULL, escalar ou vetor de IDs
+                               include_blob = TRUE,
+                               ascending    = TRUE) {
+
+  stopifnot(!is.null(from_time), !is.null(to_time))
+
+  # Partes dinâmicas
+  select_blob <- if (isTRUE(include_blob))
+    ", fcb.ID_FRAME_BLOB, fcb.DATA_FRAME" else ""
+  join_blob <- if (isTRUE(include_blob))
+    " LEFT JOIN FRAME_CAMERA_BLOB fcb ON fcb.CD_ID_FRAME = fc.CD_ID_FRAME " else ""
+
+  order_dir <- if (isTRUE(ascending)) "ASC" else "DESC"
+
+  # WHERE base (BETWEEN inclusivo)
+  sql <- paste0(
+    "SELECT fc.CD_ID_FRAME, fc.DT_HR_LOCAL, fc.CD_ID_CAMERA", select_blob, "
+       FROM FRAME_CAMERA fc", join_blob, "
+      WHERE fc.DT_HR_LOCAL BETWEEN ? AND ?"
+  )
+  params <- list(as.character(from_time), as.character(to_time))
+
+  # Filtro opcional por UMA OU MAIS câmeras
+  if (!is.null(camera_ids)) {
+    cams <- unique(na.omit(as.numeric(camera_ids)))
+    if (length(cams) == 1L) {
+      sql <- paste0(sql, " AND fc.CD_ID_CAMERA = ?")
+      params <- c(params, cams)
+    } else if (length(cams) > 1L) {
+      placeholders <- paste(rep("?", length(cams)), collapse = ",")
+      sql <- paste0(sql, " AND fc.CD_ID_CAMERA IN (", placeholders, ")")
+      params <- c(params, as.list(cams))
+    } # se length 0 após na.omit, ignora
+  }
+
+  # Ordenação estável
+  sql <- paste0(sql, " ORDER BY fc.DT_HR_LOCAL ", order_dir, ", fc.CD_ID_FRAME ", order_dir)
+
+  # Execução
+  df <- DBI::dbGetQuery(con, sql, params = params)
+
+  # (Opcional) reforçar crescente para processamento temporal
+  if (isTRUE(ascending) && nrow(df)) {
+    df <- df[order(df$DT_HR_LOCAL, df$CD_ID_FRAME), , drop = FALSE]
+  }
+
+  df
+}
+
+build_gif_from_blob <- function(frames, fps = 5L, out_gif = "frames.gif",
+                                annotate_ts = FALSE, pause_sec = 1.5, write_file = TRUE) {
+
+  stopifnot(nrow(frames) > 0)
 
   imgs <- lapply(seq_len(nrow(frames)), function(i) {
     img <- magick::image_read(frames$DATA_FRAME[[i]])
     if (isTRUE(annotate_ts)) {
       ts <- format(frames$DT_HR_LOCAL[i], "%Y-%m-%d %H:%M:%OS3")
-      img <- magick::image_annotate(img, ts, gravity = "SouthEast", size = 16, color = "white", boxcolor = "rgba(0,0,0,0.45)")
+      img <- magick::image_annotate(
+        img, ts, gravity = "SouthEast", size = 16,
+        color = "white", boxcolor = "rgba(0,0,0,0.45)"
+      )
     }
     img
   })
 
-  anim <- magick::image_animate(magick::image_join(imgs), fps = 1L, dispose = "previous")
- # magick::image_write(anim, out_gif)
-  message("GIF gerado: ", normalizePath(out_gif, winslash = "/"))
-  anim 
+  # Segurar o último frame por 'pause_sec' segundos:
+  if (pause_sec > 0) {
+    hold_n <- max(1L, round(pause_sec * fps))
+    lastf  <- imgs[[length(imgs)]]
+    imgs   <- c(imgs, rep(list(lastf), hold_n))
+  }
+
+  # join -> animate (loop=1: toca uma vez e para)
+  anim <- magick::image_animate(
+    magick::image_join(imgs),
+    fps = fps,
+    dispose = "previous",
+    loop = 1
+  )
+
+  if (isTRUE(write_file)) {
+    magick::image_write(anim, path = out_gif, format = "gif")
+    message("GIF gerado: ", normalizePath(out_gif, winslash = "/"))
+  }
+  anim
 }
 
 selectAllContext <- function(con){
 
     sql <- paste0("SELECT 
-                    oc.DATA_OC,
-                    oc.DT_HR_LOCAL,
-                    o.NAME_OBJETO,
-                    s.NAME_SETOR,
+                    oc.DATA_OC as ATRIBUTOS,
+                    oc.DT_HR_LOCAL as DATE_TIME,
+                    o.NAME_OBJETO, OBJETO,
+                    s.NAME_SETOR, SETOR,
                     oc.CD_ID_FRAME
                     FROM objeto_contexto oc
                     LEFT JOIN objeto o ON o.CD_ID_OBJETO = oc.CD_ID_OBJETO
@@ -113,8 +187,8 @@ con <- DBI::dbConnect(
 
 
 ```{r}
-frames <- get_frames_window(con,347044,janela = 10)
-frames$DATE_TIME <- format(frames$DT_HR_LOCAL,"%d/%m/%y %H:%M:%S:%OS3")
+frames <- get_frames_window(con,490566,janela = 40)
+#frames$DATE_TIME <- format(frames$DT_HR_LOCAL,"%d/%m/%y %H:%M:%S:%OS3")
 
 difftime(last(frames$DT_HR_LOCAL),first(frames$DT_HR_LOCAL))
 
@@ -123,24 +197,45 @@ difftime(last(frames$DT_HR_LOCAL),first(frames$DT_HR_LOCAL))
 # Video
 
 ```{r}
-codigo <- 351756
-build_gif_from_blob( get_frames_window(con,codigo))
+codigo <- 465672
+anime <- build_gif_from_blob( get_frames_window(con,codigo,janela = 30))
+print(anime)
 ```
 
 
 ```{r}
 # | eval: false
 df <- dbGetQuery(con,"SELECT 
- oc.DATA_OC,
- oc.DT_HR_LOCAL,
- o.NAME_OBJETO,
- s.NAME_SETOR,
- oc.CD_ID_FRAME
+ oc.DATA_OC AS ATRIBUTOS,
+ oc.DT_HR_LOCAL AS DATE_TIME,
+ o.NAME_OBJETO AS OBJETO,
+ s.NAME_SETOR AS SETOR
  FROM objeto_contexto oc
  LEFT JOIN objeto o ON o.CD_ID_OBJETO = oc.CD_ID_OBJETO
  LEFT JOIN setor s ON s.CD_ID_SETOR = o.CD_ID_SETOR
  ORDER BY DT_HR_LOCAL ASC")
 
-df$DATA_OC <- str_replace_all(df$DATA_OC,"SODA","SOLDA")
+df$DATA_OC <- str_replace_all(df$ATRIBUTOS,"SODA","SOLDA")
 write.csv(df,"telemetria.csv")
+```
+
+# Validas os pacotes IA
+
+```{r}
+
+pacotes <- dbGetQuery(con,"select * from pacote_ia")
+
+index   <- 8
+from    <- pacotes$DT_HR_LOCAL_BEGIN[index]
+to      <- pacotes$DT_HR_LOCAL_END[index]
+
+print(pacotes$OUTPUT_IA[index])
+
+frames <- get_frames_from_to(con,from_time = from,to_time = to,camera_id = c(1,2))
+build_gif_from_blob(frames)
+
+estrutura <- readRDS("estrutura.rds")
+atributos <- map_df(estrutura$CONFIGS[[1]]$ATRIBUTOS,~ .x)
+
+
 ```

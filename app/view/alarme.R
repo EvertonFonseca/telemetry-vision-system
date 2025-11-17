@@ -44,7 +44,7 @@ box::use(
   .. / model / swiper[...],
   DT,
   shinycssloaders,
-  .. / logic / setor_dao[...],
+  .. / logic / Alarme_dao[...],
   stringr,
   dplyr[...],
   lubridate[...],
@@ -53,20 +53,86 @@ box::use(
 )
 
 #' @export
- uiNewSetor <- function(ns,input,output,session,callback){
+ uiNewAlarme <- function(ns,input,output,session,callback){
 
   obs <- newObserve()
  
   showModal(
       session = session,
       dialogModal(
-      title = 'Novo Setor',
+      title = 'Novo Alarme',
       size  = 'm',
       uiMain(ns),
       footer = tagList(actionButton(inputId = ns("btSair"),"Sair",icon = icon("arrow-left")),
                        actionButton(ns('btClear'), "Limpar", icon = icon("eraser")),
                        actionButton(ns('btSalvar'),'Salvar',class = "btn-primary",icon = icon("save"))
                       )))
+   
+     output$slider1 <- renderUI({
+    
+    req(currentPosition() == 1)
+    
+    obs2$clear()
+    logica <<- NULL
+    init.comondo <<- TRUE
+
+    obs2$add(observeEvent(input[['comboBoxAlarme']],{
+      
+      comboAlarme <- input[['comboBoxAlarme']]
+      
+      index   <- which(sapply(Alarmees, function(x){ x$NAME_Alarme == comboAlarme}))
+      Alarme   <<- Alarmees[index][[1]]
+      objects <<- Alarme$OBJETOS
+      updateSelectInput(getDefaultReactiveDomain(),"comboBoxobjects",choices = sapply(objects, function(object) object$NAME_OBJECT))
+      
+    }))
+    
+    output$containerAtributos <- renderUI({
+      
+      shiny::req(input$comboBoxobjects)
+      
+      # Alarme      <<- rlist::list.find(Alarmees,NAME_Alarme == isolate(input$comboBoxAlarme))[[1]]
+      # object     <<- rlist::list.filter(Alarme$OBJETOS,NAME_OBJECT == input$comboBoxobjects)[[1]]
+      # atributos  <-  rlist::list.filter(object$ATRIBUTOS,R_DATA != 'time')
+      
+      changetextPlaceHolder()
+      
+      multiInput(
+        inputId = 'multiAtributos',
+        width = '100%',
+        options = list(
+          enable_search = T,
+          non_selected_header = "Atributos não selecionados",
+          selected_header     = "Atributos selecionados"
+        ),
+        selected = isolate(input$multiAtributos),
+        label = "Atributos do object",
+        choices = NULL,
+        choiceNames  = lapply( atributos, function(atributo)  tagList(atributo$NAME_ATRIBUTO)),
+        choiceValues = lapply( atributos, function(atributo)  atributo$NAME_ATRIBUTO)
+      ) |> tagAppendAttributes(style = ';height: auto; width: 100%;')
+      
+    })
+    
+    div(
+      style = 'padding-5px;',
+      selectInput(
+        ns('comboBoxAlarme'),
+        label = 'Seleciona Alarme',
+        choices = AlarmeesNomes,
+        selected = isolate(input[['comboBoxAlarme']])
+      ),
+      selectInput(
+        ns('comboBoxobjects'),
+        label = 'Seleciona object',
+        choices = '',
+        selected = isolate(input[['comboBoxobjects']])
+      ),
+      uiOutput(ns('containerAtributos'))
+    )
+    
+  })
+   
    # Sair 
    obs$add(observeEvent(input$btSair,{
         obs$destroy()
@@ -76,46 +142,46 @@ box::use(
    
    ## Clear
    obs$add(observeEvent(input$btClear, {
-        updateTextInput(session,'textNameSetor', value = '')
+        updateTextInput(session,'textNameAlarme', value = '')
         updateSelectInput(session,"comboTimer",selected = 1)
         updateSelectInput(session,"comboUnit",selected = "Minuto")
         updateSelectInput(session,"comboTimerLook",selected = 10)
         updateSelectInput(session,"comboUnitLook",selected = "Minuto")
    }, ignoreInit = TRUE))
 
-   ## Salvar Setor
+   ## Salvar Alarme
    obs$add(observeEvent(input$btSalvar,{
     
-    nomeSetor <- isolate(toupper(input$textNameSetor))
+    nomeAlarme <- isolate(toupper(input$textNameAlarme))
 
     #open database
     db$tryTransaction(function(conn){
 
-      if(stringi$stri_isempty(stringr$str_trim(nomeSetor))){
-        showNotification("O nome do Setor não foi preenchido!", type = "warning")
+      if(stringi$stri_isempty(stringr$str_trim(nomeAlarme))){
+        showNotification("O nome do Alarme não foi preenchido!", type = "warning")
         return()
       }
       
-      if(checkifExistNameSetor(conn,name = nomeSetor)){
-        showNotification("O nome do Setor já possui nos registros!", type = "warning")
+      if(checkifExistNameAlarme(conn,name = nomeAlarme)){
+        showNotification("O nome do Alarme já possui nos registros!", type = "warning")
       }
 
-      #check if it has already data of Setor
+      #check if it has already data of Alarme
       obj <- list()
-      obj$NAME_SETOR                   <- nomeSetor
-      obj$TEMPO_REATIVAR_SETOR         <- isolate(input$comboTimer)
-      obj$TEMPO_REATIVAR_UNIDADE_SETOR <- isolate(input$comboUnit)
-      obj$TEMPO_PASSADO_SETOR          <- isolate(input$comboTimerLook)
-      obj$TEMPO_PASSADO_UNIDADE_SETOR  <- isolate(input$comboUnitLook)
-      id                               <- db$nextSequenciaID(conn,'SETOR')
+      obj$NAME_Alarme                   <- nomeAlarme
+      obj$TEMPO_REATIVAR_Alarme         <- isolate(input$comboTimer)
+      obj$TEMPO_REATIVAR_UNIDADE_Alarme <- isolate(input$comboUnit)
+      obj$TEMPO_PASSADO_Alarme          <- isolate(input$comboTimerLook)
+      obj$TEMPO_PASSADO_UNIDADE_Alarme  <- isolate(input$comboUnitLook)
+      id                               <- db$nextSequenciaID(conn,'Alarme')
       
-      insertNewSetor(conn,id,obj)
+      insertNewAlarme(conn,id,obj)
 
       dialogConfirm(
         session = session,
         id    = ns('dialogConfirm'),
-        title = 'Setor criado com sucesso!',
-        text  = 'Deseja criar novamente um novo Setor?')
+        title = 'Alarme criado com sucesso!',
+        text  = 'Deseja criar novamente um novo Alarme?')
       
       #crie so uma vez
       observeEvent(input$dialogConfirm,{
@@ -124,7 +190,7 @@ box::use(
 
         # Limpar os campos APÓS o flush/render — garante que os inputs existam no DOM
         session$onFlushed(function() {
-          updateTextInput(session,'textNameSetor', value = '')
+          updateTextInput(session,'textNameAlarme', value = '')
           updateSelectInput(session,"comboTimer",selected = 1)
           updateSelectInput(session,"comboUnit",selected = "Minuto")
           updateSelectInput(session,"comboTimerLook",selected = 10)
@@ -146,13 +212,13 @@ box::use(
  }
  
 #' @export
-uiEditSetor <- function(ns,input,output,session,callback){
+uiEditAlarme <- function(ns,input,output,session,callback){
   
     obs            <- newObserve()
     sliderPosition <- reactiveVal(1L)
     idSwiper       <- ns('swiperMain')
-    setores        <- reactiveVal(selectAllSetors(dbp$get_pool()))
-    setor          <- reactiveVal(NULL)
+    Alarmees        <- reactiveVal(selectAllAlarmes(dbp$get_pool()))
+    Alarme          <- reactiveVal(NULL)
 
     showModal(
       session = session,
@@ -188,22 +254,22 @@ uiEditSetor <- function(ns,input,output,session,callback){
       output$titleTexto <- renderText({
         
         if(sliderPosition() == 1L){
-          'Registros Setor'
+          'Registros Alarme'
         }else{
-          'Edição o setor'
+          'Edição o Alarme'
         }
 
       })
     
       output$slider1 <- renderUI({
         
-        output$tableDinamicaSetor <- DT$renderDataTable({
+        output$tableDinamicaAlarme <- DT$renderDataTable({
       
-          dataset  <- setores()
+          dataset  <- Alarmees()
 
           if(length(dataset) == 0) return(NULL)
           
-          colunaNames <- c('LINHA','SETOR','VISUALIZAR / EDITAR','REMOVER')
+          colunaNames <- c('LINHA','Alarme','VISUALIZAR / EDITAR','REMOVER')
         
           DT$datatable({
             
@@ -213,8 +279,8 @@ uiEditSetor <- function(ns,input,output,session,callback){
               mutate_if(is.character,toupper) |> 
               mutate(
                     !!colunaNames[1] := 1:nrow(dataset),
-                    !!colunaNames[2] :=  dataset$NAME_SETOR,
-                    !!colunaNames[3] :=  sapply(dataset$CD_ID_SETOR, function (x) {
+                    !!colunaNames[2] :=  dataset$NAME_Alarme,
+                    !!colunaNames[3] :=  sapply(dataset$CD_ID_Alarme, function (x) {
                       
                     as.character(
                         actionButton(
@@ -226,7 +292,7 @@ uiEditSetor <- function(ns,input,output,session,callback){
                         )
                       )
                     }),
-                    !!colunaNames[4] :=  sapply(dataset$CD_ID_SETOR, function (x) {
+                    !!colunaNames[4] :=  sapply(dataset$CD_ID_Alarme, function (x) {
                       
                     as.character(
                         actionButton(
@@ -262,29 +328,29 @@ uiEditSetor <- function(ns,input,output,session,callback){
         
         div(
           style = 'border-style: solid; border-color: white; border-width: 1px; overflow-x: auto;',
-          DT$dataTableOutput(outputId = ns('tableDinamicaSetor'))
+          DT$dataTableOutput(outputId = ns('tableDinamicaAlarme'))
         )
         
       })
     
     output$slider2 <- renderUI({
 
-      req(setor())
+      req(Alarme())
       
-      setorSelect <- setor()
+      AlarmeSelect <- Alarme()
         
          uiMain(ns,
-           valueName = setorSelect$NAME_SETOR,
-           valueComboTimer = setorSelect$TEMPO_REATIVAR_SETOR,
-           valueComboUnit =  setorSelect$TEMPO_REATIVAR_UNIDADE_SETOR,
-           valueComboTimerLook = setorSelect$TEMPO_PASSADO_SETOR,
-           valueComboUnitLook = setorSelect$TEMPO_PASSADO_UNIDADE_SETOR
+           valueName = AlarmeSelect$NAME_Alarme,
+           valueComboTimer = AlarmeSelect$TEMPO_REATIVAR_Alarme,
+           valueComboUnit =  AlarmeSelect$TEMPO_REATIVAR_UNIDADE_Alarme,
+           valueComboTimerLook = AlarmeSelect$TEMPO_PASSADO_Alarme,
+           valueComboUnitLook = AlarmeSelect$TEMPO_PASSADO_UNIDADE_Alarme
           )
     })
 
     obs$add(observeEvent(input$editPressedRow,{
       
-      setor(isolate(setores()) |> filter(CD_ID_SETOR == input$editPressedRow))
+      Alarme(isolate(Alarmees()) |> filter(CD_ID_Alarme == input$editPressedRow))
       
       swiperSlideNext(idSwiper)
       sliderPosition(isolate(sliderPosition()) + 1L)
@@ -293,13 +359,13 @@ uiEditSetor <- function(ns,input,output,session,callback){
     
     obs$add(observeEvent(input$deletePressedRow,{
       
-      setor <- isolate(setores()) |> filter(CD_ID_SETOR == input$deletePressedRow)
+      Alarme <- isolate(Alarmees()) |> filter(CD_ID_Alarme == input$deletePressedRow)
 
       messageAlerta(
                     input,
                     ns,
-                    title   = paste0('Todos os objetos ligado a esse setor será excluido'),
-                    message = paste0('Deseja realmente excluir a setor ',setor$NAME_SETOR,"?"),
+                    title   = paste0('Todos os objetos ligado a esse Alarme será excluido'),
+                    message = paste0('Deseja realmente excluir a Alarme ',Alarme$NAME_Alarme,"?"),
                     callback.no = function(){
                       
                     },
@@ -307,16 +373,16 @@ uiEditSetor <- function(ns,input,output,session,callback){
                       
                        db$tryTransaction(function(conn){
                         
-                        deleteSetor(conn,setor$CD_ID_SETOR)
-                        setores.aux <- selectAllSetors(conn)
-                        if(nrow(setores.aux) == 0){
+                        deleteAlarme(conn,Alarme$CD_ID_Alarme)
+                        Alarmees.aux <- selectAllAlarmes(conn)
+                        if(nrow(Alarmees.aux) == 0){
                           #destroy all observe events
                           obs$destroy()
                           removeModal(session)
                           swiperDestroy(idSwiper)
                           callback()
                         }else{
-                          setores(setores.aux)
+                          Alarmees(Alarmees.aux)
                         }
                         
                       })
@@ -338,7 +404,7 @@ uiEditSetor <- function(ns,input,output,session,callback){
         callback()
       }
       else{
-        setor(NULL)
+        Alarme(NULL)
         swiperSlidePrevious(idSwiper)
         sliderPosition(current - 1L)
       }
@@ -347,41 +413,41 @@ uiEditSetor <- function(ns,input,output,session,callback){
     
     obs$add(observeEvent(input$btActionUpdate,{
       
-      req(setor())
+      req(Alarme())
       
       db$tryTransaction(function(conn){
 
-        id        <- isolate(setor()$CD_ID_SETOR)
-        nomeSetor <- isolate(toupper(input$textNameSetor))
+        id        <- isolate(Alarme()$CD_ID_Alarme)
+        nomeAlarme <- isolate(toupper(input$textNameAlarme))
 
-        if(stringi$stri_isempty(stringr$str_trim(nomeSetor))){
-          showNotification("O nome do Setor não foi preenchido!", type = "warning")
+        if(stringi$stri_isempty(stringr$str_trim(nomeAlarme))){
+          showNotification("O nome do Alarme não foi preenchido!", type = "warning")
           return()
         }
         
-        if(checkifExistNameSetorEdit(conn,id,name = nomeSetor)){
-          showNotification("O nome do Setor já possui nos registros!", type = "warning")
+        if(checkifExistNameAlarmeEdit(conn,id,name = nomeAlarme)){
+          showNotification("O nome do Alarme já possui nos registros!", type = "warning")
         }
 
-        #check if it has already data of Setor
+        #check if it has already data of Alarme
         obj <- list()
-        obj$CD_ID_SETOR                  <- id
-        obj$NAME_SETOR                   <- nomeSetor
-        obj$TEMPO_REATIVAR_SETOR         <- isolate(input$comboTimer)
-        obj$TEMPO_REATIVAR_UNIDADE_SETOR <- isolate(input$comboUnit)
-        obj$TEMPO_PASSADO_SETOR          <- isolate(input$comboTimerLook)
-        obj$TEMPO_PASSADO_UNIDADE_SETOR  <- isolate(input$comboUnitLook)
+        obj$CD_ID_Alarme                  <- id
+        obj$NAME_Alarme                   <- nomeAlarme
+        obj$TEMPO_REATIVAR_Alarme         <- isolate(input$comboTimer)
+        obj$TEMPO_REATIVAR_UNIDADE_Alarme <- isolate(input$comboUnit)
+        obj$TEMPO_PASSADO_Alarme          <- isolate(input$comboTimerLook)
+        obj$TEMPO_PASSADO_UNIDADE_Alarme  <- isolate(input$comboUnitLook)
 
-        if(!updateSetor(conn,obj)){
-          showNotification("setor não foi atualizado com sucesso erro durante processo!", type = "warning")
+        if(!updateAlarme(conn,obj)){
+          showNotification("Alarme não foi atualizado com sucesso erro durante processo!", type = "warning")
           return()
         }
-        #load todos os setores
-        setores(selectAllSetors(conn))
+        #load todos os Alarmees
+        Alarmees(selectAllAlarmes(conn))
         
         swiperSlidePrevious(idSwiper)
         sliderPosition(isolate(sliderPosition()) - 1L)
-        showNotification("setor atualizado com sucesso!", type = "warning")
+        showNotification("Alarme atualizado com sucesso!", type = "warning")
 
       })
 
@@ -389,28 +455,23 @@ uiEditSetor <- function(ns,input,output,session,callback){
 
 }
 
-uiMain <- function(ns,valueName = NULL,
-                   valueComboTimer = 1,
-                   valueComboUnit  = "Minuto",
-                   valueComboTimerLook = 10,
-                   valueComboUnitLook  = "Minuto"
-                  ){
-
-    div(
-    shinyjs::inlineCSS(paste0("#",ns("textNameSetor")," {text-transform: uppercase;}")),
-    textInput(ns('textNameSetor'),label = 'Nome',placeholder = 'Digite o nome para o setor',value = valueName),
-    br(),
-    panelTitle(title = "Momento",
-               background.color.title = 'white',
-               title.color = 'black',
-               border.color = 'lightgray',
-               children = fluidRow(
-                 style = 'padding-top: 10px; padding-left: 15px; padding-right: 15px;',
-                 column(6,selectInput(ns('comboTimer'),label     = 'Tempo da Reativar',choices = 1:59,selected = valueComboTimer)),
-                 column(6,selectInput(ns('comboUnit'), label     = 'Unidade',choices = c("Minuto","Hora"),selected = valueComboUnit)),
-                 column(6,selectInput(ns('comboTimerLook'),label = 'Tempo do Passado',choices = 1:59,selected =valueComboTimerLook)),
-                 column(6,selectInput(ns('comboUnitLook'), label = 'Unidade',choices = c("Minuto","Hora"),selected = valueComboUnitLook))
-               )
+uiMain <- function(ns){
+  
+  swiper(id = ns('swiperMain'),
+    parent.style = 'height: 100%; width: 100%;',
+    width = '100%',
+    height = '100%',
+    swiperSlide(
+      style = 'height: 100%; width: 100%; overflow-y: auto; overflow-x: hidden;',
+      uiOutput(ns('slider1'),style = 'height: 100%; width: 100%;')
+    ),
+    swiperSlide(
+      style = 'height: 100%; width: 100%; overflow-y: auto; overflow-x: hidden;',
+      uiOutput(ns('slider2'),style = 'height: 100%; width: 100%;')
+    ),
+    swiperSlide(
+      style = 'height: 100%; width: 100%; overflow-y: auto; overflow-x: hidden; padding: 10px;',
+      uiOutput(ns('slider3'),style = 'height: 100%; width: 100%;')
     )
   )
 }

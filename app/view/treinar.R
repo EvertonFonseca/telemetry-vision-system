@@ -288,12 +288,11 @@ clip_limit_exceeded <- function(rv, max_min, now_ts = NULL) {
 # OBS IMPORTANTE:
 # Esse overlay só desenha UI. Ele NÃO move frame sozinho.
 # Quem controla o playback (loop later) é o server usando clipOverlayPlayer.
-clip_summary_overlay <- function(ns, session, input, objeto, ts_start, ts_end, n_frames,
-                                 tz_local = Sys.timezone()) {
+clip_summary_overlay <- function(ns, session, input, objeto,id_clip,ts_start, ts_end, n_frames,tz_local = Sys.timezone()) {
 
   if (is.null(ts_start) || is.null(ts_end)) return(invisible())
 
-  codigo_date <- paste0(as.integer(ts_start),"_",as.integer(ts_end),"_")
+  codigo_date <- paste0(id_clip,"_")
   overlay_id  <- ns("clip_summary_overlay")
   parent_sel  <- paste0("#parent", ns("dialogTrain"), " .modal-content")
 
@@ -303,39 +302,41 @@ clip_summary_overlay <- function(ns, session, input, objeto, ts_start, ts_end, n
   camera_ids    <- NULL
   camera_names  <- NULL
 
-  atributos_mem <- collect_clip_attributes(input,objeto,ts_start,ts_end)
+  atributos_mem <- collect_clip_attributes(input,objeto,id_clip,ts_start,ts_end)
   componentes   <- objeto$CONFIG[[1]]$COMPONENTES[[1]]
   divLista      <- fluidRow()
 
   for (i in seq_len(nrow(componentes))) {
 
     comp          <- componentes[i,]
+    id_comp       <- comp$CD_ID_COMPONENTE
     estrutura     <- comp$ESTRUTURA[[1]]
     atributos     <- estrutura$CONFIGS[[1]]$ATRIBUTOS[[1]]
     camera_ids    <- c(camera_ids,comp$CD_ID_CAMERA)
     listAtributos <- tagList()
+
     for (k in seq_len(nrow(atributos))) {
       atributo  <- atributos[k,]
-      id_html   <- ns(paste0(codigo_date,comp$NAME_COMPONENTE, "_", atributo$NAME_ATRIBUTO, "_", k))
-      value     <- atributos_mem$VALUE[which(atributos_mem$CD_ID_ATRIBUTO == atributo$CD_ID_ATRIBUTO)]
-
-      if(any(is.na(value))) value <- NULL
+      id_html   <- ns(paste0(codigo_date,comp$CD_ID_COMPONENTE, "_", atributo$CD_ID_ATRIBUTO, "_", k))
+      att_tmp   <- atributos_mem |> filter(CD_ID_COMPONENTE == id_comp) |> filter(CD_ID_ATRIBUTO == atributo$CD_ID_ATRIBUTO)
+     
+      if(any(is.na(att_tmp$VALUE))) value <- NULL
 
       if (atributo$NAME_DATA == "QUALITATIVE") {
-        classes       <- stringr::str_split(atributo$CLASSE_ATRIBUTO, ",")[[1]]
+        classes       <- stringr::str_split(atributo$VALUE_ATRIBUTO, ",")[[1]]
         listAtributos <- tagAppendChildren(
           listAtributos,
           selectizeInput(id_html,
             label   = atributo$NAME_ATRIBUTO,
             choices = classes,
-            selected = value,
+            selected = att_tmp$VALUE,
             options = list(dropdownParent = 'body', openOnFocus = TRUE, closeAfterSelect = TRUE)
           )
         )
       } else {
         listAtributos <- tagAppendChildren(
           listAtributos,
-          numericInput(id_html, label = atributo$NAME_ATRIBUTO, value = value)
+          numericInput(id_html, label = atributo$NAME_ATRIBUTO, value = att_tmp$VALUE)
         )
       }
     }
@@ -367,13 +368,14 @@ clip_summary_overlay <- function(ns, session, input, objeto, ts_start, ts_end, n
 
   # cards: título + <img id="clipOverlayImg_<cam>">
   img_cards <- tagList()
+  n         <- length(camera_ids)
   for (k in seq_along(camera_ids)) {
     cid  <- camera_ids[k]
     name <- camera_names[k]
     img_cards <- tagAppendChildren(
       img_cards,
       column(
-        width = 6,
+        width = ifelse(n > 1,6,12),
         panelTitle(
           title = paste0("Preview – ", name, " (", cid, ")"),
           background.color.title = "white",
@@ -467,7 +469,7 @@ clip_summary_overlay <- function(ns, session, input, objeto, ts_start, ts_end, n
           ),
           br(),
           panelTitle(
-            title = "Atributos",
+            title = "Componentes",
             background.color.title = "white",
             title.color  = "black",
             border.color = "lightgray",
@@ -476,7 +478,7 @@ clip_summary_overlay <- function(ns, session, input, objeto, ts_start, ts_end, n
         ),
         div(
           style = "padding:12px 18px; border-top:1px solid #eee; text-align:right; flex:0 0 auto;",
-          actionButton(ns("clipCloseVideo"), "OK", class = "btn btn-primary btn-sm")
+          actionButton(ns("clipCloseVideo"), "Ok", class = "btn btn-primary btn-sm",width = "80px",height = "34px")
         )
       )
     )
@@ -802,7 +804,6 @@ uiNewTreinar <- function(ns, input, output, session, callback){
   ctx <- session$userData$player_ctx
   
   # ---------- Player do CLIP no modal (preview independente) ----------
-  # >>> NOVO
   clipOverlayPlayer <- reactiveValues(
     seq = NULL,           # subconjunto de rv$seq (frames do clip)
     i   = 1L,             # índice atual no clip
@@ -1006,9 +1007,7 @@ uiNewTreinar <- function(ns, input, output, session, callback){
       rv$clip_active <- FALSE; rv$clip_t0 <- NULL; rv$clip_i0 <- NA_integer_
       updateActionButton(session, "clipToggle", label = "Start Clip", icon = icon("scissors"))
       clips_add(ts_start, ts_end, i0, i1)
-      clip_summary_overlay(ns, session, input, objeto, ts_start, ts_end,
-                           n_frames = abs(i1 - i0) + 1L)
-      # OBS: clipOverlayPlayer seq vai ser montado quando clicar em Visualizar na tabela
+      #clip_summary_overlay(ns, session, input, objeto, ts_start, ts_end,n_frames = abs(i1 - i0) + 1L)
     }
   }
   obs$add(observeEvent(input$prevFrame, { step_frame(-1L) }, ignoreInit = TRUE))
@@ -1028,7 +1027,6 @@ uiNewTreinar <- function(ns, input, output, session, callback){
         }
 
         rv$i <- rv$i + dir
-
         st <- ctx$render_current(rv$seq, rv$i, rv$w, rv$h, rv$id_by_cam, fit_bounds = FALSE)
         if (isTRUE(st$ok)) { rv$w <- st$w; rv$h <- st$h }
         ctx$prefetch_ahead_batch(rv$seq, rv$i, PREFETCH_AHEAD)
@@ -1047,7 +1045,7 @@ uiNewTreinar <- function(ns, input, output, session, callback){
 
         delay <- suppressWarnings(as.numeric(input$step_ms) / 1000)
         if (!is.finite(delay) || delay <= 0) delay <- 0.001
-        later::later(function(){ play_step() }, delay)
+        later::later(function(){ play_step();}, delay)
       })
     })
   }
@@ -1078,9 +1076,6 @@ uiNewTreinar <- function(ns, input, output, session, callback){
       rv$clip_active <- FALSE; rv$clip_t0 <- NULL; rv$clip_i0 <- NA_integer_
       updateActionButton(session, "clipToggle", label = "Start Clip", icon = icon("scissors"))
       clips_add(ts_start, ts_end, i0, i1)
-      # clip_summary_overlay(ns, session, input, objeto, ts_start, ts_end,
-      #                      n_frames = abs(i1 - i0) + 1L)
-      # OBS: clipOverlayPlayer seq vai ser montado quando clicar em Visualizar na tabela
     }
   }, ignoreInit = TRUE))
 
@@ -1221,7 +1216,7 @@ uiNewTreinar <- function(ns, input, output, session, callback){
 
       # abre overlay (isso injeta a UI com img e botões)
       clip_summary_overlay(
-        ns, session, input, objeto,
+        ns, session, input, objeto,id_clip = id_sel,
         ts_start = row$t0, ts_end = row$t1,
         n_frames = n_frames
       )
@@ -1377,7 +1372,7 @@ uiNewTreinar <- function(ns, input, output, session, callback){
 # ==================================================
 # Coleta dos valores dos atributos no overlay de clip
 # ==================================================
-collect_clip_attributes <- function(input, objeto,t0,t1) {
+collect_clip_attributes <- function(input,objeto,id_clip,t0,t1) {
   stopifnot(!is.null(objeto), nrow(objeto) >= 1)
   componentes <- objeto$CONFIG[[1]]$COMPONENTES[[1]]
   if (is.null(componentes) || !nrow(componentes)) {
@@ -1398,7 +1393,7 @@ collect_clip_attributes <- function(input, objeto,t0,t1) {
     x
   }
 
-  codigo_date <- paste0(as.integer(t0),"_",as.integer(t1),"_")
+  codigo_date <- paste0(id_clip,"_")
 
   make_ids <- function(comp_name, attr_name, k) {
     raw_id   <- paste0(codigo_date,comp_name, "_", attr_name, "_", k)
@@ -1436,7 +1431,7 @@ collect_clip_attributes <- function(input, objeto,t0,t1) {
       attr_name  <- as.character(atributo$NAME_ATRIBUTO[[1]])
       attr_type  <- as.character(atributo$NAME_DATA[[1]])      # "QUALITATIVE" | outro
 
-      ids   <- make_ids(comp_name, attr_name, k)
+      ids   <- make_ids(comp_id,attr_id,k)
       value <- read_input(ids)
 
       if (isTRUE(is.numeric(value))) {
@@ -1490,16 +1485,17 @@ build_objeto_descricao <- function(input,df,objeto){
       break
     }
 
-    df_tmp       <- clips_update_date_time_t0(df_tmp,id,t0)
-    df_tmp       <- clips_update_date_time_t1(df_tmp,id,t1)
+    df_tmp <- clips_update_date_time_t0(df_tmp,id,t0)
+    df_tmp <- clips_update_date_time_t1(df_tmp,id,t1)
     
-    atributos <- collect_clip_attributes(input,objeto,df_tmp$t0,df_tmp$t1)
+    atributos <- collect_clip_attributes(input,objeto,id,df_tmp$t0,df_tmp$t1)
     atributos <- atributos |> 
       group_by(NAME_COMPONENTE) |> 
       nest() |> 
       ungroup() |> 
       mutate(output = purrr::map2_chr(NAME_COMPONENTE,data,function(nome,dados){
-        x     <- dados |> select(NAME_ATRIBUTO,VALUE,NAME_DATA)
+        x     <- dados |> select(CD_ID_COMPONENTE,NAME_ATRIBUTO,VALUE,NAME_DATA)
+        id    <- x$CD_ID_COMPONENTE
         texto <- ""
         for(k in 1:nrow(x)){
           if(k > 1){
@@ -1512,10 +1508,10 @@ build_objeto_descricao <- function(input,df,objeto){
             texto <- paste0(texto,paste0("\"",att$NAME_ATRIBUTO,"\": ",att$VALUE))
           }
         }
-        paste0("\"",nome,"\": {",texto,"}")
+        paste0("{\"",nome,"\": {",texto,"}, \"ID\": ",id,"}")
       }))
     
-    output_ <- paste0("{",paste0(atributos$output,collapse = ","),"}")
+    output_ <- paste0("[",paste0(atributos$output,collapse = ","),"]")
     input_  <- paste0("OBJETO: ",objeto$NAME_OBJETO," TIPO: ",objeto$NAME_OBJETO_TIPO)
     listas[[i]] <- list(
       titulo = df_tmp$title,

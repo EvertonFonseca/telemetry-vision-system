@@ -51,17 +51,19 @@ initMap <- FALSE
   
   obs       <- newObserve()
   obs2      <- newObserve()
+  obs3      <- newObserve()
   setores   <- selectAllSetors(dbp$get_pool())
   cameras   <- selectAllCameras(dbp$get_pool())
   camerasSelected <- reactiveVal(NULL)
   tiposObjeto     <- selectTipoObjeto(dbp$get_pool())
-  deleting <- reactiveVal(FALSE)
-  editing  <- reactiveVal(FALSE)
+  deleting        <- reactiveVal(FALSE)
+  editing         <- reactiveVal(FALSE)
   sliderPosition  <- reactiveVal(1L)
   idSwiper        <- ns('swiperMain')
   frame_data         <- NULL
   componenteReactive <- reactiveVal(NULL)
   estruturas         <- selectAllEstrutura(dbp$get_pool())
+  updateObjDynamic   <- reactiveVal(FALSE)
   
   id       <- ns('dialogObj')
   cssStyle <- list()
@@ -136,7 +138,8 @@ initMap <- FALSE
         
         req(sliderPosition() == 2L)
         camerasTargets <- isolate(input$multiCameras) 
-        
+        tipoObjeto     <- tiposObjeto |> filter(NAME_OBJETO_TIPO == isolate(input$comboTipoObjeto))
+       
         obs2$clear()
         
         # -------------------------------------------------------------------
@@ -169,7 +172,7 @@ initMap <- FALSE
         # -------------------------------------------------------------------
         obs2$add(observeEvent(input$mapFrame_draw_new_feature, {
           req(sliderPosition() == 2L)
-          
+
           feat <- input$mapFrame_draw_new_feature
           if (is.null(feat) || !identical(feat$geometry$type, "Polygon")) return()
           
@@ -200,6 +203,14 @@ initMap <- FALSE
                 ESTRUTURA           = list(NULL)
               )
             )
+          }
+        
+          #objetos dinamicos apenas 1 compomentes
+          if(tipoObjeto$CD_ID_OBJETO_TIPO == 2L && nrow(frame_data$componente[[1]]) == 1L){
+            camera          <- cameras |> filter(NAME_CAMERA == input$comboCameras)
+            componentes     <- frame_data$componente[[1]]   
+            updateObjDynamic(TRUE)
+            output$mapFrame <- renderLeaflet({uiMapa(ns,camera,cameras,frame_data,componentes = componentes,is_dynamic = TRUE)})
           }
         }, ignoreInit = TRUE))
         
@@ -259,6 +270,16 @@ initMap <- FALSE
           }
           
           frame_data$componente[[1]] <<- df
+          
+          if(nrow(df) == 0){
+            if(isolate(updateObjDynamic())){
+              camera          <- cameras |> filter(NAME_CAMERA == input$comboCameras)
+              componentes     <- frame_data$componente[[1]]   
+              updateObjDynamic(FALSE)
+              output$mapFrame <- renderLeaflet({uiMapa(ns,camera,cameras,frame_data,componentes = componentes,is_dynamic = FALSE)})
+            }
+          }
+
         }, ignoreInit = TRUE))
         
         # -------------------------------------------------------------------
@@ -268,6 +289,8 @@ initMap <- FALSE
           req(sliderPosition() == 2L, !isTRUE(deleting()), !isTRUE(editing()))
           ev <- input$mapFrame_shape_draw_click
           if (is.null(frame_data$componente) || is.null(frame_data$componente[[1]])) return()
+          
+          if(isolate(updateObjDynamic())) return()
           
           target <- frame_data$componente[[1]] |> filter(.data$CD_ID_COMPONENTE == ev$id)
           if (nrow(target) == 1) {
@@ -283,6 +306,8 @@ initMap <- FALSE
           ev <- input$mapFrame_shape_click
           if (is.null(frame_data$componente) || is.null(frame_data$componente[[1]])) return()
           
+          if(isolate(updateObjDynamic())) return()
+          
           target <- frame_data$componente[[1]] |> filter(.data$CD_ID_COMPONENTE == ev$id)
           if (nrow(target) == 1) {
             componenteReactive(target)
@@ -292,10 +317,34 @@ initMap <- FALSE
 
         obs2$add(observeEvent(input$comboCameras,{
           camera          <- cameras |> filter(NAME_CAMERA == input$comboCameras)
-          componentes     <- map_df(frame_data$componente,~ .x)         
-          output$mapFrame <- renderLeaflet({uiMapa(ns,camera,cameras,frame_data,componentes = componentes)})
+          componentes     <- frame_data$componente[[1]]   
+          is_dynamic      <- updateObjDynamic()
+          output$mapFrame <- renderLeaflet({uiMapa(ns,camera,cameras,frame_data,componentes = componentes,is_dynamic = is_dynamic)})
         },ignoreNULL = TRUE))
-        
+
+        estruturas_dinamicos <- NULL
+        if(tipoObjeto$CD_ID_OBJETO_TIPO == 2L){
+
+          changetextPlaceHolder()
+          estruturas_dinamicos <- tagList(
+            br(),
+            inlineCSS(paste0("#", ns("textNameComponente"), " {text-transform: uppercase;}")),
+            textInput(ns("textNameComponente"), label = "Nome",
+            placeholder = "Digite o nome para o componente",value = ""),
+            multiInput(
+              inputId = ns('multiEstruturaComp'),
+              width = '100%',
+              options = list(
+                enable_search = T,
+                non_selected_header = "Estrutura não selecionados",
+                selected_header     = "Estrutura selecionados"
+              ),
+              label = "Estruturas ativas",
+              choices = NULL,
+              choiceNames  = estruturas$NAME_ESTRUTURA,
+              choiceValues = estruturas$NAME_ESTRUTURA
+            ) |> tagAppendAttributes(style = ';height: auto; width: 100%;'))
+        }
         
         tagList(
           selectizeInput(ns('comboCameras'),label = 'Câmera',choices = camerasTargets,options  = list(
@@ -303,7 +352,9 @@ initMap <- FALSE
             openOnFocus = TRUE,
             closeAfterSelect = TRUE
           )),
-          leafletOutput(ns("mapFrame"), height = "512px", width = "100%")
+          leafletOutput(ns("mapFrame"), height = "512px", width = "100%"),
+          estruturas_dinamicos,
+          br()
         )
         
       })
@@ -314,8 +365,25 @@ initMap <- FALSE
         req(componenteReactive())
         
         componente <- componenteReactive()
+       
+        obs3$clear()
+        obs3$add(observeEvent(input$comboEstrutura,{
+
+          estrutura <- estruturas |> filter(NAME_ESTRUTURA == input$comboEstrutura)
+          atributos <- map_df(estrutura$CONFIGS[[1]]$ATRIBUTOS,~ .x)
+          width_nm  <- max(nchar(atributos$NAME_ATRIBUTO %||% ""))
+
+          nm  <- stringr::str_pad(atributos$NAME_ATRIBUTO,width = width_nm,side  = "right")
+
+          prefix_b <- ifelse(atributos$NAME_DATA == "QUALITATIVE","[ ","")
+          prefix_e <- ifelse(atributos$NAME_DATA == "QUALITATIVE"," ]","")
+          linhas <- paste0(nm, " = ",prefix_b,atributos$VALUE_ATRIBUTO,prefix_e)
+          txt    <- paste(linhas, collapse = "\n")
+          updateTextAreaInput(session,"info_estrutura",value = txt)
+
+        },ignoreNULL = TRUE))
+
         estrutura  <- componente$ESTRUTURA[[1]]
-        
         uiEstrutura(ns,componente$NAME_COMPONENTE,estruturas,estrutura)
       })
       
@@ -328,6 +396,8 @@ initMap <- FALSE
         if(current == 1L){
           obs$destroy()
           obs2$destroy()
+          obs3$destroy()
+          updateObjDynamic(FALSE)
           if(!is.null(frame_data)) unlink(frame_data$img_path)
           removeModal(session)
           callback()
@@ -376,7 +446,13 @@ initMap <- FALSE
         if(current == 1L){
           nomeObjeto     <- isolate(toupper(input$textNameObjeto))
           camerasTargets <- isolate(input$multiCameras) 
+          tipoObjeto     <- tiposObjeto |> filter(NAME_OBJETO_TIPO == isolate(input$comboTipoObjeto))
           
+          if(tipoObjeto$CD_ID_OBJETO_TIPO == 2 && length( camerasTargets) > 1){
+            showNotification("Não foi possível avançar. Para objetos dinâmicos, selecione apenas uma câmera.", type = "warning")
+            return()
+          }
+
           if(stringi$stri_isempty(stringr$str_trim(nomeObjeto))){
             showNotification("O nome do Objeto não foi preenchido!", type = "warning")
             return()
@@ -398,8 +474,19 @@ initMap <- FALSE
           swiperSlideNext(idSwiper)
           
         }else if(current == 2L){
-          
+
+          tipoObjeto  <- tiposObjeto |> filter(NAME_OBJETO_TIPO == isolate(input$comboTipoObjeto))
           componentes <- frame_data$componente[[1]]
+          
+          if(tipoObjeto$CD_ID_OBJETO_TIPO == 2L){
+            componentes$NAME_COMPONENTE <- toupper(isolate(input$textNameComponente))
+            multiEstruturas <- estruturas |> filter(NAME_ESTRUTURA %in% isolate(input$multiEstruturaComp))
+            if(nrow(multiEstruturas) == 0){
+              showNotification("Nenhuma estrutura foi selecionada para o componente!", type = "warning")
+              return()
+            }
+            componentes$ESTRUTURA <- list(multiEstruturas)
+          }
           
           if(is.null(componentes)){
             showNotification("Nenhum desenho de poligno foi encontrado!", type = "warning")
@@ -494,7 +581,8 @@ initMap <- FALSE
           
         },ignoreInit = T,ignoreNULL = T))
         
-}
+ }
+
  
 #' @export
 uiEditObjeto <- function(ns,input,output,session,callback){
@@ -503,6 +591,7 @@ uiEditObjeto <- function(ns,input,output,session,callback){
   objeto          <- reactiveVal(NULL)
   obs             <- newObserve()
   obs2            <- newObserve()
+  obs3            <- newObserve()
   setores         <- selectAllSetors(dbp$get_pool())
   cameras         <- selectAllCameras(dbp$get_pool())
   camerasSelected <- reactiveVal(NULL)
@@ -514,6 +603,7 @@ uiEditObjeto <- function(ns,input,output,session,callback){
   frame_data         <- NULL
   componenteReactive <- reactiveVal(NULL)
   estruturas         <- selectAllEstrutura(dbp$get_pool())  
+  updateObjDynamic   <- reactiveVal(FALSE)
   
   id       <- ns('dialogObj')
   cssStyle <- list()
@@ -694,6 +784,7 @@ uiEditObjeto <- function(ns,input,output,session,callback){
       
       camerasTargets <- isolate(input$multiCameras) 
       objetoSelect   <- isolate(objeto())
+      tipoObjeto     <- tiposObjeto |> filter(NAME_OBJETO_TIPO == isolate(input$comboTipoObjeto))
       
       obs2$clear()
       
@@ -723,6 +814,14 @@ uiEditObjeto <- function(ns,input,output,session,callback){
         } else {
           frame_data$componente[[1]] <<- bind_rows(frame_data$componente[[1]], row_new)  # CHANGE: bind_rows()
         }
+        #objetos dinamicos apenas 1 compomentes
+        if(tipoObjeto$CD_ID_OBJETO_TIPO == 2L && nrow(frame_data$componente[[1]]) == 1L){
+          camera          <- cameras |> filter(NAME_CAMERA == input$comboCameras)
+          componentes     <- frame_data$componente[[1]]   
+          updateObjDynamic(TRUE)
+          output$mapFrame <- renderLeaflet({uiMapa(ns,camera,cameras,frame_data,componentes = componentes,is_dynamic = TRUE)})
+        }
+
       }, ignoreInit = TRUE))
       
       # --- edições (mover vértices etc.) ---
@@ -769,12 +868,23 @@ uiEditObjeto <- function(ns,input,output,session,callback){
           df <- filter(df, .data$CD_ID_COMPONENTE != id_)
         }
         frame_data$componente[[1]] <<- df
+        
+        if(nrow(df) == 0){
+          if(isolate(updateObjDynamic())){
+            camera          <- cameras |> filter(NAME_CAMERA == input$comboCameras)
+            componentes     <- frame_data$componente[[1]]   
+            updateObjDynamic(FALSE)
+            output$mapFrame <- renderLeaflet({uiMapa(ns,camera,cameras,frame_data,componentes = componentes,is_dynamic = FALSE)})
+          }
+        }
       }, ignoreInit = TRUE))
       
       # --- clique nos shapes (mantidos exatamente seus inputs) ---
       obs2$add(observeEvent(input$mapFrame_shape_draw_click, {
         req(!deleting())  # mantido
         ev <- input$mapFrame_shape_draw_click
+
+        if(isolate(updateObjDynamic())) return()
         
         if (is.null(frame_data$componente) || is.null(frame_data$componente[[1]])) return()
         target <- frame_data$componente[[1]] |> filter(.data$CD_ID_COMPONENTE == ev$id)
@@ -788,6 +898,8 @@ uiEditObjeto <- function(ns,input,output,session,callback){
       obs2$add(observeEvent(input$mapFrame_shape_click, {
         req(!deleting())  # mantido
         ev <- input$mapFrame_shape_click
+
+        if(isolate(updateObjDynamic())) return()
         
         if (is.null(frame_data$componente) || is.null(frame_data$componente[[1]])) return()
         target <- frame_data$componente[[1]] |> filter(.data$CD_ID_COMPONENTE == ev$id)
@@ -812,21 +924,51 @@ uiEditObjeto <- function(ns,input,output,session,callback){
         }
       }, ignoreInit = TRUE))
       
-      
       obs2$add(observeEvent(input$comboCameras,{
         camera          <- cameras |> filter(NAME_CAMERA == input$comboCameras)
-        componentes     <- map_df(frame_data$componente,~ .x)
-        output$mapFrame <- renderLeaflet({uiMapa(ns,camera,cameras,frame_data,componentes = componentes)})
+        componentes     <- frame_data$componente[[1]]   
+        is_dynamic      <- updateObjDynamic()
+        output$mapFrame <- renderLeaflet({uiMapa(ns,camera,cameras,frame_data,componentes = componentes,is_dynamic = is_dynamic)})
       },ignoreNULL = TRUE))
       
-      tagList(
-        selectizeInput(ns('comboCameras'),label = 'Câmera',choices = camerasTargets,options  = list(
-          dropdownParent = 'body',
-          openOnFocus = TRUE,
-          closeAfterSelect = TRUE
-        )),
-        leafletOutput(ns("mapFrame"), height = "512px", width = "100%")
-      )
+      estruturas_dinamicos <- NULL
+      if(tipoObjeto$CD_ID_OBJETO_TIPO == 2L){
+
+        componente     <- objetoSelect$CONFIG[[1]]$COMPONENTES[[1]]
+        estruturasComp <- componente$ESTRUTURA[[1]]
+     
+        changetextPlaceHolder()
+        estruturas_dinamicos <- tagList(
+          br(),
+          inlineCSS(paste0("#", ns("textNameComponente"), " {text-transform: uppercase;}")),
+          textInput(ns("textNameComponente"), label = "Nome",
+          placeholder = "Digite o nome para o componente",value = componente$NAME_COMPONENTE),
+          multiInput(
+            inputId = ns('multiEstruturaComp'),
+            width = '100%',
+            options = list(
+              enable_search = T,
+              non_selected_header = "Estrutura não selecionados",
+              selected_header     = "Estrutura selecionados"
+            ),
+            label = "Estruturas ativas",
+            selected = estruturasComp$NAME_ESTRUTURA,
+            choices = NULL,
+            choiceNames  = estruturas$NAME_ESTRUTURA,
+            choiceValues = estruturas$NAME_ESTRUTURA
+          ) |> tagAppendAttributes(style = ';height: auto; width: 100%;'))
+        }
+        
+        tagList(
+          selectizeInput(ns('comboCameras'),label = 'Câmera',choices = camerasTargets,options  = list(
+            dropdownParent = 'body',
+            openOnFocus = TRUE,
+            closeAfterSelect = TRUE
+          )),
+          leafletOutput(ns("mapFrame"), height = "512px", width = "100%"),
+          estruturas_dinamicos,
+          br()
+        )
       
     })
     
@@ -836,15 +978,33 @@ uiEditObjeto <- function(ns,input,output,session,callback){
       req(componenteReactive())
       
       componente <- componenteReactive()
-      estrutura  <- componente$ESTRUTURA[[1]]
-      
-      uiEstrutura(ns,componente$NAME_COMPONENTE,estruturas,estrutura)
-    })
+      obs3$clear()
+      obs3$add(observeEvent(input$comboEstrutura,{
+
+          estrutura <- estruturas |> filter(NAME_ESTRUTURA == input$comboEstrutura)
+          atributos <- map_df(estrutura$CONFIGS[[1]]$ATRIBUTOS,~ .x)
+          width_nm  <- max(nchar(atributos$NAME_ATRIBUTO %||% ""))
+          
+          nm  <- stringr::str_pad(atributos$NAME_ATRIBUTO,width = width_nm,side  = "right")
+          
+          prefix_b <- ifelse(atributos$NAME_DATA == "QUALITATIVE","[ ","")
+          prefix_e <- ifelse(atributos$NAME_DATA == "QUALITATIVE"," ]","")
+          linhas <- paste0(nm, " = ",prefix_b,atributos$VALUE_ATRIBUTO,prefix_e)
+          txt    <- paste(linhas, collapse = "\n")
+          updateTextAreaInput(session,"info_estrutura",value = txt)
+        
+      },ignoreNULL = TRUE))
+        
+        estrutura  <- componente$ESTRUTURA[[1]]
+        uiEstrutura(ns,componente$NAME_COMPONENTE,estruturas,estrutura)
+      })
     
     obs$add(observeEvent(input$editPressedRow,{
       
-      objeto(isolate(objetos()) |> filter(CD_ID_OBJETO == input$editPressedRow))
+      obj <- isolate(objetos()) |> filter(CD_ID_OBJETO == input$editPressedRow)
+      objeto(obj)
       
+      updateObjDynamic(obj$CD_ID_OBJETO_TIPO == 2L)
       swiperSlideNext(idSwiper)
       sliderPosition(isolate(sliderPosition()) + 1L)
       
@@ -874,6 +1034,7 @@ uiEditObjeto <- function(ns,input,output,session,callback){
               #destroy all observe events
               obs$destroy()
               obs2$destroy()
+              obs3$destroy()
               removeModal(session)
               callback()
               swiperDestroy(idSwiper)
@@ -895,6 +1056,7 @@ uiEditObjeto <- function(ns,input,output,session,callback){
         if(current == 1L){
           obs$destroy()
           obs2$destroy()
+          obs3$destroy()
           if(!is.null(frame_data)) unlink(frame_data$img_path)
           removeModal(session)
           callback()
@@ -952,6 +1114,12 @@ uiEditObjeto <- function(ns,input,output,session,callback){
           
           nomeObjeto     <- isolate(toupper(input$textNameObjeto))
           camerasTargets <- isolate(input$multiCameras) 
+          tipoObjeto     <- tiposObjeto |> filter(NAME_OBJETO_TIPO == isolate(input$comboTipoObjeto))
+          
+          if(tipoObjeto$CD_ID_OBJETO_TIPO == 2 && length( camerasTargets) > 1){
+            showNotification("Não foi possível avançar. Para objetos dinâmicos, selecione apenas uma câmera.", type = "warning")
+            return()
+          }
           
           if(stringi$stri_isempty(stringr$str_trim(nomeObjeto))){
             showNotification("O nome do Objeto não foi preenchido!", type = "warning")
@@ -975,7 +1143,18 @@ uiEditObjeto <- function(ns,input,output,session,callback){
        
         }else if(current == 3L){
           
+          tipoObjeto  <- tiposObjeto |> filter(NAME_OBJETO_TIPO == isolate(input$comboTipoObjeto))
           componentes <- frame_data$componente[[1]]
+          
+          if(tipoObjeto$CD_ID_OBJETO_TIPO == 2L){
+            componentes$NAME_COMPONENTE <- toupper(isolate(input$textNameComponente))
+            multiEstruturas <- estruturas |> filter(NAME_ESTRUTURA %in% isolate(input$multiEstruturaComp))
+            if(nrow(multiEstruturas) == 0){
+              showNotification("Nenhuma estrutura foi selecionada para o componente!", type = "warning")
+              return()
+            }
+            componentes$ESTRUTURA <- list(multiEstruturas)
+          }
           
           if(is.null(componentes)){
             showNotification("Nenhum desenho de poligno foi encontrado!", type = "warning")
@@ -1035,8 +1214,8 @@ uiEditObjeto <- function(ns,input,output,session,callback){
           }
         }
       },ignoreInit = T))
-
 }
+
 
 
 uiMain <- function(ns,
@@ -1093,7 +1272,7 @@ uiMain <- function(ns,
         )
 }
 
-uiMapa <-function(ns,camera,cameras,frame_data,componentes = NULL){
+uiMapa <-function(ns,camera,cameras,frame_data,componentes = NULL,is_dynamic = FALSE){
 
   data     <- frame_data |> filter(id == camera$CD_ID_CAMERA)
   data_uri <- base64enc$dataURI(file = data$img_path, mime = "image/png")
@@ -1109,15 +1288,23 @@ uiMapa <-function(ns,camera,cameras,frame_data,componentes = NULL){
           circleMarkerOptions  = FALSE,
           markerOptions        = FALSE,
           # HABILITA polígono
-          polygonOptions = drawPolygonOptions(
-            shapeOptions = drawShapeOptions(fillOpacity = 0.2, weight = 2),
-            showArea = FALSE
-          ),
+          polygonOptions = if(!is_dynamic){
+            drawPolygonOptions(
+              shapeOptions = drawShapeOptions(fillOpacity = 0.2, weight = 2),
+              showArea = FALSE
+            )
+          }else{
+            FALSE
+          },
           # HABILITA retângulo
-          rectangleOptions = drawRectangleOptions(
-            shapeOptions = drawShapeOptions(fillOpacity = 0.2, weight = 2),
-            showArea = FALSE
-          ),
+          rectangleOptions = if(!is_dynamic){
+            drawRectangleOptions(
+              shapeOptions = drawShapeOptions(fillOpacity = 0.2, weight = 2),
+              showArea = FALSE
+            )
+          }else{
+            FALSE
+          },
           # HABILITA círculo
           circleOptions = FALSE,
           editOptions = editToolbarOptions(
@@ -1229,10 +1416,9 @@ proxy_update_componentes <- function(session,ns,map_id,camera, componentes){
   invisible(TRUE)
 }
 
-
 searchFramesByCamerasSelected <- function(conn,camerasTargets,cameras,objeto = NULL){
 
-    map_df(camerasTargets,function(camera){
+  df <- map_df(camerasTargets,function(camera){
 
        cam_id <- cameras |> filter(NAME_CAMERA == camera)
        frame  <- selectLastFrameById(conn,cam_id$CD_ID_CAMERA)
@@ -1267,22 +1453,31 @@ searchFramesByCamerasSelected <- function(conn,camerasTargets,cameras,objeto = N
                componente = list(componentes)
                )
     })
+  df$componente[[1]] <- map_df(df$componente,~ .x)
+  df
 }
 
 uiEstrutura <- function(ns,nameComp,estruturas,estrutura){
   
   div(
     inlineCSS(paste0("#", ns("textNameComponente"), " {text-transform: uppercase;}")),
-     textInput(ns("textNameComponente"), label = "Nome",
-                 placeholder = "Digite o nome para o componente",value = nameComp),
+    textInput(ns("textNameComponente"), label = "Nome",
+    placeholder = "Digite o nome para o componente",value = nameComp),
     selectizeInput(ns('comboEstrutura'),label = 'Estrutura',choices = estruturas$NAME_ESTRUTURA,
     selected = estrutura$NAME_ESTRUTURA,
     options  = list(
       dropdownParent = 'body',
       openOnFocus = TRUE,
       closeAfterSelect = TRUE
-    ))
-  )
+    )),
+    textAreaInput(
+      ns("info_estrutura"),
+      label = "Atributos",
+      resize = "none",
+      width = "100%") |>
+      shiny::tagAppendAttributes(style = 'width: 100%;') |> 
+      tagAppendAttributesFind(2,style = 'text-align: center;',readonly = 'readonly')
+)
 }
 
 # --- util: checa se polígono fechado repete o 1º ponto no final ---

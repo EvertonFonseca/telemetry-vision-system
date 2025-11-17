@@ -392,7 +392,7 @@ uiMain <- function(ns,valueName = NULL,valueUrl = NULL,valueFps = 5){
 
   div(
         inlineCSS(paste0("#",ns("textNameCamera")," {text-transform: uppercase;}")),
-        textInput(paste0(ns('textNameCamera')),label = 'Nome',placeholder = 'Digite o nome para o Câmera',value = valueName),
+        textInput(paste0(ns('textNameCamera')),label = 'Nome',placeholder = 'Digite o nome para a Câmera',value = valueName),
         br(),
         panelTitle(title = "Configuração",
                    background.color.title = 'white',

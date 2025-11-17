@@ -67,12 +67,12 @@ insertNewComponente <- function(con,id,objeto){
 #' @export
 insertNewAtributo <- function(con,id,objeto){
 
-    query  <- 'INSERT INTO ATRIBUTO (CD_ID_ATRIBUTO,NAME_ATRIBUTO,CLASSE_ATRIBUTO,FG_ATIVO,CD_ID_COMPONENTE,CD_ID_DATA) VALUES (?,?,?,?,?,?)'
+    query  <- 'INSERT INTO ATRIBUTO (CD_ID_ATRIBUTO,NAME_ATRIBUTO,VALUE_ATRIBUTO,FG_ATIVO,CD_ID_COMPONENTE,CD_ID_DATA) VALUES (?,?,?,?,?,?)'
     result <-  DBI$dbSendStatement(con,query)
     DBI$dbBind(result, c(
       as.integer(id),
       objeto$NAME_ATRIBUTO,
-      objeto$CLASSE_ATRIBUTO,
+      objeto$VALUE_ATRIBUTO,
       objeto$FG_ATIVO,
       objeto$CD_ID_COMPONENTE,
       objeto$CD_ID_DATA

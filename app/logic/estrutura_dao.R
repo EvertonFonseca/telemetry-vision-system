@@ -52,7 +52,7 @@ selectAllAtributosByEstruturas <- function(con,estrutura_config){
       a.CD_ID_ATRIBUTO,
       a.CD_ID_ESTRUTURA_CONFIG,
       a.NAME_ATRIBUTO,
-      a.CLASSE_ATRIBUTO,
+      a.VALUE_ATRIBUTO,
       a.FG_ATIVO,
       a.CD_ID_DATA,
       td.NAME_DATA,

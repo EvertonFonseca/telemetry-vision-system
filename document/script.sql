@@ -181,7 +181,7 @@ CREATE TABLE IF NOT EXISTS ATRIBUTO (
   CD_ID_ATRIBUTO    INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
   CD_ID_ESTRUTURA_CONFIG   INT  NOT NULL,
   NAME_ATRIBUTO     VARCHAR(100)  NOT NULL,
-  CLASSE_ATRIBUTO   TEXT DEFAULT  NULL,
+  VALUE_ATRIBUTO    TEXT DEFAULT  NULL,
   FG_ATIVO          BOOLEAN       DEFAULT 0,
   CD_ID_DATA        INT           NOT NULL,
   CONSTRAINT fk_attr_data
@@ -318,35 +318,36 @@ ALTER TABLE OBJETO_TIPO
 
 
 -- =========================================================
--- (re)CRIAR PROCEDURE DE LIMPEZA
--- - apaga em LOTE (LIMIT 10000 por iteração) pra não travar o banco
--- - usa UTC_TIMESTAMP() porque você está salvando em UTC
--- - p_keep_days = quantos dias manter
+-- LIMPEZA POR HORAS (mantém 24h) + EVENTO A CADA 1 HORA
 -- =========================================================
-DROP PROCEDURE IF EXISTS PR_CLEAR_OLD_DATAS;
+
+-- (opcional) habilitar o event scheduler (requer permissão adequada)
+-- SET GLOBAL event_scheduler = ON;
+
+-- -------- Procedure: apaga em lotes usando janela em HORAS --------
+DROP PROCEDURE IF EXISTS PR_CLEAR_OLD_DATA_HOURS;
 
 DELIMITER $$
 
-CREATE PROCEDURE PR_CLEAR_OLD_DATAS(IN p_keep_days INT)
+CREATE PROCEDURE PR_CLEAR_OLD_DATA_HOURS(IN p_keep_hours INT)
 BEGIN
   DECLARE v_rows INT DEFAULT 1;
 
-  -- Deleta frames antigos em lotes, respeitando FK ON DELETE CASCADE:
-  -- isso vai apagar da FRAME_CAMERA_BLOB junto.
+  -- Apaga FRAME_CAMERA mais antigos que (agora - p_keep_hours horas).
+  -- A FK ON DELETE CASCADE garante a remoção correspondente em FRAME_CAMERA_BLOB.
   WHILE v_rows > 0 DO
     DELETE FROM FRAME_CAMERA
-     WHERE DT_HR_LOCAL < (UTC_TIMESTAMP() - INTERVAL p_keep_days DAY)
+     WHERE DT_HR_LOCAL < (UTC_TIMESTAMP() - INTERVAL p_keep_hours HOUR)
      LIMIT 10000;
     SET v_rows = ROW_COUNT();
   END WHILE;
 
-  -- Se um dia você quiser podar CAMERA_CONFIG antiga também,
-  -- descomenta esse bloco e garante que faz sentido pra você:
+  -- (opcional) Exemplo para outras tabelas com política de retenção:
   /*
   SET v_rows = 1;
   WHILE v_rows > 0 DO
     DELETE FROM CAMERA_CONFIG
-     WHERE DT_HR_LOCAL < (UTC_TIMESTAMP() - INTERVAL p_keep_days DAY)
+     WHERE DT_HR_LOCAL < (UTC_TIMESTAMP() - INTERVAL p_keep_hours HOUR)
      LIMIT 10000;
     SET v_rows = ROW_COUNT();
   END WHILE;
@@ -355,16 +356,12 @@ END$$
 
 DELIMITER ;
 
--- =========================================================
--- (re)CRIAR EVENTO
--- - roda A CADA 1 HORA
--- - chama PR_CLEAR_OLD_DATAS(2)  -> mantém só 2 dias de histórico
--- =========================================================
+-- -------- Evento: executa a cada 1 hora mantendo exatamente 24h --------
 DROP EVENT IF EXISTS AG_BY_1_HOUR;
 
 CREATE EVENT AG_BY_1_HOUR
   ON SCHEDULE EVERY 1 HOUR
-  DO CALL PR_CLEAR_OLD_DATAS(2);
+  DO CALL PR_CLEAR_OLD_DATA_HOURS(24);
 
 -- =========================================================
 -- DADOS INICIAIS
@@ -408,3 +405,5 @@ INSERT INTO PLOT_TOOLS_ITEMS (CD_ID_TIPO,CD_ID_PTP) VALUES (6,1);
 INSERT INTO PLOT_TOOLS_ITEMS (CD_ID_TIPO,CD_ID_PTP) VALUES (6,2);
 INSERT INTO PLOT_TOOLS_ITEMS (CD_ID_TIPO,CD_ID_PTP) VALUES (8,1);    
 INSERT INTO PLOT_TOOLS_ITEMS (CD_ID_TIPO,CD_ID_PTP) VALUES (8,2);    
+
+SET GLOBAL event_scheduler = ON;
