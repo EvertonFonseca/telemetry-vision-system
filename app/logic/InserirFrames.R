@@ -163,7 +163,18 @@ dataset <- frames |>
       nest() |> 
       ungroup() |> 
       mutate(DATAS = map(data,function(y){
+        
+        output      <- jsonlite::fromJSON(y$OUTPUT_IA,simplifyVector = F)
         comps       <- jsonlite::fromJSON(y$POLIGNOS_COMPONENTES)
+       
+        for(z in seq_along(output)){
+           nome_comp   <- names(output[[z]])
+           index_      <- which(comps$NAME_COMPONENTE %in% nome_comp)
+           if(length(index_) == 0) next
+           output[[z]]$ID <- comps$CD_ID_COMPONENTE[index_]
+        }
+
+        output      <- as.character(jsonlite::toJSON(output,auto_unbox = TRUE))
         cameras     <- stringr::str_split(y$CD_ID_CAMERAS,",")[[1]]
         payload     <- purrr::map(cameras,function(camera){
           componentes <- comps |> filter(CD_ID_CAMERA == camera)
@@ -172,7 +183,7 @@ dataset <- frames |>
         })
         status <- map_vec(payload,~ nrow(.x$FRAMES[[1]]) > 0)
         if(all(status)){
-          y |> mutate(PAYLOAD = list(payload),LIMIT = limit)
+          y |> mutate(OUTPUT_IA = output,PAYLOAD = list(payload),LIMIT = limit)
         }else{
           NULL
         }
@@ -183,7 +194,8 @@ dataset <- frames |>
   unnest(data) |> 
   filter(map_vec(DATAS,~ !is.null(.x)))
 
-saveRDS(dataset,paste0("train/dataset_train.rds"))
-# for(i in 1:nrow(dataset)){
-#   saveRDS(dataset[i,],paste0("train/",i,"_dataset_train.rds"))
-# }
+dataset_fining <- dataset[which(grepl("Finetuning",dataset$TITULO_IA,ignore.case = F)),]
+
+saveRDS(dataset |> filter(!grepl("Teste",TITULO_IA,ignore.case = F)),paste0("train/dataset_train.rds"))
+saveRDS(dataset |> filter(grepl("Teste",TITULO_IA,ignore.case = F)),paste0("train/dataset_test.rds"))
+saveRDS(dataset_fining,paste0("train/dataset_fining_tuning.rds"))

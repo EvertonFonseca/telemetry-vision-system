@@ -170,216 +170,217 @@ ui <- function(id) {
 
 #' @export
 server <- function(id) {
-
+  
   moduleServer(id, function(input, output, session) {
-
-    .init_reports_path() 
-    ns <- NS(id)
-    dbp$session_register(session)
-
-    #chatia$server(ns,input, output, session)
-    dash$server(ns,input, output, session)
     
-    reactiveNotification         <- reactiveVal(NULL)
-    reactiveMessageUsers         <- reactiveVal(NULL)
-    inputDropsNotification       <- reactiveVal(list())
-    inputDropsMessage            <- reactiveVal(list())
-    inputListNotificationNotRead <- list()
-    inputListMessageNotRead      <- list()
-    timeReactive                 <- reactiveTimer(60000)
-    queeNotification             <- NULL
-    queeMessageUsers             <- NULL
-
-    output$menuSideBarMain <- renderMenuSideBarMain(ns)
-    
-    # ---- Obsevent Menu Camera
-    observeEvent(input$camera, {
+    actionWebUser({
+      .init_reports_path() 
+      ns <- NS(id)
+      dbp$session_register(session)
       
-      box::use(./camera)
-      sel <- input$camera
+      #chatia$server(ns,input, output, session)
+      dash$server(ns,input, output, session)
       
-      if (identical(sel, "cameraNew")) {
-        camera$uiNewCamera(ns,input,output,session,function(){
-          box::unload(camera)
-          gc()
-        })
-      } else if (identical(sel, "cameraTable")) {
-        camera$uiEditCamera(ns,input,output,session,function(){
-          box::unload(camera)
-          gc()
-        })
-      }
-      # reset da seleção para permitir clicar no mesmo item novamente
-      if (!is.null(sel) && sel %in% c("cameraNew", "cameraTable"))
-      updateTabItems(session, inputId = "camera", selected = "noop")
+      reactiveNotification         <- reactiveVal(NULL)
+      reactiveMessageUsers         <- reactiveVal(NULL)
+      inputDropsNotification       <- reactiveVal(list())
+      inputDropsMessage            <- reactiveVal(list())
+      inputListNotificationNotRead <- list()
+      inputListMessageNotRead      <- list()
+      timeReactive                 <- reactiveTimer(60000)
+      queeNotification             <- NULL
+      queeMessageUsers             <- NULL
       
-    },ignoreInit = TRUE,ignoreNULL = TRUE)
-    
-    # ---- Obsevent Menu Setor
-    observeEvent(input$setor, {
+      output$menuSideBarMain <- renderMenuSideBarMain(ns)
       
-      box::use(./setor)
-      sel <- input$setor
-      
-      if (identical(sel, "setorNew")) {
-        setor$uiNewSetor(ns,input,output,session,function(){
-          box::unload(setor)
-          gc()
-        })
-      } else if (identical(sel, "setorTable")) {
-        setor$uiEditSetor(ns,input,output,session,function(){
-          box::unload(setor)
-          gc()
-        })
-      }
-      # reset da seleção para permitir clicar no mesmo item novamente
-      if (!is.null(sel) && sel %in% c("setorNew", "setorTable"))
-      updateTabItems(session, inputId = "setor", selected = "noop")
-    },ignoreInit = TRUE,ignoreNULL = TRUE)
-    
-    # ---- Obsevent Menu Objeto
-    observeEvent(input$objeto, {
-      
-      box::use(./objeto)
-      sel <- input$objeto
-      
-      if (identical(sel, "objetoNew")) {
-        objeto$uiNewObjeto(ns,input,output,session,function(){
-          box::unload(objeto)
-          gc()
-        })
-      } else if (identical(sel, "objetoTable")) {
-        objeto$uiEditObjeto(ns,input,output,session,function(){
-          box::unload(objeto)
-          gc()
-        })
-      }
-      # reset da seleção para permitir clicar no mesmo item novamente
-      if (!is.null(sel) && sel %in% c("objetoNew", "objetoTable"))
-      updateTabItems(session, inputId = "objeto", selected = "noop")
-    },ignoreInit = TRUE,ignoreNULL = TRUE)
-    
-    # ---- Obsevent Menu Objeto
-    observeEvent(input$estrutura, {
-      
-      box::use(./estrutura)
-      sel <- input$estrutura
-      
-      if (identical(sel, "estruturaNew")) {
-        estrutura$uiNewEstrutura(ns,input,output,session,function(){
-          box::unload(estrutura)
-          gc()
-        })
-      } else if (identical(sel, "estruturaTable")) {
-        estrutura$uiEditEstrutura(ns,input,output,session,function(){
-          box::unload(estrutura)
-          gc()
-        })
-      }
-      # reset da seleção para permitir clicar no mesmo item novamente
-      if (!is.null(sel) && sel %in% c("estruturaNew", "estruturaTable"))
-      updateTabItems(session, inputId = "objeto", selected = "noop")
-    },ignoreInit = TRUE,ignoreNULL = TRUE)
-    
-    # ---- Obsevent Menu Plot
-    # observeEvent(input$plot, {
-      
-    #   box::use(./plot)
-    #   sel <- input$plot
-      
-    #   if (identical(sel, "plotNew")) {
-    #     plot$uiNewPlot(ns,input,output,session,function(){
-    #       box::unload(plot)
-    #       gc()
-    #     })
-    #   } else if (identical(sel, "plotTable")) {
-    #     plot$uiEditPlot(ns,input,output,session,function(){
-    #       box::unload(plot)
-    #       gc()
-    #     })
-    #   }
-    #   # reset da seleção para permitir clicar no mesmo item novamente
-    #   if (!is.null(sel) && sel %in% c("plotNew", "plotTable"))
-    #   updateTabItems(session, inputId = "plot", selected = "noop")
-      
-    # },ignoreInit = TRUE,ignoreNULL = TRUE)
-    
-    # ---- Obsevent Menu Camera
-    observeEvent(input$treinar, {
-      
-      box::use(./treinar)
-      sel <- input$treinar
-      
-      if (identical(sel, "treinarNew")) {
-        treinar$uiNewTreinar(ns,input,output,session,function(){
-          box::unload(treinar)
-          gc()
-        })
-      } else if (identical(sel, "treinarTable")) {
-        treinar$uiEditTreinar(ns,input,output,session,function(){
-          box::unload(treinar)
-          gc()
-        })
-      }
-      # reset da seleção para permitir clicar no mesmo item novamente
-      if (!is.null(sel) && sel %in% c("treinarNew", "treinarTable"))
-      updateTabItems(session, inputId = "treinar", selected = "noop")
-      
-    },ignoreInit = TRUE,ignoreNULL = TRUE)
-    
-    componentHeader <- function(input,output,textoInformacao,size.right = 50 * 2) {
-      
-      uiHeader <-   renderUI({
+      # ---- Obsevent Menu Camera
+      observeEvent(input$camera, {
         
-        div(style = paste0('position: absolute;
+        box::use(./camera)
+        sel <- input$camera
+        
+        if (identical(sel, "cameraNew")) {
+          camera$uiNewCamera(ns,input,output,session,function(){
+            box::unload(camera)
+            gc()
+          })
+        } else if (identical(sel, "cameraTable")) {
+          camera$uiEditCamera(ns,input,output,session,function(){
+            box::unload(camera)
+            gc()
+          })
+        }
+        # reset da seleção para permitir clicar no mesmo item novamente
+        if (!is.null(sel) && sel %in% c("cameraNew", "cameraTable"))
+        updateTabItems(session, inputId = "camera", selected = "noop")
+        
+      },ignoreInit = TRUE,ignoreNULL = TRUE)
+      
+      # ---- Obsevent Menu Setor
+      observeEvent(input$setor, {
+        
+        box::use(./setor)
+        sel <- input$setor
+        
+        if (identical(sel, "setorNew")) {
+          setor$uiNewSetor(ns,input,output,session,function(){
+            box::unload(setor)
+            gc()
+          })
+        } else if (identical(sel, "setorTable")) {
+          setor$uiEditSetor(ns,input,output,session,function(){
+            box::unload(setor)
+            gc()
+          })
+        }
+        # reset da seleção para permitir clicar no mesmo item novamente
+        if (!is.null(sel) && sel %in% c("setorNew", "setorTable"))
+        updateTabItems(session, inputId = "setor", selected = "noop")
+      },ignoreInit = TRUE,ignoreNULL = TRUE)
+      
+      # ---- Obsevent Menu Objeto
+      observeEvent(input$objeto, {
+        
+        box::use(./objeto)
+        sel <- input$objeto
+        
+        if (identical(sel, "objetoNew")) {
+          objeto$uiNewObjeto(ns,input,output,session,function(){
+            box::unload(objeto)
+            gc()
+          })
+        } else if (identical(sel, "objetoTable")) {
+          objeto$uiEditObjeto(ns,input,output,session,function(){
+            box::unload(objeto)
+            gc()
+          })
+        }
+        # reset da seleção para permitir clicar no mesmo item novamente
+        if (!is.null(sel) && sel %in% c("objetoNew", "objetoTable"))
+        updateTabItems(session, inputId = "objeto", selected = "noop")
+      },ignoreInit = TRUE,ignoreNULL = TRUE)
+      
+      # ---- Obsevent Menu Objeto
+      observeEvent(input$estrutura, {
+        
+        box::use(./estrutura)
+        sel <- input$estrutura
+        
+        if (identical(sel, "estruturaNew")) {
+          estrutura$uiNewEstrutura(ns,input,output,session,function(){
+            box::unload(estrutura)
+            gc()
+          })
+        } else if (identical(sel, "estruturaTable")) {
+          estrutura$uiEditEstrutura(ns,input,output,session,function(){
+            box::unload(estrutura)
+            gc()
+          })
+        }
+        # reset da seleção para permitir clicar no mesmo item novamente
+        if (!is.null(sel) && sel %in% c("estruturaNew", "estruturaTable"))
+        updateTabItems(session, inputId = "objeto", selected = "noop")
+      },ignoreInit = TRUE,ignoreNULL = TRUE)
+      
+      # ---- Obsevent Menu Plot
+      # observeEvent(input$plot, {
+      
+      #   box::use(./plot)
+      #   sel <- input$plot
+      
+      #   if (identical(sel, "plotNew")) {
+      #     plot$uiNewPlot(ns,input,output,session,function(){
+      #       box::unload(plot)
+      #       gc()
+      #     })
+      #   } else if (identical(sel, "plotTable")) {
+      #     plot$uiEditPlot(ns,input,output,session,function(){
+      #       box::unload(plot)
+      #       gc()
+      #     })
+      #   }
+      #   # reset da seleção para permitir clicar no mesmo item novamente
+      #   if (!is.null(sel) && sel %in% c("plotNew", "plotTable"))
+      #   updateTabItems(session, inputId = "plot", selected = "noop")
+      
+      # },ignoreInit = TRUE,ignoreNULL = TRUE)
+      
+      # ---- Obsevent Menu Camera
+      observeEvent(input$treinar, {
+        
+        box::use(./treinar)
+        sel <- input$treinar
+        
+        if (identical(sel, "treinarNew")) {
+          treinar$uiNewTreinar(ns,input,output,session,function(){
+            box::unload(treinar)
+            gc()
+          })
+        } else if (identical(sel, "treinarTable")) {
+          treinar$uiEditTreinar(ns,input,output,session,function(){
+            box::unload(treinar)
+            gc()
+          })
+        }
+        # reset da seleção para permitir clicar no mesmo item novamente
+        if (!is.null(sel) && sel %in% c("treinarNew", "treinarTable"))
+        updateTabItems(session, inputId = "treinar", selected = "noop")
+        
+      },ignoreInit = TRUE,ignoreNULL = TRUE)
+      
+      componentHeader <- function(input,output,textoInformacao,size.right = 50 * 2) {
+        
+        uiHeader <-   renderUI({
+          
+          div(style = paste0('position: absolute;
                         width: auto;
                         height: 25px;
                         right: ',size.right,'px;
                         top: 25%;'),
-        tags$span(style='float: left; color: white; font-size: 15px;',textoInformacao())
-      )
-                
-   })
-  
-  return(uiHeader)
-}
-
-output$containerHeader <- componentHeader(input,output,function(){
-  
-  timeReactive()
-  span(format(Sys.time(),"%d/%m/%Y %H:%M"))
-  
-})
-
-output$dropsMensagem <- renderMenu({
-  
-  dropsNotification <- inputDropsMessage()
-  n <- length(dropsNotification)
-  
-  if(n > 0){
-    #play sound message
-    runjs("document.getElementById('soundBoxMessage').play();")
-  }
-  
-   dropdowncomponent <- dropdownMenu(
-                          type = "messages",
-                          badgeStatus = "danger",
-                          headerText =  paste0('Você tem ',n,' ',{
-                            if(n == 0 || n == 1){
-                              'mensagem.'
-                            }else{
-                              'mensagens'
-                            }
-                          }),
-                          .list = dropsNotification
-                        )
-    if(dropdowncomponent$children[[1]]$children[[2]]$children[[1]] > 99){
-      dropdowncomponent$children[[1]]$children[[2]]$children[[1]] <- paste0('+99')
+          tags$span(style='float: left; color: white; font-size: 15px;',textoInformacao())
+        )
+        
+      })
+      
+      return(uiHeader)
     }
     
-    dropdowncomponent
-  })
-
+    output$containerHeader <- componentHeader(input,output,function(){
+      
+      timeReactive()
+      span(format(Sys.time(),"%d/%m/%Y %H:%M"))
+      
+    })
+    
+    output$dropsMensagem <- renderMenu({
+      
+      dropsNotification <- inputDropsMessage()
+      n <- length(dropsNotification)
+      
+      if(n > 0){
+        #play sound message
+        runjs("document.getElementById('soundBoxMessage').play();")
+      }
+      
+      dropdowncomponent <- dropdownMenu(
+        type = "messages",
+        badgeStatus = "danger",
+        headerText =  paste0('Você tem ',n,' ',{
+          if(n == 0 || n == 1){
+            'mensagem.'
+          }else{
+            'mensagens'
+          }
+        }),
+        .list = dropsNotification
+      )
+      if(dropdowncomponent$children[[1]]$children[[2]]$children[[1]] > 99){
+        dropdowncomponent$children[[1]]$children[[2]]$children[[1]] <- paste0('+99')
+      }
+      
+      dropdowncomponent
+    })
+    
     output$dropsAlertas <- renderMenu({
       
       dropsNotification <- inputDropsNotification()
@@ -389,32 +390,32 @@ output$dropsMensagem <- renderMenu({
         #play sound notification
         runjs("document.getElementById('soundNotificationOn').play();")
       }
-
+      
       dropdowncomponent <- dropdownMenu(
-                            type = "notifications",
-                            icon = icon('bell'),
-                            badgeStatus = "danger",
-                            headerText = paste0('Você tem ',n,' ',{
-                              if(n == 0 || n == 1){
-                                'notificação.'
-                              }else{
-                                'notificações'
-                              }
-                            }),
-                            .list = dropsNotification
-                          )
-        
-        
+        type = "notifications",
+        icon = icon('bell'),
+        badgeStatus = "danger",
+        headerText = paste0('Você tem ',n,' ',{
+          if(n == 0 || n == 1){
+            'notificação.'
+          }else{
+            'notificações'
+          }
+        }),
+        .list = dropsNotification
+      )
+      
+      
       if(dropdowncomponent$children[[1]]$children[[2]]$children[[1]] > 99){
         dropdowncomponent$children[[1]]$children[[2]]$children[[1]] <- paste0('+99')
       }
-
+      
       dropdowncomponent
       
     })
-
-
+    
   })
+})
   
 }
 

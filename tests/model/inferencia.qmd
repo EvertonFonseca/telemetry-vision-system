@@ -185,9 +185,8 @@ con <- DBI::dbConnect(
 
 ## Frames
 
-
 ```{r}
-frames <- get_frames_window(con,490566,janela = 40)
+frames <- get_frames_window(con,1001418,janela = 35)
 #frames$DATE_TIME <- format(frames$DT_HR_LOCAL,"%d/%m/%y %H:%M:%S:%OS3")
 
 difftime(last(frames$DT_HR_LOCAL),first(frames$DT_HR_LOCAL))
@@ -197,9 +196,10 @@ difftime(last(frames$DT_HR_LOCAL),first(frames$DT_HR_LOCAL))
 # Video
 
 ```{r}
-codigo <- 465672
-anime <- build_gif_from_blob( get_frames_window(con,codigo,janela = 30))
+codigo  <- 1239382
+anime   <- build_gif_from_blob( get_frames_window(con,codigo,janela = 35))
 print(anime)
+
 ```
 
 
@@ -224,18 +224,15 @@ write.csv(df,"telemetria.csv")
 ```{r}
 
 pacotes <- dbGetQuery(con,"select * from pacote_ia")
-
-index   <- 8
+pacotes <- pacotes |> filter(CD_ID_OBJETO == 2L)
+index   <- 1
 from    <- pacotes$DT_HR_LOCAL_BEGIN[index]
 to      <- pacotes$DT_HR_LOCAL_END[index]
 
 print(pacotes$OUTPUT_IA[index])
 
-frames <- get_frames_from_to(con,from_time = from,to_time = to,camera_id = c(1,2))
+frames <- get_frames_from_to(con,from_time = from,to_time = to,camera_id = c(3))
 build_gif_from_blob(frames)
-
-estrutura <- readRDS("estrutura.rds")
-atributos <- map_df(estrutura$CONFIGS[[1]]$ATRIBUTOS,~ .x)
 
 
 ```

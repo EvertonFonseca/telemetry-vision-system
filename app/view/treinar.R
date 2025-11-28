@@ -735,8 +735,9 @@ uiNewTreinar <- function(ns, input, output, session, callback){
 
   clockupdate <- reactiveVal()
   obs         <- newObserve()
-  setores     <- selectAllSetors(dbp$get_pool())
-  objetos     <- selectAllObjetos(dbp$get_pool())
+  setores      <- selectAllSetors(dbp$get_pool())
+  objetos      <- selectAllObjetos(dbp$get_pool())
+  tiposPacotes <- selectAllTypesPacote(dbp$get_pool())
   objeto      <- NULL
 
   # ---------- Estado player principal ----------
@@ -1081,13 +1082,14 @@ uiNewTreinar <- function(ns, input, output, session, callback){
 
   # ---------- Render da tabela de clips ----------
   output$clipsTable <- DT::renderDT({
-
+    
     df <- clips()
     if (!nrow(df)) {
       return(DT::datatable(
         data.frame(
           Linha  = integer(0),
           Título = character(0),
+          Tipo   = character(0),
           De = character(0),
           Ate = character(0),
           Visualizar = character(0),
@@ -1105,9 +1107,10 @@ uiNewTreinar <- function(ns, input, output, session, callback){
         )
       ))
     }
-
-    rownum <- seq_len(nrow(df))
-
+    
+    rownum      <- seq_len(nrow(df))
+    tiposPacote <- tiposPacotes$NAME_TIPO_PACOTE
+    
     titulo <- vapply(df$id, function(id){
       as.character(
         textInput(
@@ -1117,7 +1120,26 @@ uiNewTreinar <- function(ns, input, output, session, callback){
         ) |> tagAppendAttributes(style = ';margin-top: 10px;')
       )
     }, character(1))
-
+    
+    # ===== NOVO: Combo "Tipo" =====
+    tipo_cb <- vapply(df$id, function(id){
+      idx <- which(df$id == id)
+      
+      # tenta pegar valor atual do df; senão usa o primeiro do vetor
+      cur <- if ("tipo" %in% names(df)) as.character(df$tipo[idx]) else NA_character_
+      if (is.na(cur) || !nzchar(cur) || !(cur %in% tiposPacote)) cur <- tiposPacote[[1]]
+      
+      as.character(
+        selectInput(
+          inputId = ns(paste0("clip_tipo_", id)),
+          label   = NULL,
+          choices = tiposPacote,
+          selected = cur,
+          width   = "100%"
+        ) |> tagAppendAttributes(style = ';margin-top: 10px;')
+      )
+    }, character(1))
+    
     t0_txt <- vapply(df$id, function(id){
       idx <- which(df$id == id)
       val <- fmt_pt(df$t0[idx], Sys.timezone())
@@ -1129,7 +1151,7 @@ uiNewTreinar <- function(ns, input, output, session, callback){
         ) |> tagAppendAttributes(style = ';margin-top: 10px;')
       )
     }, character(1))
-
+    
     t1_txt <- vapply(df$id, function(id){
       idx <- which(df$id == id)
       val <- fmt_pt(df$t1[idx], Sys.timezone())
@@ -1141,7 +1163,7 @@ uiNewTreinar <- function(ns, input, output, session, callback){
         ) |> tagAppendAttributes(style = ';margin-top: 10px;')
       )
     }, character(1))
-
+    
     btn_view <- vapply(df$id, function(id){
       sprintf(
         "<button class='btn btn-sm btn-outline-primary' onclick=\"Shiny.setInputValue('%s', {action:'view', id:%d, nonce:Math.random()}, {priority:'event'})\">
@@ -1149,7 +1171,7 @@ uiNewTreinar <- function(ns, input, output, session, callback){
        </button>", ns("clip_action"), id
       )
     }, character(1))
-
+    
     btn_del <- vapply(df$id, function(id){
       sprintf(
         "<button class='btn btn-sm btn-danger' onclick=\"Shiny.setInputValue('%s', {action:'del', id:%d, nonce:Math.random()}, {priority:'event'})\">
@@ -1157,17 +1179,18 @@ uiNewTreinar <- function(ns, input, output, session, callback){
        </button>", ns("clip_action"), id
       )
     }, character(1))
-
+    
     out <- data.frame(
       Linha          = rownum,
       Título         = titulo,
+      Tipo           = tipo_cb,     # << NOVA COLUNA
       De             = t0_txt,
       Ate            = t1_txt,
       Visualizar     = btn_view,
       Excluir        = btn_del,
       stringsAsFactors = FALSE
     )
-
+    
     DT::datatable(
       out, escape = FALSE, selection = "none",
       options = list(
@@ -1183,7 +1206,8 @@ uiNewTreinar <- function(ns, input, output, session, callback){
         columnDefs = list(
           list(visible = FALSE, targets = 0),
           list(className = 'dt-center', targets = "_all"),
-          list(width = '75px', targets = c(1, 5, 6))
+          # ajuste de widths: agora tem 7 colunas visíveis (1..7)
+          list(width = '75px', targets = c(1, 2, 6, 7))
         )
       ),
       callback = DT::JS(
@@ -1191,6 +1215,7 @@ uiNewTreinar <- function(ns, input, output, session, callback){
       )
     ) |> DT::formatStyle(names(out), cursor = 'pointer')
   })
+
 
   # ---------- Visualizar / Excluir clip ----------
   obs$add(observeEvent(input$clip_action, {
@@ -1310,6 +1335,7 @@ uiNewTreinar <- function(ns, input, output, session, callback){
         objPacote$CD_ID_OBJETO       <- objeto$CD_ID_OBJETO
         objPacote$TITULO_IA          <- descricao$titulo
         objPacote$INPUT_IA           <- descricao$input
+        objPacote$CD_ID_TIPO_PACOTE  <- descricao$tipoPacote
         objPacote$OUTPUT_IA          <- descricao$output
         objPacote$DT_HR_LOCAL_BEGIN  <- descricao$begin
         objPacote$DT_HR_LOCAL_END    <- descricao$end
@@ -1467,7 +1493,7 @@ collect_clip_attributes <- function(input,objeto,id_clip,t0,t1) {
   do.call(rbind, rows)
 }
 
-build_objeto_descricao <- function(input,df,objeto){
+build_objeto_descricao <- function(input,df,objeto,tiposPacotes){
   
   listas  <- list()
   status  <- TRUE
@@ -1478,6 +1504,7 @@ build_objeto_descricao <- function(input,df,objeto){
     df_tmp$title <- input[[paste0("clip_title_",id)]]
     t0           <- input[[paste0("clip_t0_",id)]]
     t1           <- input[[paste0("clip_t1_",id)]]
+    tipoPacote   <- tiposPacotes |> filter(NAME_TIPO_PACOTE == input[[paste0("clip_tipo_",id)]])
 
     if(!validaDateFormat(t0) || !validaDateFormat(t1)){
       status <- FALSE
@@ -1517,6 +1544,7 @@ build_objeto_descricao <- function(input,df,objeto){
       titulo = df_tmp$title,
       input  = input_,
       output = output_,
+      tipo   = tipoPacote$CD_ID_TIPO_PACOTE,
       begin  = df_tmp$t0,
       end    = df_tmp$t1
     )

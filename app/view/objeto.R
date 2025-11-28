@@ -689,7 +689,7 @@ uiEditObjeto <- function(ns,input,output,session,callback){
         
         output$tableDinamicaObjeto <- DT$renderDataTable({
           
-          colunaNames <- c('LINHA','OBJETO','VISUALIZAR / EDITAR','REMOVER')
+          colunaNames <- c('LINHA','OBJETO','TIPO','VISUALIZAR / EDITAR','REMOVER')
           
           DT$datatable({
             
@@ -700,7 +700,8 @@ uiEditObjeto <- function(ns,input,output,session,callback){
             mutate(
               !!colunaNames[1] := 1:nrow(dataset),
               !!colunaNames[2] :=  dataset$NAME_OBJETO,
-              !!colunaNames[3] :=  sapply(dataset$CD_ID_OBJETO, function (x) {
+              !!colunaNames[3] :=  dataset$NAME_OBJETO_TIPO,
+              !!colunaNames[4] :=  sapply(dataset$CD_ID_OBJETO, function (x) {
                 
                 as.character(
                   actionButton(
@@ -712,7 +713,7 @@ uiEditObjeto <- function(ns,input,output,session,callback){
                   )
                 )
               }),
-              !!colunaNames[4] :=  sapply(dataset$CD_ID_OBJETO,function (x) {
+              !!colunaNames[5] :=  sapply(dataset$CD_ID_OBJETO,function (x) {
                 
                 as.character(
                   actionButton(
@@ -733,7 +734,7 @@ uiEditObjeto <- function(ns,input,output,session,callback){
             language = list(url = 'js/table.json'),
             dom = 't',
             bSort=FALSE,
-            columnDefs = list(list(visible=FALSE, targets=c(0)),list(className = 'dt-center', targets = "_all"),list(width = '75px',targets = c(1,4)),list(width = 'autos',targets = c(3))),
+            columnDefs = list(list(visible=FALSE, targets=c(0)),list(className = 'dt-center', targets = "_all"),list(width = '75px',targets = c(1,3,4,5)),list(width = 'autos',targets = c(2,4))),
             deferRender = TRUE,
             scroller = FALSE,
             fixedHeader = TRUE,

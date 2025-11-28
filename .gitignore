@@ -9,7 +9,9 @@
 *.dylib
 *.RDS
 *.rds
-.cache
+*.cache
+*.gif
+*.RDS
 
 # Test binary, built with `go test -c`
 *.test

@@ -129,6 +129,11 @@ db_fetch_many_frames <- function(pool, camera_id, ts_vec_utc) {
   out
 }
 
+#' @export
+selectAllTypesPacote <- function(pool){
+   DBI::dbGetQuery(pool,"SELECT * FROM TIPO_PACOTE")
+}
+
 # ==================================================
 # selectAllPacoteToTraino
 # --------------------------------------------------
