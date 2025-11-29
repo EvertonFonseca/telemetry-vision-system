@@ -6,6 +6,7 @@ box::use(
   jsonlite,
   dplyr[...],
   tidyr[unnest_wider],
+  utils[...],
   lubridate,
   shinydashboardPlus[box],
   stats[aggregate, na.omit, median],
@@ -142,10 +143,8 @@ apply_setup_state <- function(df,
       !is.na(trab) & trab == trabalhador_presente ~ nome_setup,
     TRUE ~ est
   )
-
   df
 }
-
 # ===============================
 # Episódios de estado (run-length)
 # ===============================
@@ -393,7 +392,7 @@ ui <- function(ns) {
           value = uiOutput(ns(paste0('vbParado', 1))),
           subtitle = 'Tempo PARADO (setor DOBRA E SOLDA)',
           icon = icon('pause'),
-          color = "orange"
+          color = "red"
         ) |> tagAppendAttributesFind(target = 1, style = 'min-height: 102px')
       ),
 
@@ -415,7 +414,7 @@ ui <- function(ns) {
           value = uiOutput(ns(paste0('vbUtilizacao',1))),
           subtitle = 'Utilização média do setor',
           icon = icon('chart-line'),
-          color = "red"
+          color = "blue"
         ) |> tagAppendAttributesFind(target = 1, style = 'min-height: 102px')
       ),
 
@@ -682,7 +681,7 @@ fmt_horas <- function(x) {
     ggplot2$facet_grid(turno ~ ., scales = "free_y",switch = "y") +
     ggplot2$scale_fill_manual(
       values = c(
-        "OPERANDO" = "dodgerblue",
+        "OPERANDO" = "#00a65a",
         "PARADO"   = "tomato",
         "SETUP"    = "gold"
       )
@@ -719,7 +718,14 @@ fmt_horas <- function(x) {
         xend  = end_time,
         y     = COMPONENTE,
         yend  = COMPONENTE,
-        color = ESTADO
+        color = ESTADO,
+        text  = paste0(
+          "Componente: ", COMPONENTE,
+          "<br>Estado: ", ESTADO,
+          "<br>Início: ", fmt_dt(start_time),
+          "<br>Fim: ",    fmt_dt(end_time),
+          "<br>Duração: ", round(dur_secs/60, 1), " min"
+        )
       )
     ) +
     ggplot2$geom_segment(linewidth = 6) +
@@ -731,14 +737,14 @@ fmt_horas <- function(x) {
     ggplot2$facet_grid(turno ~ ., scales = "free_y",switch = "y") +
     ggplot2$scale_color_manual(
       values = c(
-        "OPERANDO" = "dodgerblue",
+        "OPERANDO" = "#00a65a",
         "PARADO"   = "tomato",
         "SETUP"    = "gold"
       )
     ) +
     themasPlotyGGplot()
 
-    p <- plotly::ggplotly(g, tooltip = c("x","xend","color")) |> plotly::config(displaylogo = FALSE,displayModeBar = T)
+    p <- plotly::ggplotly(g, tooltip = "text") |> plotly::config(displaylogo = FALSE,displayModeBar = T)
     layoutPlotyDefault(p, legend.text = "Estado")
   })
 
@@ -750,44 +756,93 @@ fmt_horas <- function(x) {
     if (is.null(ep_m) || !nrow(ep_m)) return(NULL)
     
     ep_hm <- ep_m
+    ep_hm$start_time <- as.POSIXct(ep_hm$start_time)
+    ep_hm$end_time   <- as.POSIXct(ep_hm$end_time)
     
-    # tempo médio do episódio
-    ep_hm$mid_time <- ep_hm$start_time + ep_hm$dur_secs / 2
-    ep_hm$hora     <- format(ep_hm$mid_time, "%H:%M")
+    # Janela total (24h) em bins de 30 min
+    t0 <- lubridate::floor_date(min(ep_hm$start_time, na.rm = TRUE), unit = "30 minutes")
+    t1 <- lubridate::ceiling_date(max(ep_hm$end_time,   na.rm = TRUE), unit = "30 minutes")
+    bin_starts <- seq(from = t0, to = t1, by = "30 min")
     
-    # classificar turno a partir do mid_time
-    ep_hm$turno <- classificar_turno(ep_hm$mid_time)
+    # Expande episódios -> bins (calculando overlap real em segundos)
+    expanded <- lapply(seq_len(nrow(ep_hm)), function(i) {
+      st <- ep_hm$start_time[i]
+      en <- ep_hm$end_time[i]
+      if (is.na(st) || is.na(en) || en <= st) return(NULL)
+      
+      # bins que potencialmente cruzam este episódio
+      bs0 <- lubridate::floor_date(st, unit = "30 minutes")
+      bs1 <- lubridate::floor_date(en, unit = "30 minutes")
+      bs  <- seq(from = bs0, to = bs1, by = "30 min")
+      
+      be  <- bs + lubridate::minutes(30)
+      
+      ov_start <- pmax(st, bs)
+      ov_end   <- pmin(en, be)
+      
+      ov_secs <- as.numeric(difftime(ov_end, ov_start, units = "secs"))
+      ov_secs[is.na(ov_secs) | ov_secs < 0] <- 0
+      keep <- ov_secs > 0
+      if (!any(keep)) return(NULL)
+      
+      # turno pelo meio do BIN (não pelo mid do episódio)
+      mid_bin <- bs + lubridate::minutes(15)
+      turno   <- classificar_turno(mid_bin)
+      
+      data.frame(
+        OBJETO   = ep_hm$OBJETO[i],
+        SETOR    = ep_hm$SETOR[i],
+        ESTADO   = ep_hm$ESTADO[i],
+        turno    = turno,
+        time_bin = bs[keep],
+        ov_secs  = ov_secs[keep],
+        stringsAsFactors = FALSE
+      )
+    })
     
+    expanded <- do.call(rbind, expanded)
+    if (is.null(expanded) || !nrow(expanded)) return(NULL)
+    
+    # label HH:MM e níveis completos a cada 30 min
+    lvl_hora <- format(bin_starts, "%H:%M")
+    expanded$hora <- factor(format(expanded$time_bin, "%H:%M"), levels = lvl_hora)
+    expanded$turno <- factor(expanded$turno, levels = c("Amanhã","Tarde","Noite"))
+    
+    # agrega por OBJETO + hora + estado + turno
     hm <- aggregate(
-      dur_secs ~ OBJETO + hora + ESTADO + turno,
-      data = ep_hm,
+      ov_secs ~ OBJETO + hora + ESTADO + turno,
+      data = expanded,
       sum,
       na.rm = TRUE
     )
     
-    hm_op <- subset(hm, ESTADO == "OPERANDO")
+    # só OPERANDO
+    hm_op <- subset(hm, ESTADO == "OPERANDO" & !is.na(turno) & !is.na(hora))
     if (!nrow(hm_op)) return(NULL)
-    hm_op$horas <- hm_op$dur_secs / 3600
+    
+    # ✅ MINUTOS OPERANDO
+    hm_op$minutos <- hm_op$ov_secs / 60
     
     g <- ggplot2$ggplot(
       hm_op,
-      ggplot2$aes(x = hora, y = OBJETO, fill = horas)
+      ggplot2$aes(x = hora, y = OBJETO, fill = minutos)
     ) +
     ggplot2$geom_tile(color = "gray80") +
-    ggplot2$facet_grid(turno ~ ., scales = "free_y",switch = "y") +
+    ggplot2$facet_grid(turno ~ ., scales = "free_y", switch = "y") +
     ggplot2$labs(
-      x     = "Horário",
-      y     = "Máquina / Objeto",
-      fill  = "Horas OPERANDO"
+      x    = "Horário (30 min)",
+      y    = "Máquina / Objeto",
+      fill = "Minutos OPERANDO"
     ) +
     themasPlotyGGplot(text.x.angle = 45)
     
-    p <- plotly::ggplotly(g, tooltip = c("x","y","fill")) |> plotly::config(displaylogo = FALSE,displayModeBar = T)
-    layoutPlotyDefault(p, legend.text = "Atividade")
-
+    p <- plotly::ggplotly(g, tooltip = c("x","y","fill")) |>
+    plotly::config(displaylogo = FALSE, displayModeBar = TRUE)
+    
+    layoutPlotyDefault(p, legend.text = "Minutos")
   })
   
-  # ---------------------------
+   # ---------------------------
   # (4) Gráfico em linhas – médias móveis
   # ---------------------------
   output[[paste0("plotout_",4)]] <- plotly$renderPlotly({
@@ -840,7 +895,7 @@ fmt_horas <- function(x) {
     # renomeia colunas para ficar legível na UI
     df_display <- df
     names(df_display) <- c(
-      "Turno",
+      "Período",
       "Horas OPERANDO",
       "Horas PARADO",
       "Horas SETUP",
@@ -869,6 +924,9 @@ fmt_horas <- function(x) {
 # ===============================
 # Helper para box/plot container
 # ===============================
+fmt_dt <- function(x) format(as.POSIXct(x, tz = Sys.timezone()), "%d/%m/%Y %H:%M")
+fmt_d  <- function(x) format(as.Date(x), "%d/%m/%Y")
+
 dt_lang_ptbr <- function() {
   list(
     sEmptyTable     = "Nenhum registro encontrado",

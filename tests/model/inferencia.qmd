@@ -224,15 +224,16 @@ write.csv(df,"telemetria.csv")
 ```{r}
 
 pacotes <- dbGetQuery(con,"select * from pacote_ia")
-pacotes <- pacotes |> filter(CD_ID_OBJETO == 2L)
-index   <- 1
+pacotes <- pacotes |> filter(CD_ID_OBJETO == 1L)
+index   <- 5
 from    <- pacotes$DT_HR_LOCAL_BEGIN[index]
 to      <- pacotes$DT_HR_LOCAL_END[index]
 
 print(pacotes$OUTPUT_IA[index])
 
-frames <- get_frames_from_to(con,from_time = from,to_time = to,camera_id = c(3))
+frames <- get_frames_from_to(con,from_time = from,to_time = to,camera_id = c(2))
 build_gif_from_blob(frames)
 
-
+#oks
+# 1,2,3,5
 ```
