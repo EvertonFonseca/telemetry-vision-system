@@ -35,6 +35,8 @@ DROP TABLE IF EXISTS PLOT_TOOLS_PARAMETRO;
 DROP TABLE IF EXISTS PLOT;
 DROP TABLE IF EXISTS TIPO_PLOT;
 DROP TABLE IF EXISTS SETOR;
+DROP TABLE IF EXISTS ALARME_EVENTO;
+DROP TABLE IF EXISTS ALARME;
 
 -- =========================================================
 -- CRIAÇÃO DE TABELAS (InnoDB + utf8mb4)
@@ -197,7 +199,7 @@ CREATE TABLE IF NOT EXISTS OBJETO_CONTEXTO (
   DATA_OC      TEXT  NOT NULL,
   CD_ID_OBJETO INT   NOT NULL,
   CD_ID_FRAME  TEXT  NOT NULL,
-  DT_HR_LOCAL  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  DT_HR_LOCAL  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
   CONSTRAINT fk_objcontext_obj
     FOREIGN KEY (CD_ID_OBJETO) REFERENCES OBJETO(CD_ID_OBJETO)
     ON DELETE CASCADE
@@ -272,6 +274,47 @@ CREATE TABLE IF NOT EXISTS PACOTE_IA (
   FOREIGN KEY (CD_ID_TIPO_PACOTE)  REFERENCES TIPO_PACOTE(CD_ID_TIPO_PACOTE)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+-- =========================
+-- ALARMES
+-- =========================
+
+CREATE TABLE IF NOT EXISTS ALARME (
+  CD_ID_ALARME   INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  NAME_ALARME    VARCHAR(120) NOT NULL,
+  DS_ALARME      TEXT NULL,
+
+  -- escopo (pode amarrar em setor, objeto, ou ambos)
+  CD_ID_SETOR    INT NULL,
+  CD_ID_OBJETO   INT NULL,
+
+  SEVERITY       ENUM('INFO','LOW','MEDIUM','HIGH','CRITICAL') DEFAULT 'MEDIUM',
+  FG_ATIVO       BOOLEAN DEFAULT 1,
+
+  -- expressão tipo:
+  -- { "type":"or", "children":[ { "type":"and","children":[{"field":"DOBRA.ESTADO","op":"==","value":"OPERANDO"}] } ] }
+  JSON_EXPR      JSON NOT NULL,
+
+  DT_HR_LOCAL    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+  INDEX idx_alarme_setor (CD_ID_SETOR),
+  INDEX idx_alarme_obj   (CD_ID_OBJETO),
+
+  CONSTRAINT fk_alarme_setor FOREIGN KEY (CD_ID_SETOR) REFERENCES SETOR(CD_ID_SETOR) ON DELETE CASCADE,
+  CONSTRAINT fk_alarme_obj   FOREIGN KEY (CD_ID_OBJETO) REFERENCES OBJETO(CD_ID_OBJETO) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- (Opcional) histórico/trigger de alarmes
+CREATE TABLE IF NOT EXISTS ALARME_EVENTO (
+  CD_ID_ALARME_EVENTO BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  CD_ID_ALARME        INT NOT NULL,
+  CD_ID_OBJETO        INT NULL,
+  CD_ID_OC            INT NULL,
+  DT_HR_LOCAL         TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FG_ATIVO            BOOLEAN DEFAULT 1,
+  MSG_EVENTO          TEXT NULL,
+  FOREIGN KEY (CD_ID_ALARME) REFERENCES ALARME(CD_ID_ALARME) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 -- =========================================================
 -- ÍNDICES PARA PERFORMANCE
 -- =========================================================
@@ -327,48 +370,52 @@ ALTER TABLE OBJETO_TIPO
 -- =========================================================
 -- LIMPEZA POR HORAS (mantém 24h) + EVENTO A CADA 1 HORA
 -- =========================================================
+-- SHOW VARIABLES LIKE 'event_scheduler';
+-- SHOW EVENTS LIKE 'AG_BY_1_HOUR';
+-- SHOW CREATE EVENT AG_BY_1_HOUR;
 
+CREATE TABLE IF NOT EXISTS EVENT_CLEAN_LOG (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  ran_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  keep_hours INT NOT NULL,
+  deleted_rows BIGINT NOT NULL
+);
 -- (opcional) habilitar o event scheduler (requer permissão adequada)
--- SET GLOBAL event_scheduler = ON;
+SET GLOBAL event_scheduler = ON;
 
 -- -------- Procedure: apaga em lotes usando janela em HORAS --------
 DROP PROCEDURE IF EXISTS PR_CLEAR_OLD_DATA_HOURS;
-
 DELIMITER $$
 
 CREATE PROCEDURE PR_CLEAR_OLD_DATA_HOURS(IN p_keep_hours INT)
 BEGIN
   DECLARE v_rows INT DEFAULT 1;
+  DECLARE v_total BIGINT DEFAULT 0;
 
-  -- Apaga FRAME_CAMERA mais antigos que (agora - p_keep_hours horas).
-  -- A FK ON DELETE CASCADE garante a remoção correspondente em FRAME_CAMERA_BLOB.
   WHILE v_rows > 0 DO
     DELETE FROM FRAME_CAMERA
      WHERE DT_HR_LOCAL < (UTC_TIMESTAMP() - INTERVAL p_keep_hours HOUR)
      LIMIT 10000;
     SET v_rows = ROW_COUNT();
+    SET v_total = v_total + v_rows;
   END WHILE;
 
-  -- (opcional) Exemplo para outras tabelas com política de retenção:
-  /*
-  SET v_rows = 1;
-  WHILE v_rows > 0 DO
-    DELETE FROM CAMERA_CONFIG
-     WHERE DT_HR_LOCAL < (UTC_TIMESTAMP() - INTERVAL p_keep_hours HOUR)
-     LIMIT 10000;
-    SET v_rows = ROW_COUNT();
-  END WHILE;
-  */
+  INSERT INTO EVENT_CLEAN_LOG(keep_hours, deleted_rows)
+  VALUES (p_keep_hours, v_total);
 END$$
-
 DELIMITER ;
 
 -- -------- Evento: executa a cada 1 hora mantendo exatamente 24h --------
 DROP EVENT IF EXISTS AG_BY_1_HOUR;
-
+DELIMITER $$
 CREATE EVENT AG_BY_1_HOUR
   ON SCHEDULE EVERY 1 HOUR
-  DO CALL PR_CLEAR_OLD_DATA_HOURS(24);
+  STARTS CURRENT_TIMESTAMP + INTERVAL 1 HOUR
+  ON COMPLETION PRESERVE
+  DO
+    CALL PR_CLEAR_OLD_DATA_HOURS(24);
+$$
+DELIMITER ;
 
 -- =========================================================
 -- DADOS INICIAIS
@@ -416,5 +463,3 @@ INSERT INTO PLOT_TOOLS_ITEMS (CD_ID_TIPO,CD_ID_PTP) VALUES (6,1);
 INSERT INTO PLOT_TOOLS_ITEMS (CD_ID_TIPO,CD_ID_PTP) VALUES (6,2);
 INSERT INTO PLOT_TOOLS_ITEMS (CD_ID_TIPO,CD_ID_PTP) VALUES (8,1);    
 INSERT INTO PLOT_TOOLS_ITEMS (CD_ID_TIPO,CD_ID_PTP) VALUES (8,2);    
-
-SET GLOBAL event_scheduler = ON;

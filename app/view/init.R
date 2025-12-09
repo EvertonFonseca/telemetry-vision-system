@@ -11,7 +11,15 @@ box::use(
   ./global[...],
   dash =./dashboard[...],
   chatia = ./chat[...],
-  dbp  = ../infra/db_pool
+  dbp  = ../infra/db_pool,
+    # ✅ PRELOAD: carrega módulos 1x (elimina lentidão do “primeiro clique”)
+  camera    = ./camera,
+  setor     = ./setor,
+  objeto    = ./objeto,
+  estrutura = ./estrutura,
+  treinar   = ./treinar,
+  alarme    = ./alarme,
+  setor_agenda = ./setor_agenda
 )
 
 # Garante o pool no boot do processo
@@ -75,6 +83,10 @@ ui <- function(id) {
           html, body {
             height: 100%;
             overflow-y: auto !important;
+          }
+           /* barra de configuracao plot */
+          .modebar{
+             margin-top: -25px !important;
           }
 
           /* O corpo principal do shinydashboard */
@@ -174,6 +186,7 @@ server <- function(id) {
   moduleServer(id, function(input, output, session) {
     
     actionWebUser({
+      
       .init_reports_path() 
       ns <- NS(id)
       dbp$session_register(session)
@@ -195,19 +208,16 @@ server <- function(id) {
       
       # ---- Obsevent Menu Camera
       observeEvent(input$camera, {
-        
-        box::use(./camera)
+    
         sel <- input$camera
         
         if (identical(sel, "cameraNew")) {
           camera$uiNewCamera(ns,input,output,session,function(){
-            box::unload(camera)
-            gc()
+            camera$dispose(session)   # ✅ limpa só desta sessão
           })
         } else if (identical(sel, "cameraTable")) {
           camera$uiEditCamera(ns,input,output,session,function(){
-            box::unload(camera)
-            gc()
+            camera$dispose(session)   # ✅ limpa só desta sessão
           })
         }
         # reset da seleção para permitir clicar no mesmo item novamente
@@ -219,20 +229,23 @@ server <- function(id) {
       # ---- Obsevent Menu Setor
       observeEvent(input$setor, {
         
-        box::use(./setor)
         sel <- input$setor
         
         if (identical(sel, "setorNew")) {
           setor$uiNewSetor(ns,input,output,session,function(){
-            box::unload(setor)
-            gc()
+            setor$dispose(session)   # ✅ limpa só desta sessão
           })
         } else if (identical(sel, "setorTable")) {
           setor$uiEditSetor(ns,input,output,session,function(){
-            box::unload(setor)
-            gc()
+            setor$dispose(session)   # ✅ limpa só desta sessão
+          })
+        }else if (identical(sel, "setorAgenda")) {
+          setor_agenda$uiSetorAgenda(ns, input, output, session, callback = function() {
+            
           })
         }
+
+        
         # reset da seleção para permitir clicar no mesmo item novamente
         if (!is.null(sel) && sel %in% c("setorNew", "setorTable"))
         updateTabItems(session, inputId = "setor", selected = "noop")
@@ -241,18 +254,15 @@ server <- function(id) {
       # ---- Obsevent Menu Objeto
       observeEvent(input$objeto, {
         
-        box::use(./objeto)
         sel <- input$objeto
         
         if (identical(sel, "objetoNew")) {
           objeto$uiNewObjeto(ns,input,output,session,function(){
-            box::unload(objeto)
-            gc()
+           objeto$dispose(session)   # ✅ limpa só desta sessão
           })
         } else if (identical(sel, "objetoTable")) {
           objeto$uiEditObjeto(ns,input,output,session,function(){
-            box::unload(objeto)
-            gc()
+            objeto$dispose(session)   # ✅ limpa só desta sessão
           })
         }
         # reset da seleção para permitir clicar no mesmo item novamente
@@ -263,63 +273,53 @@ server <- function(id) {
       # ---- Obsevent Menu Objeto
       observeEvent(input$estrutura, {
         
-        box::use(./estrutura)
         sel <- input$estrutura
         
         if (identical(sel, "estruturaNew")) {
           estrutura$uiNewEstrutura(ns,input,output,session,function(){
-            box::unload(estrutura)
-            gc()
+            estrutura$dispose(session)   # ✅ limpa só desta sessão
           })
         } else if (identical(sel, "estruturaTable")) {
           estrutura$uiEditEstrutura(ns,input,output,session,function(){
-            box::unload(estrutura)
-            gc()
+            estrutura$dispose(session)   # ✅ limpa só desta sessão
           })
         }
         # reset da seleção para permitir clicar no mesmo item novamente
         if (!is.null(sel) && sel %in% c("estruturaNew", "estruturaTable"))
-        updateTabItems(session, inputId = "objeto", selected = "noop")
+        updateTabItems(session, inputId = "estrutura", selected = "noop")
       },ignoreInit = TRUE,ignoreNULL = TRUE)
       
-      # ---- Obsevent Menu Plot
-      # observeEvent(input$plot, {
-      
-      #   box::use(./plot)
-      #   sel <- input$plot
-      
-      #   if (identical(sel, "plotNew")) {
-      #     plot$uiNewPlot(ns,input,output,session,function(){
-      #       box::unload(plot)
-      #       gc()
-      #     })
-      #   } else if (identical(sel, "plotTable")) {
-      #     plot$uiEditPlot(ns,input,output,session,function(){
-      #       box::unload(plot)
-      #       gc()
-      #     })
-      #   }
-      #   # reset da seleção para permitir clicar no mesmo item novamente
-      #   if (!is.null(sel) && sel %in% c("plotNew", "plotTable"))
-      #   updateTabItems(session, inputId = "plot", selected = "noop")
-      
-      # },ignoreInit = TRUE,ignoreNULL = TRUE)
+      # ---- Obsevent Menu Alarme
+      observeEvent(input$alarme, {
+        
+        sel <- input$alarme
+        
+        if (identical(sel, "alarmeNew")) {
+          alarme$uiNewAlarme(ns,input,output,session,callback = function(){
+            alarme$dispose(session)   # ✅ limpa só desta sessão
+          })
+        } else if (identical(sel, "alarmeTable")) {
+          alarme$uiEditAlarme(ns,input,output,session,function(){
+            alarme$dispose(session)   # ✅ limpa só desta sessão
+          })
+        }
+        # reset da seleção para permitir clicar no mesmo item novamente
+        if (!is.null(sel) && sel %in% c("alarmeNew", "alarmeTable"))
+        updateTabItems(session, inputId = "alarme", selected = "noop")
+      },ignoreInit = TRUE,ignoreNULL = TRUE)
       
       # ---- Obsevent Menu Camera
       observeEvent(input$treinar, {
         
-        box::use(./treinar)
         sel <- input$treinar
         
         if (identical(sel, "treinarNew")) {
           treinar$uiNewTreinar(ns,input,output,session,function(){
-            box::unload(treinar)
-            gc()
+            treinar$dispose(session)   # ✅ limpa só desta sessão
           })
         } else if (identical(sel, "treinarTable")) {
           treinar$uiEditTreinar(ns,input,output,session,function(){
-            box::unload(treinar)
-            gc()
+            treinar$dispose(session)   # ✅ limpa só desta sessão
           })
         }
         # reset da seleção para permitir clicar no mesmo item novamente
@@ -458,14 +458,14 @@ renderMenuSideBarMain <- function(ns){
             menuSubItem(text = htmltools::HTML("&nbsp;"), tabName = "noop",selected = TRUE)
           )
         ),
-        #  sidebarMenu(id = ns("plot"),
-        #   menuItem("Grafico", icon = icon("chart-line"),
-        #     menuSubItem("Novo",  tabName = "plotNew"),
-        #     menuSubItem("Lista", tabName = "plotTable"),
-        #     # subItem oculto para resetar seleção
-        #     menuSubItem(text = htmltools::HTML("&nbsp;"), tabName = "noop",selected = TRUE)
-        #   )
-        # ),
+         sidebarMenu(id = ns("alarme"),
+          menuItem("Alarme", icon = shiny::icon("exclamation-triangle"),
+            menuSubItem("Novo",  tabName = "alarmeNew"),
+            menuSubItem("Lista", tabName = "alarmeTable"),
+            # subItem oculto para resetar seleção
+            menuSubItem(text = htmltools::HTML("&nbsp;"), tabName = "noop",selected = TRUE)
+          )
+        ),
         sidebarMenu(id = ns("treinar"),
           menuItem("Treinar", icon = icon("brain"),
             menuSubItem("Novo",  tabName = "treinarNew"),

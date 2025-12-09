@@ -20,7 +20,7 @@ box::use(
       set_readonly_js,
       actionWebUser
     ],
-  .. / model / swiper[...],
+  ../model/Swiper[...],
   DT,
   shinycssloaders,
   .. / logic/objeto_dao[...],
@@ -44,10 +44,53 @@ box::use(
   db   = ../infra/database
 )
 
+
+# ------------------------------------------------------------
+# Estado por sessão (NUNCA global)
+# ------------------------------------------------------------
+.get_private <- function(session, key = "setor_private") {
+  stopifnot(!is.null(session))
+  if (is.null(session$userData[[key]])) {
+    session$userData[[key]] <- new.env(parent = emptyenv())
+  }
+  session$userData[[key]]
+}
+
+# Limpa somente o estado desse módulo nessa sessão
+#' @export
+dispose <- function(session, key = "setor_private") {
+  e <- session$userData[[key]]
+  if (!is.null(e)) {
+    rm(list = ls(envir = e, all.names = TRUE), envir = e)
+  }
+  session$userData[[key]] <- NULL
+  invisible(gc())
+}
+
+# (Opcional) registra limpeza automática quando o usuário fechar a aba/navegador
+.register_auto_dispose <- function(session, key = "setor_private") {
+  # evita registrar múltiplas vezes
+  flag <- paste0(key, "_onend_registered")
+  if (isTRUE(session$userData[[flag]])) return(invisible(NULL))
+  session$userData[[flag]] <- TRUE
+
+  session$onSessionEnded(function() {
+    # tenta limpar sem quebrar nada
+    try(dispose(session, key), silent = TRUE)
+  })
+
+  invisible(NULL)
+}
+
 initMap <- FALSE
 
 #' @export
  uiNewObjeto <- function(ns,input,output,session,callback){
+  
+  .register_auto_dispose(session)
+  
+  e <- .get_private(session)
+  
   
   obs       <- newObserve()
   obs2      <- newObserve()
@@ -64,6 +107,35 @@ initMap <- FALSE
   componenteReactive <- reactiveVal(NULL)
   estruturas         <- selectAllEstrutura(dbp$get_pool())
   updateObjDynamic   <- reactiveVal(FALSE)
+   
+   if(nrow(cameras) == 0){
+    obs$destroy()
+    obs2$destroy()
+    obs3$destroy()
+    updateObjDynamic(FALSE)
+    if(!is.null(frame_data)) unlink(frame_data$img_path)
+    swiperDestroy(idSwiper)
+    showNotification("Nenhum registro de câmera foi encontrado!", type = "error")
+    callback()
+  }else if(nrow(setores) == 0){
+    obs$destroy()
+    obs2$destroy()
+    obs3$destroy()
+    updateObjDynamic(FALSE)
+    if(!is.null(frame_data)) unlink(frame_data$img_path)
+    swiperDestroy(idSwiper)
+    showNotification("Nenhum registro de setor foi encontrado!", type = "error")
+    callback()
+  }else if(nrow(estruturas) == 0){
+    obs$destroy()
+    obs2$destroy()
+    obs3$destroy()
+    updateObjDynamic(FALSE)
+    if(!is.null(frame_data)) unlink(frame_data$img_path)
+    swiperDestroy(idSwiper)
+    showNotification("Nenhum registro de estrutura foi encontrado!", type = "error")
+    callback()
+  }
   
   id       <- ns('dialogObj')
   cssStyle <- list()
@@ -586,7 +658,11 @@ initMap <- FALSE
  
 #' @export
 uiEditObjeto <- function(ns,input,output,session,callback){
-  
+
+  .register_auto_dispose(session)
+
+  e <- .get_private(session)
+
   objetos         <- reactiveVal(selectAllObjetos(dbp$get_pool()))
   objeto          <- reactiveVal(NULL)
   obs             <- newObserve()
@@ -604,6 +680,35 @@ uiEditObjeto <- function(ns,input,output,session,callback){
   componenteReactive <- reactiveVal(NULL)
   estruturas         <- selectAllEstrutura(dbp$get_pool())  
   updateObjDynamic   <- reactiveVal(FALSE)
+  
+  if(nrow(cameras) == 0){
+    obs$destroy()
+    obs2$destroy()
+    obs3$destroy()
+    updateObjDynamic(FALSE)
+    if(!is.null(frame_data)) unlink(frame_data$img_path)
+    swiperDestroy(idSwiper)
+    showNotification("Nenhum registro de câmera foi encontrado!", type = "error")
+    callback()
+  }else if(nrow(setores) == 0){
+    obs$destroy()
+    obs2$destroy()
+    obs3$destroy()
+    updateObjDynamic(FALSE)
+    if(!is.null(frame_data)) unlink(frame_data$img_path)
+    swiperDestroy(idSwiper)
+    showNotification("Nenhum registro de setor foi encontrado!", type = "error")
+    callback()
+  }else if(nrow(estruturas) == 0){
+    obs$destroy()
+    obs2$destroy()
+    obs3$destroy()
+    updateObjDynamic(FALSE)
+    if(!is.null(frame_data)) unlink(frame_data$img_path)
+    swiperDestroy(idSwiper)
+    showNotification("Nenhum registro de estrutura foi encontrado!", type = "error")
+    callback()
+  }
   
   id       <- ns('dialogObj')
   cssStyle <- list()

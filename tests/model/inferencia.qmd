@@ -181,14 +181,25 @@ con <- DBI::dbConnect(
             host = '127.0.0.1',
             port = 3306
         )
+
+
+# con <- DBI::dbConnect(
+#             RMariaDB::MariaDB(),
+#             dbname = 'system',
+#             username = 'root',
+#             password = 'elite@',
+#             host = '172.30.0.26',
+#             port = 3306
+#         )
+
 ```
 
 ## Frames
 
 ```{r}
+
 frames <- get_frames_window(con,1001418,janela = 35)
 #frames$DATE_TIME <- format(frames$DT_HR_LOCAL,"%d/%m/%y %H:%M:%S:%OS3")
-
 difftime(last(frames$DT_HR_LOCAL),first(frames$DT_HR_LOCAL))
 
 ```
@@ -196,7 +207,7 @@ difftime(last(frames$DT_HR_LOCAL),first(frames$DT_HR_LOCAL))
 # Video
 
 ```{r}
-codigo  <- 1239382
+codigo  <-1597980
 anime   <- build_gif_from_blob( get_frames_window(con,codigo,janela = 35))
 print(anime)
 

@@ -52,8 +52,55 @@ box::use(
   db   = ../infra/database
 )
 
+# ------------------------------------------------------------
+# Estado por sessão (NUNCA global)
+# ------------------------------------------------------------
+.get_private <- function(session, key = "setor_private") {
+  stopifnot(!is.null(session))
+  if (is.null(session$userData[[key]])) {
+    session$userData[[key]] <- new.env(parent = emptyenv())
+  }
+  session$userData[[key]]
+}
+
+# Limpa somente o estado desse módulo nessa sessão
+#' @export
+dispose <- function(session, key = "setor_private") {
+  e <- session$userData[[key]]
+  if (!is.null(e)) {
+    rm(list = ls(envir = e, all.names = TRUE), envir = e)
+  }
+  session$userData[[key]] <- NULL
+  invisible(gc())
+}
+
+# (Opcional) registra limpeza automática quando o usuário fechar a aba/navegador
+.register_auto_dispose <- function(session, key = "setor_private") {
+  # evita registrar múltiplas vezes
+  flag <- paste0(key, "_onend_registered")
+  if (isTRUE(session$userData[[flag]])) return(invisible(NULL))
+  session$userData[[flag]] <- TRUE
+
+  session$onSessionEnded(function() {
+    # tenta limpar sem quebrar nada
+    try(dispose(session, key), silent = TRUE)
+  })
+
+  invisible(NULL)
+}
+
 #' @export
  uiNewCamera <- function(ns,input,output,session,callback){
+   
+   .register_auto_dispose(session)
+   
+   e <- .get_private(session)
+   
+   # exemplo: cache pesado somente quando precisar
+   # if (is.null(e$loaded)) {
+   #   e$loaded <- TRUE
+   #   # e$big_df <- DBI::dbGetQuery(... )  # pesado
+   # }
 
   obs <- newObserve()
  
@@ -147,6 +194,10 @@ box::use(
  
 #' @export
 uiEditCamera <- function(ns,input,output,session,callback = NULL){
+
+   .register_auto_dispose(session)
+   
+   e <- .get_private(session)
 
   #open database
   obs <- newObserve()

@@ -21,6 +21,16 @@ init <- function() {
     idleTimeout = as.integer(Sys.getenv("DB_IDLE_TIMEOUT", "120"))
   )
 
+#  .state$pool <- dbPool(
+#     drv      = MariaDB(),
+#     dbname   = Sys.getenv("DB_NAME", "system"),
+#     host     = Sys.getenv("DB_HOST", "172.30.0.26"),
+#     port     = as.integer(Sys.getenv("DB_PORT", "3306")),
+#     username = Sys.getenv("DB_USER", "root"),
+#     password = Sys.getenv("DB_PASS", "elite@"),
+#     idleTimeout = as.integer(Sys.getenv("DB_IDLE_TIMEOUT", "120"))
+#   )
+
   onStop(function() {
     if (!is.null(.state$pool)) poolClose(.state$pool)
     .state$pool <- NULL

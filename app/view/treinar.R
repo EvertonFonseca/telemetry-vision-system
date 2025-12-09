@@ -46,6 +46,43 @@ box::use(
   utils[...]
 )
 
+# ------------------------------------------------------------
+# Estado por sessão (NUNCA global)
+# ------------------------------------------------------------
+.get_private <- function(session, key = "setor_private") {
+  stopifnot(!is.null(session))
+  if (is.null(session$userData[[key]])) {
+    session$userData[[key]] <- new.env(parent = emptyenv())
+  }
+  session$userData[[key]]
+}
+
+# Limpa somente o estado desse módulo nessa sessão
+#' @export
+dispose <- function(session, key = "setor_private") {
+  e <- session$userData[[key]]
+  if (!is.null(e)) {
+    rm(list = ls(envir = e, all.names = TRUE), envir = e)
+  }
+  session$userData[[key]] <- NULL
+  invisible(gc())
+}
+
+# (Opcional) registra limpeza automática quando o usuário fechar a aba/navegador
+.register_auto_dispose <- function(session, key = "setor_private") {
+  # evita registrar múltiplas vezes
+  flag <- paste0(key, "_onend_registered")
+  if (isTRUE(session$userData[[flag]])) return(invisible(NULL))
+  session$userData[[flag]] <- TRUE
+
+  session$onSessionEnded(function() {
+    # tenta limpar sem quebrar nada
+    try(dispose(session, key), silent = TRUE)
+  })
+
+  invisible(NULL)
+}
+
 # ---------- Parâmetros ----------
 PREFETCH_AHEAD  <- 16L
 MAX_CACHE_ITEMS <- 400L
@@ -610,7 +647,7 @@ uiMain <- function(ns, setores) {
           airDatepickerInput(
             inputId = ns("datetimeBegin"), label = "Data e Hora De:",
             language = "pt-BR", timepicker = TRUE, dateFormat = "dd/MM/yyyy",
-            timepickerOpts = timepickerOptions(hoursStep = 1, minutesStep = 5),
+            timepickerOpts = timepickerOptions(hoursStep = 1, minutesStep = 1),
             update_on  = "change",
             readonly   = TRUE,
             onkeydown  = "if(event.key==='Enter'){this.blur();}",
@@ -619,7 +656,7 @@ uiMain <- function(ns, setores) {
           airDatepickerInput(
             inputId = ns("datetimeEnd"), label = "Data e Hora Até:",
             language = "pt-BR", timepicker = TRUE, dateFormat = "dd/MM/yyyy",
-            timepickerOpts = timepickerOptions(hoursStep = 1, minutesStep = 5),
+            timepickerOpts = timepickerOptions(hoursStep = 1, minutesStep = 1),
             update_on  = "change",
             readonly   = TRUE,
             onkeydown  = "if(event.key==='Enter'){this.blur();}",
@@ -733,12 +770,22 @@ get_current_frame_ts <- function(rv, tz = "UTC", fmt = NULL) {
 #' @export
 uiNewTreinar <- function(ns, input, output, session, callback){
 
+  .register_auto_dispose(session)
+
+  e <- .get_private(session)
+
   clockupdate <- reactiveVal()
   obs         <- newObserve()
   setores      <- selectAllSetors(dbp$get_pool())
   objetos      <- selectAllObjetos(dbp$get_pool())
   tiposPacotes <- selectAllTypesPacote(dbp$get_pool())
   objeto      <- NULL
+  
+  if(nrow(objetos) == 0){
+    obs$destroy()
+    showNotification("Nenhum registro de objeto foi encontrado!", type = "error")
+    callback()
+  }
 
   # ---------- Estado player principal ----------
   rv <- reactiveValues(
@@ -879,7 +926,7 @@ uiNewTreinar <- function(ns, input, output, session, callback){
       style = "height: 80%; overflow: hidden;",
       inlineCSS(cssStyle),
       dialogModal(
-        title = "Novo treinamento",
+        title = "Novo Pacote",
         size  = 'm',
         uiMain(ns, setores),
         footer = uiOutput(ns('uiFooter'))

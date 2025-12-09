@@ -1,6 +1,7 @@
 box::use(
   shiny[...],
   shinyjs,
+  shinyWidgets[airDatepickerInput,timepickerOptions],
   ggplot2,
   plotly,
   jsonlite,
@@ -13,7 +14,49 @@ box::use(
   DBI,
   DT,
   dbp  = ../infra/db_pool,
-  ./global[ actionWebUser,tagAppendAttributesFind,debugLocal]
+  ./global[ actionWebUser,tagAppendAttributesFind,debugLocal],
+  memoise,
+  cachem,
+  ../logic/objeto_dao[selectAllObjetos],
+  ./video_clip[video_clip_open],
+  ../logic/dashboard_dao[...]
+)
+
+.cache_obj <- cachem::cache_mem(max_size = 200 * 1024^2) # 200 MB
+
+compute_dados <- function(pool,
+                          dt_de_utc, dt_ate_utc,
+                          dt_de_local, dt_ate_local,
+                          setor = NULL, maquina = NULL,
+                          tzL = Sys.timezone()) {
+
+  df_raw <- run_query(pool, dt_de_utc, dt_ate_utc, setor, maquina)
+  if (!nrow(df_raw)) return(NULL)
+
+  df_raw$DATE_TIME <- from_utc(df_raw$DATE_TIME, tz = tzL)
+  df <- expand_atributos(df_raw)
+
+  df <- apply_setup_state(df, "BOBINA.ESTADO", "AREA_DE_TRABALHO_A.TRABALHADOR", min_parado_secs = 60, by_cols = c("SETOR","OBJETO"))
+  df <- apply_setup_state(df, "PRENSA.ESTADO", "AREA_DE_TRABALHO_B.TRABALHADOR", min_parado_secs = 60, by_cols = c("SETOR","OBJETO"))
+  df <- apply_setup_state(df, "DOBRA.ESTADO",  "AREA_DE_TRABALHO.TRABALHADOR",   min_parado_secs = 60, by_cols = c("SETOR","OBJETO"))
+  df <- apply_setup_state(df, "SOLDA.ESTADO",  "AREA_DE_TRABALHO.TRABALHADOR",   min_parado_secs = 60, by_cols = c("SETOR","OBJETO"))
+
+  ep <- build_episodes(df, min_secs = 60, dt_ate = dt_ate_local, max_gap_secs = 300)
+  ep <- cap_episodes(ep, dt_de_local, dt_ate_local)
+  if (is.null(ep) || !nrow(ep)) return(NULL)
+
+  ep_m <- ep[ep$ESTADO %in% c("OPERANDO","PARADO","SETUP"), , drop = FALSE]
+
+  list(
+    df_raw = df_raw, df = df, ep = ep, ep_m = ep_m,
+    dt_de_local = dt_de_local, dt_ate_local = dt_ate_local,
+    dt_de_utc = dt_de_utc, dt_ate_utc = dt_ate_utc
+  )
+}
+
+compute_dados_cached <- memoise::memoise(
+  compute_dados,
+  cache = .cache_obj
 )
 
 `%||%` <- function(x, y) if (is.null(x)) y else x
@@ -52,58 +95,10 @@ safe_parse_atributos <- function(txt) {
   as.data.frame(flat, stringsAsFactors = FALSE) |> tibble()
 }
 
-# ===============================
-# SQL – focado na máquina DOBRA
-# ===============================
-
-build_sql <- function(minutos,
-                      setor  = NULL,
-                      objeto = NULL) {
-
-  base <- paste(
-    "SELECT 
-        oc.DATA_OC     AS ATRIBUTOS,
-        f.DT_HR_LOCAL  AS DATE_TIME,
-        o.NAME_OBJETO  AS OBJETO,
-        s.NAME_SETOR   AS SETOR
-     FROM objeto_contexto oc
-     LEFT JOIN objeto o       ON o.CD_ID_OBJETO = oc.CD_ID_OBJETO
-     LEFT JOIN setor s        ON s.CD_ID_SETOR  = o.CD_ID_SETOR
-     LEFT JOIN frame_camera f ON f.CD_ID_FRAME  = oc.CD_ID_FRAME"
-  )
-
-  where <- c()
-
-  if (!is.null(setor)) {
-    where <- c(where, sprintf("s.NAME_SETOR  = '%s'", setor))
-  }
-  if (!is.null(objeto)) {
-    where <- c(where, sprintf("o.NAME_OBJETO = '%s'", objeto))
-  }
-
-  # (opcional) janela de tempo em minutos – se quiser, ative:
-  # where <- c(where,
-  #            sprintf("f.DT_HR_LOCAL >= (UTC_TIMESTAMP() - INTERVAL %d MINUTE)", as.integer(minutos)))
-
-  if (length(where)) {
-    base <- paste0(base, "\nWHERE ", paste(where, collapse = " AND "), "\n")
-  }
-
-  base
-}
-
-run_query <- function(pool,
-                      minutos,
-                      setor  = NULL,
-                      objeto = NULL) {
-  sql <- build_sql(minutos, setor = setor, objeto = objeto)
-  DBI::dbGetQuery(pool, sql)
-}
 
 # ===============================
 # Expandir ATRIBUTOS -> colunas
 # ===============================
-
 expand_atributos <- function(df_raw) {
   if (!nrow(df_raw)) return(df_raw)
   rows <- lapply(seq_len(nrow(df_raw)), function(i) {
@@ -113,9 +108,9 @@ expand_atributos <- function(df_raw) {
     bind_rows(bind_cols(base, extra))
   })
   out <- bind_rows(rows)
-  out |>
-    mutate(DATE_TIME = as.POSIXct(DATE_TIME, tz = Sys.timezone())) |>
-    arrange(DATE_TIME)
+ out |>
+  mutate(DATE_TIME = as.POSIXct(DATE_TIME)) |>
+  arrange(DATE_TIME)
 }
 
 # ===============================
@@ -136,7 +131,7 @@ apply_setup_state <- function(df,
   need <- c("DATE_TIME", col_estado_maquina, col_trabalhador, by_cols)
   miss <- setdiff(need, names(df))
   if (length(miss)) {
-    warning("apply_setup_state(): colunas ausentes: ", paste(miss, collapse = ", "))
+    #warning("apply_setup_state(): colunas ausentes: ", paste(miss, collapse = ", "))
     return(df)
   }
 
@@ -186,13 +181,14 @@ apply_setup_state <- function(df,
 # ===============================
 # Episódios de estado (run-length)
 # ===============================
-build_episodes <- function(df, min_secs = 60) {
+build_episodes <- function(df, min_secs = 60, dt_ate = NULL,
+                           max_gap_secs = 300, tail_secs = NULL) {
+
   if (!nrow(df)) return(NULL)
 
   base_cols <- c("DATE_TIME", "OBJETO", "SETOR")
   attr_cols <- setdiff(names(df), base_cols)
 
-  # só colunas categóricas
   attr_cols <- attr_cols[vapply(df[attr_cols], function(v) is.character(v) || is.factor(v), logical(1))]
   if (!length(attr_cols)) return(NULL)
 
@@ -211,34 +207,57 @@ build_episodes <- function(df, min_secs = 60) {
 
   if (!nrow(long)) return(NULL)
 
+  norm_chr <- function(x) toupper(trimws(as.character(x)))
+
   make_ep <- function(d) {
     d <- d[order(d$DATE_TIME), ]
     n <- nrow(d)
     if (n == 0) return(NULL)
 
-    times <- d$DATE_TIME
-    state <- d$ESTADO
+    tz_use <- attr(d$DATE_TIME, "tzone") %||% Sys.timezone()
+    times  <- as.POSIXct(d$DATE_TIME, tz = tz_use)
 
-    # smoothing: troca com dt<min_secs => mantém anterior
-    clean <- state
+    # dt_ate “real” do range (em vez de Sys.time()), mas SEM esticar se não tem dado
+    dt_ate_use <- dt_ate
+    if (is.null(dt_ate_use) || is.na(dt_ate_use)) dt_ate_use <- max(times, na.rm = TRUE)
+    dt_ate_use <- as.POSIXct(dt_ate_use, tz = tz_use)
+
+    # tail padrão = passo típico (limitado por max_gap)
+    if (is.null(tail_secs)) {
+      dd <- diff(as.numeric(times))
+      step <- suppressWarnings(stats::median(dd[dd > 0], na.rm = TRUE))
+      if (!is.finite(step)) step <- 60
+      tail_secs <- min(max_gap_secs, as.numeric(step))
+    }
+
+    st_raw <- as.character(d$ESTADO)
+    st     <- norm_chr(st_raw)
+
+    clean <- st_raw
+
+    # (seu smoothing de PARADO -> OPERANDO/SETUP, mantive igual)
+    keep_states <- c("OPERANDO", "SETUP")
     if (n >= 2L) {
-      prev <- state[1]
-      for (i in 2:n) {
-        dt <- as.numeric(difftime(times[i], times[i-1], units = "secs"))
-        if (!is.na(dt) && state[i] != prev && dt < min_secs) {
-          clean[i] <- prev
-        } else {
-          prev <- state[i]
-          clean[i] <- prev
+      for (i in seq_len(n - 1L)) {
+        if (st[i] != "PARADO") next
+        last_j <- NA_integer_
+        j <- i + 1L
+        while (j <= n) {
+          dt <- as.numeric(difftime(times[j], times[i], units = "secs"))
+          if (is.na(dt) || dt < 0 || dt > min_secs) break
+          if (st[j] %in% keep_states) last_j <- j
+          j <- j + 1L
         }
+        if (!is.na(last_j)) clean[i] <- st_raw[last_j]
       }
     }
 
-    # end_time por amostra: vai até o próximo registro (último vai até agora)
-    end_obs <- c(times[-1], Sys.time())
+    # end_obs com controle de gap
+    end_obs <- c(times[-1], pmin(dt_ate_use, times[n] + tail_secs))
+    end_obs <- pmin(end_obs, times + max_gap_secs)  # ✅ não estica além do gap
+
     end_obs[end_obs < times] <- times[end_obs < times]
 
-    # índices de início de cada run
     start_idx <- which(c(TRUE, clean[-1] != clean[-n]))
     end_idx   <- c(start_idx[-1] - 1L, n)
 
@@ -259,6 +278,7 @@ build_episodes <- function(df, min_secs = 60) {
   if (is.null(ep) || !nrow(ep)) return(NULL)
 
   ep$dur_secs[is.na(ep$dur_secs) | ep$dur_secs < 0] <- 0
+  ep <- ep[ep$dur_secs > 0, , drop = FALSE]
   ep
 }
 
@@ -266,19 +286,35 @@ build_episodes <- function(df, min_secs = 60) {
 # ===============================
 # Métricas de utilização diária
 # ===============================
-
 build_daily_util <- function(ep) {
   if (is.null(ep) || !nrow(ep)) return(NULL)
 
+  # garanta tipos
+  ep$start_time <- as.POSIXct(ep$start_time, tz = attr(ep$start_time, "tzone") %||% Sys.timezone())
+  ep$dur_secs   <- as.numeric(ep$dur_secs)
+
+  # remove lixo
+  ep <- ep[!is.na(ep$start_time) & !is.na(ep$dur_secs) & ep$dur_secs >= 0, , drop = FALSE]
+  if (!nrow(ep)) return(NULL)
+
   ep$date <- as.Date(ep$start_time)
 
+  # total por dia
   tot <- aggregate(dur_secs ~ date, data = ep, sum, na.rm = TRUE)
-  op  <- subset(ep, ESTADO == "OPERANDO")
-  op  <- aggregate(dur_secs ~ date, data = op, sum, na.rm = TRUE)
-  names(op)[2] <- "dur_op"
+  if (is.null(tot) || !nrow(tot)) return(NULL)
 
-  dfu <- merge(tot, op, by = "date", all.x = TRUE)
-  dfu$dur_op[is.na(dfu$dur_op)] <- 0
+  # operando por dia (pode não existir)
+  op <- ep[ep$ESTADO == "OPERANDO", , drop = FALSE]
+  if (nrow(op)) {
+    op <- aggregate(dur_secs ~ date, data = op, sum, na.rm = TRUE)
+    names(op)[2] <- "dur_op"
+    dfu <- merge(tot, op, by = "date", all.x = TRUE)
+    dfu$dur_op[is.na(dfu$dur_op)] <- 0
+  } else {
+    dfu <- tot
+    dfu$dur_op <- 0
+  }
+
   dfu$util <- ifelse(dfu$dur_secs > 0, dfu$dur_op / dfu$dur_secs * 100, NA_real_)
   dfu[order(dfu$date), ]
 }
@@ -381,16 +417,85 @@ layoutPlotyDefault <- function(x, legend.text = ''){
 # ===============================
 #' @export
 ui <- function(ns) {
+
   tagList(
     fluidRow(
       style = "margin-top: 50px;",
-
-      # Box 1 – horas OPERANDO
-      column(3,
-        shinydashboard::valueBox(
+      # Box de filtros
+      column(12,
+        box(
+          width = 12,
+          solidHeader = TRUE,
+          collapsible = TRUE,
+          title = tags$span("Filtros", style = "font-size: 16px;"),
+          fluidRow(
+            column(3,
+              shiny::selectizeInput(
+                ns("f_setor"), "Setor",
+                choices = NULL, multiple = TRUE,
+                options = list(placeholder = "Todos os setores")
+              )
+            ),
+            column(3,
+              shiny::selectizeInput(
+                ns("f_maquina"), "Máquina",
+                choices = NULL, multiple = TRUE,
+                options = list(placeholder = "Todas as máquinas")
+              )
+            ),
+            column(3,
+              shinyWidgets::airDatepickerInput(
+                ns("f_de"), "De",
+                value = NULL,
+                timepicker = TRUE,
+                placeholder = "Sem filtro (padrão: últimas 24h)",
+                timepickerOpts = timepickerOptions(hoursStep = 1, minutesStep = 1),
+                autoClose = TRUE,
+                readonly   = TRUE,
+                dateFormat = "dd/MM/yyyy",
+                language = "pt-BR"
+              )
+            ),
+            column(2,
+              shinyWidgets::airDatepickerInput(
+                ns("f_ate"), "Até",
+                value = NULL,
+                timepicker = TRUE,
+                placeholder = "Sem filtro (padrão: últimas 24h)",
+                timepickerOpts = timepickerOptions(hoursStep = 1, minutesStep = 1),
+                autoClose = TRUE,
+                readonly   = TRUE,
+                dateFormat = "dd/MM/yyyy",
+                language = "pt-BR"
+              )
+            ),
+            column(1,
+              div(style="padding-top: 25px; margin-left: -10px; display:flex; gap:4px;",
+              shiny::actionButton(
+                ns("bt_apply_filters"),
+                label = NULL,
+                icon = shiny::icon("search"),
+                class = "btn btn-secondary",
+                title = "Aplicar filtros"
+              ),
+              shiny::actionButton(
+                ns("bt_clear_filters"),
+                label = NULL,
+                icon = shiny::icon("eraser"),
+                class = "btn btn-warning",
+                title = "Limpar filtros (padrão: últimas 24h / tudo)"
+              )
+            )
+          )
+        )
+      )
+    ),
+    # Box 1 – horas OPERANDO
+    column(3,
+      shinydashboard::valueBox(
           width = '100%',
           value = uiOutput(ns(paste0('vbOperando', 1))),
-          subtitle = 'Tempo OPERANDO (setor DOBRA E SOLDA)',
+          subtitle = 'Tempo OPERANDO',
           icon = icon('play'),
           color = "green"
         ) |> tagAppendAttributesFind(target = 1, style = 'min-height: 102px')
@@ -401,7 +506,7 @@ ui <- function(ns) {
         shinydashboard::valueBox(
           width = '100%',
           value = uiOutput(ns(paste0('vbParado', 1))),
-          subtitle = 'Tempo PARADO (setor DOBRA E SOLDA)',
+          subtitle = 'Tempo PARADO',
           icon = icon('pause'),
           color = "red"
         ) |> tagAppendAttributesFind(target = 1, style = 'min-height: 102px')
@@ -412,7 +517,7 @@ ui <- function(ns) {
         shinydashboard::valueBox(
           width = '100%',
           value = uiOutput(ns(paste0('vbSetup',1))),
-          subtitle = 'Tempo em SETUP (setor DOBRA E SOLDA)',
+          subtitle = 'Tempo em SETUP',
           icon = icon('tools'),
           color = "yellow"
         ) |> tagAppendAttributesFind(target = 1, style = 'min-height: 102px')
@@ -423,7 +528,7 @@ ui <- function(ns) {
         shinydashboard::valueBox(
           width = '100%',
           value = uiOutput(ns(paste0('vbUtilizacao',1))),
-          subtitle = 'Utilização média do setor',
+          subtitle = 'Utilização média',
           icon = icon('chart-line'),
           color = "blue"
         ) |> tagAppendAttributesFind(target = 1, style = 'min-height: 102px')
@@ -441,10 +546,50 @@ ui <- function(ns) {
 #' @export
 server <- function(ns, input, output, session) {
 
-  pool <- dbp$get_pool()
+  pool      <- dbp$get_pool()
+  objs_tmp  <- selectAllObjetos(pool)
+  actionClickplot2 <- reactiveVal(FALSE)
+  
+  rv <- shiny::reactiveValues(
+    setor  = NULL,
+    maquina = NULL,
+    dt_de  = NULL,  # NULL = sem filtro explícito
+    dt_ate = NULL
+  )
 
+  observeEvent(input$bt_apply_filters, {
+    .cache_obj$reset()   # ✅ força requery do banco
+    rv$setor   <- if (!length(input$f_setor)) NULL else input$f_setor
+    rv$maquina <- if (!length(input$f_maquina)) NULL else input$f_maquina
+    
+    # datas: podem ser NULL (sem filtro)
+    rv$dt_de   <- input$f_de
+    rv$dt_ate  <- input$f_ate
+  }, ignoreInit = TRUE)
+  
+  # popula choices de filtros
+  observe({
+    ch <- fetch_choices(pool)
+    updateSelectizeInput(session, "f_setor", choices = ch$setores,  selected = character(0), server = TRUE)
+    updateSelectizeInput(session, "f_maquina", choices = ch$maquinas, selected = character(0), server = TRUE)
+  })
+  
+  observeEvent(input$bt_clear_filters, {
+    # limpa UI
+    .cache_obj$reset()   # ✅ idem
+    shiny::updateSelectizeInput(session,"f_setor",selected = character(0))
+    shiny::updateSelectizeInput(session,"f_maquina",selected = character(0))
+    shinyWidgets::updateAirDateInput(session,"f_de",clear = TRUE)
+    shinyWidgets::updateAirDateInput(session,"f_ate",clear = TRUE)
+    
+    # reseta filtros aplicados
+    rv$setor   <- NULL
+    rv$maquina <- NULL
+    rv$dt_de   <- NULL
+    rv$dt_ate  <- NULL
+  }, ignoreInit = TRUE)
+  
   # aqui você pode ajustar setor/objeto conforme necessário
-  setor_alvo  <- c("DOBRA","ESTAMPARIA")
   objeto_alvo <- c("SETREMA","DOBRA")
   
   # estados da máquina que queremos monitorar
@@ -453,59 +598,25 @@ server <- function(ns, input, output, session) {
   dados <- reactive({
     invalidateLater(60 * 5 * 1000, session)
     
-    df_raw <- run_query(
-      pool,
-      minutos = 24 * 60,     # (se sua SQL NÃO filtra tempo, isso aqui não tem efeito)
-      setor   = NULL,
-      objeto  = NULL
-    )
-    if (!nrow(df_raw)) return(NULL)
+    tzL <- tz_local()
+    now_local <- as.POSIXct(Sys.time(), tz = tzL)
     
-    df <- expand_atributos(df_raw)
+    dt_ate_local <- if (is.null(rv$dt_ate) || is.na(rv$dt_ate)) now_local else as.POSIXct(rv$dt_ate, tz = tzL)
+    dt_de_local  <- if (is.null(rv$dt_de)  || is.na(rv$dt_de))  (dt_ate_local - 24*60*60) else as.POSIXct(rv$dt_de, tz = tzL)
     
-    df <- apply_setup_state(df,
-      col_estado_maquina = "BOBINA.ESTADO",
-      col_trabalhador    = "AREA_DE_TRABALHO_A.TRABALHADOR",  # <- confira o nome exato
-      min_parado_secs    = 60,
-      by_cols            = c("SETOR","OBJETO")
-    )
+    dt_de_utc  <- to_utc(dt_de_local, tz = tzL)
+    dt_ate_utc <- to_utc(dt_ate_local, tz = tzL)
     
-    df <- apply_setup_state(df,
-      col_estado_maquina = "PRENSA.ESTADO",
-      col_trabalhador    = "AREA_DE_TRABALHO_B.TRABALHADOR",
-      min_parado_secs    = 60,
-      by_cols            = c("SETOR","OBJETO")
-    )
-    
-    df <- apply_setup_state(df,
-      col_estado_maquina = "DOBRA.ESTADO",
-      col_trabalhador    = "AREA_DE_TRABALHO.TRABALHADOR",
-      min_parado_secs    = 60,
-      by_cols            = c("SETOR","OBJETO")
-    )
-    
-    df <- apply_setup_state(df,
-      col_estado_maquina = "SOLDA.ESTADO",
-      col_trabalhador    = "AREA_DE_TRABALHO.TRABALHADOR",
-      min_parado_secs    = 60,
-      by_cols            = c("SETOR","OBJETO")
-    )
-    
-
-    ep <- build_episodes(df, min_secs = 60)
-    if (is.null(ep) || !nrow(ep)) return(NULL)
-    
-    ep_m <- subset(ep, ESTADO %in% estados_maquina)
-    if (!nrow(ep_m)) ep_m <- ep[0, ]
-    
-    list(
-      df_raw = df_raw,  # <- “todos os dados do SQL”
-      df     = df,      # <- expandido
-      ep     = ep,      # <- episódios de tudo
-      ep_m   = ep_m     # <- só OPERANDO/PARADO/SETUP
+    # chave: filtros + intervalo (o memoise faz hash dos args)
+    compute_dados_cached(
+      pool = pool,
+      dt_de_utc = dt_de_utc, dt_ate_utc = dt_ate_utc,
+      dt_de_local = dt_de_local, dt_ate_local = dt_ate_local,
+      setor = rv$setor, maquina = rv$maquina,
+      tzL = tzL
     )
   })
-  
+
   ep_m_reactive <- reactive({
     x <- dados()
     if (is.null(x)) return(NULL)
@@ -515,93 +626,207 @@ server <- function(ns, input, output, session) {
   # Resumo por turno (para tabela executiva)
   # -------------------------
   resumo_turnos <- reactive({
-    ep_m <- ep_m_reactive()
+    x <- dados()
+    if (is.null(x)) return(NULL)
+    
+    ep_m <- x$ep_m
     if (is.null(ep_m) || !nrow(ep_m)) return(NULL)
     
-    # filtra DOBRA + SETREMA e apenas os componentes escolhidos
-    ep_m <- subset(
-      ep_m,
-      OBJETO %in% c("DOBRA","SETREMA") &
-      COMPONENTE %in% c("DOBRA.ESTADO","PRENSA.ESTADO")
-    )
+    # só componentes ".ESTADO"
+    ep_m <- ep_m[grepl("\\.ESTADO$", ep_m$COMPONENTE), ]
     if (!nrow(ep_m)) return(NULL)
     
-    ep_m$mid_time <- ep_m$start_time + ep_m$dur_secs / 2
-    ep_m$turno    <- classificar_turno(ep_m$mid_time)
-    ep_m          <- ep_m[!is.na(ep_m$turno), ]
-    if (!nrow(ep_m)) return(NULL)
-    
-    # agrega por turno + objeto + estado
-    df <- aggregate(dur_secs ~ turno + OBJETO + ESTADO, data = ep_m, sum, na.rm = TRUE)
-    df$turno <- factor(df$turno, levels = c("Manhã","Tarde","Noite"))
-    
-    # chaves (turno, objeto)
-    keys <- unique(df[, c("turno","OBJETO")])
-    keys <- keys[order(keys$turno, keys$OBJETO), ]
-    
-    linhas <- lapply(seq_len(nrow(keys)), function(i){
-      tu <- keys$turno[i]
-      ob <- keys$OBJETO[i]
-      
-      d <- df[df$turno == tu & df$OBJETO == ob, ]
-      
-      m_op <- sum(d$dur_secs[d$ESTADO == "OPERANDO"], na.rm = TRUE) / 60
-      m_pa <- sum(d$dur_secs[d$ESTADO == "PARADO"],   na.rm = TRUE) / 60
-      m_se <- sum(d$dur_secs[d$ESTADO == "SETUP"],    na.rm = TRUE) / 60
-      
-      m_tot <- m_op + m_pa + m_se
-      util  <- if (m_tot > 0) m_op / m_tot * 100 else NA_real_
-      
-      data.frame(
-        Turno          = as.character(tu),
-        Maquina        = as.character(ob),
-        Tempo_OPERANDO = fmt_hm(m_op),
-        Tempo_PARADO   = fmt_hm(m_pa),
-        Tempo_SETUP    = fmt_hm(m_se),
-        Tempo_TOTAL    = fmt_hm(m_tot),
-        Utilizacao     = round(util, 1),
-        stringsAsFactors = FALSE
-      )
-    })
-    
-    out <- do.call(rbind, linhas)
-    if (is.null(out) || !nrow(out)) return(NULL)
-    
-    out <- out[order(-out$Utilizacao), ]
-    out$Ranking <- seq_len(nrow(out))
-    out
+    dplyr::as_tibble(ep_m) |>
+    dplyr::mutate(
+      mid_time  = start_time + dur_secs / 2,
+      Periodo   = as.character(classificar_turno(mid_time)),
+      ESTADO    = toupper(trimws(as.character(ESTADO))),
+      ESTADO    = factor(ESTADO, levels = c("OPERANDO","PARADO","SETUP")),
+      SETOR     = as.character(SETOR),
+      OBJETO    = as.character(OBJETO),
+      mins      = dur_secs / 60
+    ) |>
+    dplyr::filter(!is.na(Periodo), !is.na(SETOR), !is.na(OBJETO), !is.na(ESTADO)) |>
+    dplyr::group_by(Periodo, SETOR, OBJETO, ESTADO) |>
+    dplyr::summarise(mins = sum(mins, na.rm = TRUE), .groups = "drop") |>
+    tidyr::pivot_wider(
+      names_from   = ESTADO,
+      values_from  = mins,
+      values_fill  = list(mins = 0),
+      names_expand = TRUE
+    ) |>
+    dplyr::mutate(
+      OPERANDO = dplyr::coalesce(OPERANDO, 0),
+      PARADO   = dplyr::coalesce(PARADO,   0),
+      SETUP    = dplyr::coalesce(SETUP,    0),
+      Total    = OPERANDO + PARADO + SETUP,
+      Utilizacao = dplyr::if_else(Total > 0, OPERANDO / Total * 100, as.numeric(NA))
+    ) |>
+    dplyr::group_by(Periodo) |>
+    dplyr::mutate(
+      Ranking = dplyr::min_rank(dplyr::desc(Utilizacao))  # ranking dentro do turno
+    ) |>
+    dplyr::ungroup() |>
+    dplyr::mutate(
+      Periodo = factor(Periodo, levels = c("Manhã","Tarde","Noite"))
+    ) |>
+    dplyr::arrange(Periodo, Ranking, dplyr::desc(Total))
   })
-
-
+  # resumo_turnos <- resumo_turnos |>
+  # bindCache(rv$setor, rv$maquina, rv$dt_de, rv$dt_ate)
+  
   # resumo para os valueBoxes (reaproveitado nos 4 boxes)
-  resumo_setor <- reactive({
-    ep_m <- ep_m_reactive()
-    if (is.null(ep_m) || !nrow(ep_m)) return(NULL)
+  box_exec <- reactive({
+    x <- dados()
+    if (is.null(x) || is.null(x$ep_m) || !nrow(x$ep_m)) return(NULL)
     
-    setor_state <- aggregate(dur_secs ~ SETOR + ESTADO, data = ep_m, sum, na.rm = TRUE)
-    setor_state_alvo <- subset(setor_state, SETOR %in% setor_alvo)
-    if (!nrow(setor_state_alvo)) return(NULL)
+    ep_m <- x$ep_m
+    ep_m <- ep_m[grepl("\\.ESTADO$", ep_m$COMPONENTE), , drop = FALSE]
+    if (!nrow(ep_m)) return(NULL)
     
-    get_horas <- function(estado) {
-      x <- setor_state_alvo$dur_secs[setor_state_alvo$ESTADO == estado]
-      if (!length(x)) return(0)
-      as.numeric(x) / 3600
+    # -------------------------
+    # 1) Escolher UM componente principal por OBJETO
+    #    (evita somar estados paralelos e "duplicar horas")
+    # -------------------------
+    main_component_map <- c(
+      "SETREMA" = "PRENSA.ESTADO",  # ajuste se necessário
+      "DOBRA"   = "DOBRA.ESTADO"
+    )
+    
+    ep_main <- dplyr::as_tibble(ep_m) |>
+    dplyr::group_by(OBJETO) |>
+    dplyr::group_modify(function(.x, .y) {
+      
+      obj   <- as.character(.y$OBJETO[1])
+      comps <- unique(as.character(.x$COMPONENTE))
+      
+      # 1) tenta OBJETO.ESTADO
+      want1 <- paste0(obj, ".ESTADO")
+      if (want1 %in% comps) return(.x[.x$COMPONENTE == want1, , drop = FALSE])
+      
+      # 2) tenta map
+      want2 <- main_component_map[obj]
+      if (length(want2) && !is.na(want2) && want2 %in% comps) {
+        return(.x[.x$COMPONENTE == want2, , drop = FALSE])
+      }
+      
+      # 3) fallback: primeiro .ESTADO
+      .x[.x$COMPONENTE == comps[1], , drop = FALSE]
+    }) |>
+    dplyr::ungroup()
+    
+    if (!nrow(ep_main)) return(NULL)
+    
+    # -------------------------
+    # 2) Resumo por máquina: segundos por estado + utilização
+    # -------------------------
+    by_obj <- ep_main |>
+    dplyr::mutate(ESTADO = toupper(trimws(as.character(ESTADO)))) |>
+    dplyr::group_by(OBJETO) |>
+    dplyr::summarise(
+      op = sum(dur_secs[ESTADO == "OPERANDO"], na.rm = TRUE),
+      pa = sum(dur_secs[ESTADO == "PARADO"],   na.rm = TRUE),
+      se = sum(dur_secs[ESTADO == "SETUP"],    na.rm = TRUE),
+      .groups = "drop"
+    ) |>
+    dplyr::mutate(
+      tot  = op + pa + se,
+      util = dplyr::if_else(tot > 0, op / tot * 100, as.numeric(NA))
+    ) |>
+    dplyr::arrange(dplyr::desc(util))
+    
+    nmaq <- nrow(by_obj)
+    if (nmaq <= 0) return(NULL)
+    
+    # -------------------------
+    # 3) Totais (ponderados) e médias por máquina
+    # -------------------------
+    op_tot  <- sum(by_obj$op, na.rm = TRUE)
+    pa_tot  <- sum(by_obj$pa, na.rm = TRUE)
+    se_tot  <- sum(by_obj$se, na.rm = TRUE)
+    tot_tot <- op_tot + pa_tot + se_tot
+    
+    util_geral <- if (tot_tot > 0) op_tot / tot_tot * 100 else NA_real_
+    
+    # médias por máquina (em horas)
+    op_mean_h <- (op_tot / 3600) / max(1, nmaq)
+    pa_mean_h <- (pa_tot / 3600) / max(1, nmaq)
+    se_mean_h <- (se_tot / 3600) / max(1, nmaq)
+    
+    # média simples de % por máquina
+    util_mean <- mean(by_obj$util, na.rm = TRUE)
+    
+    # -------------------------
+    # 4) Textos e percentuais auxiliares
+    # -------------------------
+    pct <- function(a,b) ifelse(is.finite(a) & is.finite(b) & b > 0, a/b*100, NA_real_)
+    
+    op_pct <- pct(op_tot, tot_tot)
+    pa_pct <- pct(pa_tot, tot_tot)
+    se_pct <- pct(se_tot, tot_tot)
+    
+    single_obj <- if (nmaq == 1 && nrow(by_obj)) as.character(by_obj$OBJETO[1]) else NA_character_
+    
+    top_txt <- if (nmaq >= 1 && is.finite(by_obj$util[1])) {
+      paste0(by_obj$OBJETO[1], " (", round(by_obj$util[1], 1), "%)")
+    } else {
+      "—"
     }
     
-    h_op  <- get_horas("OPERANDO")
-    h_pa  <- get_horas("PARADO")
-    h_se  <- get_horas("SETUP")
-    h_tot <- h_op + h_pa + h_se
-    util  <- if (h_tot > 0) (h_op / h_tot) * 100 else NA_real_
+    worst_txt <- {
+      w <- by_obj |>
+      dplyr::filter(is.finite(util)) |>
+      dplyr::arrange(util) |>
+      dplyr::slice(1)
+      if (nrow(w)) paste0(w$OBJETO, " (", round(w$util, 1), "%)") else "—"
+    }
     
+    top_setup_txt <- "—"
+    if (nrow(by_obj)) {
+      tmp <- by_obj |>
+      dplyr::mutate(setup_pct = pct(se, tot)) |>
+      dplyr::arrange(dplyr::desc(setup_pct)) |>
+      dplyr::slice(1)
+      if (nrow(tmp) && is.finite(tmp$setup_pct)) {
+        top_setup_txt <- paste0(tmp$OBJETO, " (", round(tmp$setup_pct, 1), "%)")
+      }
+    }
+    
+    per_txt <- paste0(fmt_dt(x$dt_de_local), " → ", fmt_dt(x$dt_ate_local))
+    
+    # -------------------------
+    # 5) Saída (usada pelos 4 valueBoxes)
+    # -------------------------
     list(
-      h_op  = h_op,
-      h_pa  = h_pa,
-      h_se  = h_se,
-      h_tot = h_tot,
-      util  = util
+      # principais (média por máquina)
+      op_h = op_mean_h,
+      pa_h = pa_mean_h,
+      se_h = se_mean_h,
+      util = util_mean,
+      
+      # totais do período (sem duplicação)
+      op_tot_h = op_tot / 3600,
+      pa_tot_h = pa_tot / 3600,
+      se_tot_h = se_tot / 3600,
+      util_geral = util_geral,
+      
+      # percentuais gerais (ponderados)
+      op_pct = op_pct,
+      pa_pct = pa_pct,
+      se_pct = se_pct,
+      
+      # infos auxiliares para não repetir texto quando nmaq==1
+      nmaq = nmaq,
+      single_obj = single_obj,
+      top = top_txt,
+      worst = worst_txt,
+      top_setup = top_setup_txt,
+      periodo = per_txt
     )
   })
+  
+  # box_exec <- box_exec |>
+  # bindCache(rv$setor, rv$maquina, rv$dt_de, rv$dt_ate)
   
   fmt_horas <- function(x) {
     if (is.null(x) || length(x) == 0 || is.na(x)) return("–")
@@ -610,35 +835,52 @@ server <- function(ns, input, output, session) {
     m <- mins %% 60
     sprintf("%d h %02d min", h, m)
   }
-
+  
   fmt_perc  <- function(x) ifelse(is.na(x), "–", sprintf("%.1f %%", x))
-
+  
   # -------------------------
-  # ValueBoxes (sempre lendo resumo_setor())
+  # ValueBoxes (sempre lendo resumo_boxes())
   # -------------------------
   output[[paste0("vbOperando",1)]] <- renderUI({
-    r <- resumo_setor()
-    if (is.null(r)) return("–")
-    HTML(sprintf("<b>%s</b>", fmt_horas(r$h_op)))
+    b <- box_exec(); if (is.null(b)) return("–")
+    box_value_html(
+      fmt_horas(b$op_h),
+      paste0("Total: ", fmt_horas(b$op_tot_h), " • ", fmt_perc(b$op_pct)),
+      paste0(if (!is.na(b$single_obj)) paste0("Máquina única: ", b$single_obj) else paste0("Top utilização: ", b$top),
+      " • ", b$periodo)
+    )
   })
-
+  
   output[[paste0("vbParado",1)]] <- renderUI({
-    r <- resumo_setor()
-    if (is.null(r)) return("–")
-    HTML(sprintf("<b>%s</b>", fmt_horas(r$h_pa)))
+    b <- box_exec(); if (is.null(b)) return("–")
+    box_value_html(
+      fmt_horas(b$pa_h),
+      paste0("Total: ", fmt_horas(b$pa_tot_h), " • ", fmt_perc(b$pa_pct)),
+      paste0(if (!is.na(b$single_obj)) paste0("Máquina única: ", b$single_obj) else paste0("Pior utilização: ", b$worst),
+      " • ", b$periodo)
+    )
   })
-
+  
   output[[paste0("vbSetup",1)]] <- renderUI({
-    r <- resumo_setor()
-    if (is.null(r)) return("–")
-    HTML(sprintf("<b>%s</b>", fmt_horas(r$h_se)))
+    b <- box_exec(); if (is.null(b)) return("–")
+    box_value_html(
+      fmt_horas(b$se_h),
+      paste0("Total: ", fmt_horas(b$se_tot_h), " • ", fmt_perc(b$se_pct)),
+      paste0(if (!is.na(b$single_obj)) paste0("Máquina única: ", b$single_obj) else paste0("Maior % setup: ", b$top_setup),
+      " • ", b$periodo)
+    )
+  })
+  
+  output[[paste0("vbUtilizacao",1)]] <- renderUI({
+    b <- box_exec(); if (is.null(b)) return("–")
+    box_value_html(
+      fmt_perc(b$util),
+      paste0("Geral (ponderado): ", fmt_perc(b$util_geral)),
+      paste0(if (!is.na(b$single_obj)) paste0("Máquina única: ", b$single_obj) else paste0("Top: ", b$top, " • Pior: ", b$worst),
+      " • ", b$periodo)
+    )
   })
 
-  output[[paste0("vbUtilizacao",1)]] <- renderUI({
-    r <- resumo_setor()
-    if (is.null(r)) return("–")
-    HTML(sprintf("<b>%s</b>", fmt_perc(r$util)))
-  })
 
   # =======================
   # UI dos gráficos
@@ -651,14 +893,13 @@ server <- function(ns, input, output, session) {
         solidHeader = TRUE,
         collapsible = TRUE,
         width       = 12,
-        title = tags$span("Resumo por turno – últimas 24 horas", 
+        title = tags$span("Resumo por período", 
         style = "font-size: 16px;"),
         div(
           style = "padding: 10px;",
           tags$p(
             "Tabela executiva destacando os turnos com melhor desempenho operacional ",
             "da máquina, considerando os estados OPERANDO, PARADO e SETUP ",
-            "(janela móvel de 24 horas).",
             style = "margin-bottom: 10px; font-size: 12px; color: #444;"
           ),
           DT::dataTableOutput(ns("tblTurnos")) |> shinycssloaders::withSpinner(color = 'lightblue')
@@ -729,56 +970,64 @@ server <- function(ns, input, output, session) {
     ep_m <- ep_m_reactive()
     if (is.null(ep_m) || !nrow(ep_m)) return(NULL)
     
-    obj_sel <- objeto_alvo
-    ep_obj  <- subset(ep_m, OBJETO %in% obj_sel)
+    ep_obj <- ep_m
     if (!nrow(ep_obj)) return(NULL)
     
-    # Preferir apenas componentes de ESTADO de máquina
     ep_obj_estado <- subset(ep_obj, grepl("\\.ESTADO$", COMPONENTE))
     if (nrow(ep_obj_estado)) ep_obj <- ep_obj_estado
+
+    if(isolate(!actionClickplot2())){
+      actionClickplot2(TRUE)
+    }
     
-    # classificar episódio pelo meio do intervalo
-    # classificar episódio pelo meio do intervalo
-    ep_obj$mid_time <- ep_obj$start_time + ep_obj$dur_secs / 2
+    ep_obj$hover_x  <- ep_obj$start_time + ep_obj$dur_secs / 2
+    ep_obj$mid_time <- ep_obj$hover_x
     ep_obj$turno    <- classificar_turno(ep_obj$mid_time)
     
-    g <- ggplot2$ggplot(
+    ep_obj$hover_text <- paste0(
+      "Máquina: ", ep_obj$OBJETO,
+      "<br>Componente: ", ep_obj$COMPONENTE,
+      "<br>Estado: ", ep_obj$ESTADO,
+      "<br>Início: ", fmt_dt(ep_obj$start_time),
+      "<br>Fim: ",    fmt_dt(ep_obj$end_time),
+      "<br>Duração: ", round(ep_obj$dur_secs/60, 1), " min"
+    )
+    ep_obj$row_id <- seq_len(nrow(ep_obj))
+    
+    g <- ggplot2::ggplot(
       ep_obj,
-      ggplot2$aes(
+      ggplot2::aes(
         x     = start_time,
         xend  = end_time,
         y     = COMPONENTE,
         yend  = COMPONENTE,
         color = ESTADO,
-        text  = paste0(
-          "Máquina: ", OBJETO,
-          "<br>Componente: ", COMPONENTE,
-          "<br>Estado: ", ESTADO,
-          "<br>Início: ", fmt_dt(start_time),
-          "<br>Fim: ",    fmt_dt(end_time),
-          "<br>Duração: ", round(dur_secs/60, 1), " min"
-        )
+        text  = hover_text,
+        key   = row_id
       )
     ) +
-    ggplot2$geom_segment(linewidth = 6) +
-    ggplot2$labs(
-      x     = "Tempo",
-      y     = "",
-      color = "Estado"
+    ggplot2::geom_segment(linewidth = 6) +
+    
+    # ✅ ponto invisível (sem 'text' aqui pra não dar warning)
+    ggplot2::geom_point(
+      ggplot2::aes(x = hover_x, y = COMPONENTE, color = ESTADO),
+      size = 10, alpha = 0.001, show.legend = FALSE
     ) +
-    # ✅ agora tem facet por turno (linhas) e por máquina (colunas)
-    ggplot2$facet_grid(turno ~ OBJETO, scales = "free_y", switch = "y") +
-    ggplot2$scale_color_manual(
-      values = c(
-        "OPERANDO" = "#00a65a",
-        "PARADO"   = "tomato",
-        "SETUP"    = "gold"
-      )
-    ) +
+    
+    ggplot2::labs(x = "Tempo", y = "", color = "Estado") +
+    ggplot2::facet_grid(turno ~ OBJETO, scales = "free_y", switch = "y") +
+    ggplot2::scale_color_manual(values = c(
+      "OPERANDO" = "#00a65a",
+      "PARADO"   = "tomato",
+      "SETUP"    = "gold"
+    )) +
     themasPlotyGGplot(text.x.angle = 45)
-
-    p <- plotly::ggplotly(g, tooltip = "text") |> plotly::config(displaylogo = FALSE,displayModeBar = T)
-    layoutPlotyDefault(p, legend.text = "Estado")
+    
+    p <- plotly::ggplotly(g, tooltip = "text", source = "p2") |>
+         plotly::config(displaylogo = FALSE, displayModeBar = TRUE,doubleClick = TRUE)
+    
+    p <- layoutPlotyDefault(p, legend.text = "Estado")
+    plotly::event_register(p,"plotly_click")
   })
 
   # ---------------------------
@@ -874,7 +1123,7 @@ server <- function(ns, input, output, session) {
     
     layoutPlotyDefault(p, legend.text = "Minutos")
   })
-  
+
   # ---------------------------
   # (4) Gráfico em linhas – médias móveis
   # ---------------------------
@@ -923,46 +1172,131 @@ server <- function(ns, input, output, session) {
   # -------------------------
   output$tblTurnos <- DT::renderDataTable({
     df <- resumo_turnos()
-    if (is.null(df)) return(NULL)
+    if (is.null(df) || !nrow(df)) return(NULL)
     
-    names(df) <- c(
-      "Período",
-      "Máquina",
-      "Tempo OPERANDO",
-      "Tempo PARADO",
-      "Tempo SETUP",
-      "Tempo total",
-      "Utilização (%)",
-      "Ranking"
+    df_out <- df |>
+    dplyr::transmute(
+      `Período`        = as.character(Periodo),
+      `Setor`          = SETOR,
+      `Máquina`        = OBJETO,
+      `Tempo OPERANDO` = fmt_hm(OPERANDO),
+      `Tempo PARADO`   = fmt_hm(PARADO),
+      `Tempo SETUP`    = fmt_hm(SETUP),
+      `Tempo total`    = fmt_hm(Total),
+      `Utilização (%)` = round(Utilizacao, 1),
+      `Ranking`        = Ranking
     )
     
     DT::datatable(
-      df,
+      df_out,
       rownames = FALSE,
+      extensions = c("RowGroup"),
       options = list(
         dom        = "tip",
-        pageLength = 5,
-        order      = list(list(7, "asc")),  # Ranking (0-based na UI do DT é ok assim)
+        pageLength = 10,
+        order      = list(list(0, "asc"), list(8, "asc")), # Período, Ranking
+        rowGroup   = list(dataSrc = 0),                   # agrupa por Período
         language   = dt_lang_ptbr()
       ),
       class = "cell-border stripe compact"
     )
   })
 
-}
+  # observe tmp 
+  observeEvent(actionClickplot2(),{
+    
+    ## observer plots
+    observeEvent(plotly::event_data("plotly_click",priority = "event", source = "p2"), {
 
+      ed <- plotly::event_data("plotly_click", source = "p2")
+  
+      if (is.null(ed) || is.null(ed$key)) return()
+      
+      actionWebUser({
+        row_id <- as.integer(ed$key[1])
+        x <- dados()
+        if (is.null(x) || is.null(x$ep_m) || !nrow(x$ep_m)) return()
+        
+        ep_m <- x$ep_m
+        ep_m$row_id <- seq_len(nrow(ep_m))
+        linha <- ep_m[ep_m$row_id == row_id, , drop = FALSE]
+        if (!nrow(linha)) return()
+        
+        objeto <- objs_tmp |> filter(NAME_OBJETO == linha$OBJETO & NAME_SETOR == linha$SETOR)
+        # --- defina quais câmeras usar ---
+        cameras_ids   <- unique(purrr::map_int(objeto$CONFIG[[1]]$COMPONENTES[[1]]$CAMERA, "CD_ID_CAMERA"))
+      
+        video_clip_open(
+          ns, input, output, session,
+          pool       = dbp$get_pool(),
+          title      = paste0("Clip – ", linha$OBJETO, " / ", linha$COMPONENTE, " (", linha$ESTADO, ")"),
+          time_begin = linha$start_time,
+          time_end   = linha$end_time,
+          camera_ids = cameras_ids,
+          fps        = 5L,
+          max_frames = 3000L
+        )
+      })
+      
+    }, ignoreInit = TRUE,ignoreNULL = TRUE)
+
+  },once = TRUE,ignoreInit = TRUE)
+
+}
 
 # ===============================
 # Helper para box/plot container
 # ===============================
-fmt_dt <- function(x) format(as.POSIXct(x, tz = Sys.timezone()), "%d/%m/%Y %H:%M")
+box_value_html <- function(main, l1 = NULL, l2 = NULL) {
+  htmltools::HTML(paste0(
+    "<div style='line-height:1.05'>",
+      "<div style='font-size:28px;font-weight:700;'>", main, "</div>",
+      "<div style='font-size:12px;opacity:.95;margin-top:6px'>", l1 %||% "", "</div>",
+      "<div style='font-size:11px;opacity:.85;margin-top:2px'>", l2 %||% "", "</div>",
+    "</div>"
+  ))
+}
+
+cap_episodes <- function(ep, dt_de, dt_ate) {
+  if (is.null(ep) || !nrow(ep)) return(ep)
+
+  dt_de  <- as.POSIXct(dt_de,  tz = attr(ep$start_time, "tzone") %||% Sys.timezone())
+  dt_ate <- as.POSIXct(dt_ate, tz = attr(ep$start_time, "tzone") %||% Sys.timezone())
+
+  ep$start_time <- pmax(ep$start_time, dt_de)
+  ep$end_time   <- pmin(ep$end_time,   dt_ate)
+  ep$dur_secs   <- as.numeric(difftime(ep$end_time, ep$start_time, units = "secs"))
+
+  ep <- ep[!is.na(ep$dur_secs) & ep$dur_secs > 0, , drop = FALSE]
+  ep
+}
+
+.sql_escape <- function(x) gsub("'", "''", as.character(x), fixed = TRUE)
+
+.sql_in <- function(vec) {
+  vec <- vec[!is.na(vec) & nzchar(vec)]
+  if (!length(vec)) return(NULL)
+  paste0("('", paste(.sql_escape(vec), collapse = "','"), "')")
+}
+
+fmt_sql_dt <- function(x) format(as.POSIXct(x), "%Y-%m-%d %H:%M:%S")
+fmt_dt <- function(x) format(as.POSIXct(x), "%d/%m/%Y %H:%M")
 fmt_d  <- function(x) format(as.Date(x), "%d/%m/%Y")
 fmt_hm <- function(mins) {
-  if (is.null(mins) || length(mins) == 0 || is.na(mins)) return("–")
-  mins_i <- as.integer(round(as.numeric(mins)))
+  if (is.null(mins)) return("–")
+
+  x <- suppressWarnings(as.numeric(mins))
+  out <- rep("–", length(x))
+
+  ok <- !is.na(x)
+  if (!any(ok)) return(out)
+
+  mins_i <- as.integer(round(x[ok]))
   h <- mins_i %/% 60
   m <- mins_i %% 60
-  sprintf("%d h %02d min", h, m)
+
+  out[ok] <- sprintf("%d h %02d min", h, m)
+  out
 }
 
 dt_lang_ptbr <- function() {
