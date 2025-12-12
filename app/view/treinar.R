@@ -1369,7 +1369,7 @@ uiNewTreinar <- function(ns, input, output, session, callback){
 
     if(!db$tryTransaction(function(conn){
 
-      info <- build_objeto_descricao(input,df,objeto)
+      info <- build_objeto_descricao(input,df,objeto,tiposPacotes)
 
       if(!info$status){
         showNotification(info$message, type = "error")

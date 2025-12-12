@@ -207,7 +207,7 @@ difftime(last(frames$DT_HR_LOCAL),first(frames$DT_HR_LOCAL))
 # Video
 
 ```{r}
-codigo  <-1597980
+codigo  <- 1650086
 anime   <- build_gif_from_blob( get_frames_window(con,codigo,janela = 35))
 print(anime)
 
