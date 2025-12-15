@@ -198,4 +198,4 @@ dataset_fining <- dataset[which(grepl("Finetuning",dataset$TITULO_IA,ignore.case
 
 saveRDS(dataset |> filter(!grepl("Teste",TITULO_IA,ignore.case = F)),paste0("train/dataset_train.rds"))
 saveRDS(dataset |> filter(grepl("Teste",TITULO_IA,ignore.case = F)),paste0("train/dataset_test.rds"))
-saveRDS(dataset_fining,paste0("train/dataset_fining_tuning.rds"))
+saveRDS(dataset,paste0("train/dataset_esquadros.rds"))

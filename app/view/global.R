@@ -323,70 +323,93 @@ set_readonly_js <- function(id, readonly = FALSE, session = shiny::getDefaultRea
   }
   runjs(js)
 }
-#' @export
-newProgressLoader <- function(){
-  
-   insertUI(
-      selector = 'body',
-      where = 'afterBegin',
-      ui =
-        div(id = 'progressoLoader',class = "modalLoader",
-            div(
-              id = 'loadInit',
-              class = "divLoader",
-              div(class = "loaderBar")
-            )),
-      immediate = F
-    )
-  
-}
-#' @export
-removeProgressLoader <- function(timer = 1000,callback = NULL){
-  
-  if(timer > 0){
-    
-    delay(timer,{
-      
-      if(!is.null(callback))
-        callback()
-      #remove loader
-      runjs("try{document.getElementById('progressoLoader').remove();}catch(e){}")
-      assign('status.loader',value = FALSE,immediate = T,envir = .GlobalEnv)
-    })
-    
-  }
-  else{
-    
-    if(!is.null(callback))
-       callback()
-    
-    #remove loader
-    runjs("try{document.getElementById('progressoLoader').remove();}catch(e){}")
-    assign('status.loader',value = FALSE,immediate = T,envir = .GlobalEnv)
 
-  }
+#' @export
+newProgressLoader <- function(session = shiny::getDefaultReactiveDomain()) {
+  if (is.null(session)) return(invisible(FALSE))
 
+  if (is.null(session$userData$loader_count)) session$userData$loader_count <- 0L
+  session$userData$loader_count <- session$userData$loader_count + 1L
+
+  # se já existe, não reinsere
+  if (isTRUE(session$userData$loader_count > 1L)) return(invisible(TRUE))
+
+  shiny::withReactiveDomain(session, {
+    shinyjs::runjs("
+      try{
+        if(!document.getElementById('progressoLoader')){
+          const div = document.createElement('div');
+          div.id = 'progressoLoader';
+          div.className = 'modalLoader';
+          div.innerHTML = \"<div id='loadInit' class='divLoader'><div class='loaderBar'></div></div>\";
+          document.body.insertBefore(div, document.body.firstChild);
+        }
+      }catch(e){}
+    ")
+  })
+
+  invisible(TRUE)
 }
 
 #' @export
-actionWebUser <- function(callback,auto.remove = TRUE,new.progess = TRUE,delay = 500){
-  
-  if(new.progess)
-  {
-    newProgressLoader()
-    
-    delay(delay,{
-      try(callback,silent = TRUE)
-      if(auto.remove)
-        removeProgressLoader(delay)
+removeProgressLoader <- function(timer_ms = 0, callback = NULL,
+                                 session = shiny::getDefaultReactiveDomain()) {
+  if (is.null(session)) return(invisible(FALSE))
+
+  if (is.null(session$userData$loader_count)) session$userData$loader_count <- 0L
+  session$userData$loader_count <- max(0L, session$userData$loader_count - 1L)
+
+  # ainda tem "usuários" do loader -> não remove
+  if (session$userData$loader_count > 0L) return(invisible(TRUE))
+
+  alive <- TRUE
+  session$onSessionEnded(function() alive <<- FALSE)
+
+  later::later(function() {
+    if (!isTRUE(alive)) return(invisible(NULL))
+    shiny::withReactiveDomain(session, {
+      if (!is.null(callback)) try(callback(), silent = TRUE)
+      shinyjs::runjs("try{document.getElementById('progressoLoader')?.remove();}catch(e){}")
     })
-  }
-  else{
-    try(callback,silent = TRUE)
-    if(auto.remove)
-      removeProgressLoader(delay)
+  }, timer_ms / 1000)
+
+  invisible(TRUE)
+}
+
+#' @export
+actionWebUser <- function(callback,
+                          session = shiny::getDefaultReactiveDomain(),
+                          auto.remove = TRUE,
+                          new.progress = TRUE,
+                          delay = 500) {
+
+  # Se for chamado fora de sessão (boot do processo), não tenta UI
+  if (is.null(session)) {
+    try(callback(), silent = TRUE)
+    return(invisible(FALSE))
   }
 
+  alive <- TRUE
+  session$onSessionEnded(function() alive <<- FALSE)
+
+  if (isTRUE(new.progress)) {
+    newProgressLoader(session)
+  }
+
+  later::later(function() {
+    if (!isTRUE(alive)) return(invisible(NULL))
+
+    shiny::withReactiveDomain(session, {
+      try(callback(), silent = TRUE)
+
+      if (isTRUE(auto.remove)) {
+        # se quiser um “fade”/atraso antes de remover, ajuste timer_ms aqui
+        removeProgressLoader(timer_ms = 0, session = session)
+      }
+    })
+  }, delay / 1000)
+
+  invisible(TRUE)
 }
 
 #' @export
