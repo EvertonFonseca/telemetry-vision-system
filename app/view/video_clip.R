@@ -175,8 +175,8 @@ video_clip_open <- function(ns, input, output, session,
                             time_begin, time_end,
                             camera_ids,
                             camera_names = NULL,
-                            fps = 10L,
-                            max_frames = 3000L,
+                            fps = 5L,
+                            max_frames = 300L,
                             callback = NULL) {
 
   stopifnot(length(camera_ids) >= 1)
@@ -189,6 +189,7 @@ video_clip_open <- function(ns, input, output, session,
   e <- .vclip_env(session)
 
   # ---- estado da sessão (p/ ignorar callback se fechar)
+  e$job_done  <- FALSE
   e$alive     <- TRUE
   e$cancelled <- FALSE
   session$onSessionEnded(function() e$alive <- FALSE)
@@ -396,6 +397,16 @@ video_clip_open <- function(ns, input, output, session,
     session$sendCustomMessage("vclip_stop_all", list())
     if(!is.null(callback)) callback()
     removeModal()
+    
+    # ✅ cleanup IMEDIATO se job já terminou (ready/error) ou nem chegou a iniciar
+    if (isTRUE(e$job_done) || is.null(e$job)) {
+      try(shiny::removeResourcePath(e$res_prefix), silent = TRUE)
+      try(unlink(e$tmp_dir, recursive = TRUE, force = TRUE), silent = TRUE)
+      
+      e$res_prefix <- NULL
+      e$tmp_dir    <- NULL
+    }
+
   }, ignoreInit = TRUE, once = TRUE)
 
   # ------------------------------------------------------------
@@ -514,16 +525,6 @@ video_clip_open <- function(ns, input, output, session,
 
         out_mp4_abs <- file.path(cam_dir, "clip.mp4")
 
-        # args <- c(
-        #   "-y",
-        #   "-hide_banner",
-        #   "-loglevel", "error",
-        #   "-framerate", as.character(as.integer(fps)),
-        #   "-i", file.path(cam_dir, "frame_%06d.jpg"),
-        #   "-c:v", "libx264",
-        #   "-pix_fmt", "yuv420p",
-        #   out_mp4_abs
-        # )
         args <- c(
           "-y",
           "-hide_banner",
@@ -572,6 +573,8 @@ video_clip_open <- function(ns, input, output, session,
     e$job <- job
     # --- callback no Shiny ---
     p <- promises::then(job, function(res) {
+
+       e$job_done <- TRUE
       .vclip_release()
       
       # Se foi cancelado/interrompido: faz cleanup e sai silencioso

@@ -2,7 +2,7 @@
 # ===============================================================
 # Opções globais do processo (ex: desabilitar SETUP)
 # ===============================================================
-options(TVS_DISABLE_SETUP = TRUE)
+options(TVS_DISABLE_SETUP = TRUE,USE_CACHE = FALSE)
 
 .tvs_auto_max_async <- function() {
   # Se o usuário setou explicitamente, respeita
@@ -16,8 +16,7 @@ options(TVS_DISABLE_SETUP = TRUE)
   if (is.na(cores) || cores < 1L) cores <- 2L
 
   # Reserva p/ Shiny + SO + DB + ffmpeg etc.
-  reserve <- 2L
-
+  reserve <- 4L
   # Default: no máx metade dos cores, mantendo reserva
   v <- max(1L, min(cores - reserve, ceiling(cores / 2)))
 

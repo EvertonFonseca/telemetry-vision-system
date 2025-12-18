@@ -23,7 +23,8 @@ box::use(
   estrutura   = ./estrutura,
   treinar     = ./treinar,
   alarme      = ./alarme,
-  setor_agenda = ./setor_agenda
+  setor_agenda = ./setor_agenda,
+  login        = ./login
 )
 
 # ===============================================================
@@ -215,12 +216,9 @@ ui <- function(id) {
           type = "audio/mp3", preload = "auto", style = "display:none;"
         )
       ),
-
       br(),
       tags$head(tags$style(".sidebar-menu a[data-value='noop'] { display:none !important; }")),
-
-      # Conteúdo
-      dash$ui(ns)
+      shiny::uiOutput(ns("mainbody"))
     ),
 
     footer = dashboardFooter(
@@ -244,6 +242,7 @@ ui <- function(id) {
 server <- function(id) {
   moduleServer(id, function(input, output, session) {
     
+    renderMainbody <- reactiveVal(NULL)
     .init_reports_path()
     ns <- NS(id)
     dbp$session_register(session)
@@ -251,195 +250,205 @@ server <- function(id) {
     # ✅ garante mirai pronto (idempotente)
     .tvs_mirai_boot()
     
-    # chatia$server(ns, input, output, session)
-    dash$server(ns, input, output, session)
-    
-    reactiveNotification         <- reactiveVal(NULL)
-    reactiveMessageUsers         <- reactiveVal(NULL)
-    inputDropsNotification       <- reactiveVal(list())
-    inputDropsMessage            <- reactiveVal(list())
-    inputListNotificationNotRead <- list()
-    inputListMessageNotRead      <- list()
-    timeReactive                 <- reactiveTimer(60000)
-    queeNotification             <- NULL
-    queeMessageUsers             <- NULL
-    
-    output$menuSideBarMain <- renderMenuSideBarMain(ns)
-    
-    # ---- Obsevent Menu Camera
-    observeEvent(input$camera, {
-      sel <- input$camera
-      
-      if (identical(sel, "cameraNew")) {
-        camera$uiNewCamera(ns, input, output, session, function() {
-          camera$dispose(session)
-        })
-      } else if (identical(sel, "cameraTable")) {
-        camera$uiEditCamera(ns, input, output, session, function() {
-          camera$dispose(session)
-        })
-      }
-      
-      if (!is.null(sel) && sel %in% c("cameraNew", "cameraTable")) {
-        updateTabItems(session, inputId = "camera", selected = "noop")
-      }
-    }, ignoreInit = TRUE, ignoreNULL = TRUE)
-    
-    # ---- Obsevent Menu Setor
-    observeEvent(input$setor, {
-      sel <- input$setor
-      
-      if (identical(sel, "setorNew")) {
-        setor$uiNewSetor(ns, input, output, session, function() {
-          setor$dispose(session)
-        })
-      } else if (identical(sel, "setorTable")) {
-        setor$uiEditSetor(ns, input, output, session, function() {
-          setor$dispose(session)
-        })
-      } else if (identical(sel, "setorAgenda")) {
-        setor_agenda$uiSetorAgenda(ns, input, output, session, callback = function() {})
-      }
-      
-      if (!is.null(sel) && sel %in% c("setorNew", "setorTable")) {
-        updateTabItems(session, inputId = "setor", selected = "noop")
-      }
-    }, ignoreInit = TRUE, ignoreNULL = TRUE)
-    
-    # ---- Obsevent Menu Objeto
-    observeEvent(input$objeto, {
-      sel <- input$objeto
-      
-      if (identical(sel, "objetoNew")) {
-        objeto$uiNewObjeto(ns, input, output, session, function() {
-          objeto$dispose(session)
-        })
-      } else if (identical(sel, "objetoTable")) {
-        objeto$uiEditObjeto(ns, input, output, session, function() {
-          objeto$dispose(session)
-        })
-      }
-      
-      if (!is.null(sel) && sel %in% c("objetoNew", "objetoTable")) {
-        updateTabItems(session, inputId = "objeto", selected = "noop")
-      }
-    }, ignoreInit = TRUE, ignoreNULL = TRUE)
-    
-    # ---- Obsevent Menu Estrutura
-    observeEvent(input$estrutura, {
-      sel <- input$estrutura
-      
-      if (identical(sel, "estruturaNew")) {
-        estrutura$uiNewEstrutura(ns, input, output, session, function() {
-          estrutura$dispose(session)
-        })
-      } else if (identical(sel, "estruturaTable")) {
-        estrutura$uiEditEstrutura(ns, input, output, session, function() {
-          estrutura$dispose(session)
-        })
-      }
-      
-      if (!is.null(sel) && sel %in% c("estruturaNew", "estruturaTable")) {
-        updateTabItems(session, inputId = "estrutura", selected = "noop")
-      }
-    }, ignoreInit = TRUE, ignoreNULL = TRUE)
-    
-    # ---- Obsevent Menu Alarme
-    observeEvent(input$alarme, {
-      sel <- input$alarme
-      
-      if (identical(sel, "alarmeNew")) {
-        alarme$uiNewAlarme(ns, input, output, session, callback = function() {
-          alarme$dispose(session)
-        })
-      } else if (identical(sel, "alarmeTable")) {
-        alarme$uiEditAlarme(ns, input, output, session, function() {
-          alarme$dispose(session)
-        })
-      }
-      
-      if (!is.null(sel) && sel %in% c("alarmeNew", "alarmeTable")) {
-        updateTabItems(session, inputId = "alarme", selected = "noop")
-      }
-    }, ignoreInit = TRUE, ignoreNULL = TRUE)
-    
-    # ---- Obsevent Menu Treinar
-    observeEvent(input$treinar, {
-      sel <- input$treinar
-      
-      if (identical(sel, "treinarNew")) {
-        treinar$uiNewTreinar(ns, input, output, session, function() {
-          treinar$dispose(session)
-        })
-      } else if (identical(sel, "treinarTable")) {
-        treinar$uiEditTreinar(ns, input, output, session, function() {
-          treinar$dispose(session)
-        })
-      }
-      
-      if (!is.null(sel) && sel %in% c("treinarNew", "treinarTable")) {
-        updateTabItems(session, inputId = "treinar", selected = "noop")
-      }
-    }, ignoreInit = TRUE, ignoreNULL = TRUE)
-    
-    componentHeader <- function(input, output, textoInformacao, size.right = 50 * 2) {
-      uiHeader <- renderUI({
-        div(
-          style = paste0(
-            "position: absolute; width: auto; height: 25px; right: ",
-            size.right,
-            "px; top: 25%;"
-          ),
-          tags$span(style = "float: left; color: white; font-size: 15px;", textoInformacao())
-        )
-      })
-      uiHeader
-    }
-    
-    output$containerHeader <- componentHeader(input, output, function() {
-      timeReactive()
-      span(format(Sys.time(), "%d/%m/%Y %H:%M"))
+    output$mainbody <- shiny::renderUI({
+      renderMainbody()
     })
     
-    output$dropsMensagem <- renderMenu({
-      dropsNotification <- inputDropsMessage()
-      n <- length(dropsNotification)
+    login$uiLogin(ns,session,input,output,function(user){
       
-      if (n > 0) runjs("document.getElementById('soundBoxMessage').play();")
-      
-      dropdowncomponent <- dropdownMenu(
-        type = "messages",
-        badgeStatus = "danger",
-        headerText = paste0("Você tem ", n, " ", if (n == 1) "mensagem." else "mensagens"),
-        .list = dropsNotification
-      )
-      
-      if (dropdowncomponent$children[[1]]$children[[2]]$children[[1]] > 99) {
-        dropdowncomponent$children[[1]]$children[[2]]$children[[1]] <- "+99"
-      }
-      dropdowncomponent
-    })
-    
-    output$dropsAlertas <- renderMenu({
-      dropsNotification <- inputDropsNotification()
-      n <- length(dropsNotification)
-      
-      if (n > 0) runjs("document.getElementById('soundNotificationOn').play();")
-      
-      dropdowncomponent <- dropdownMenu(
-        type = "notifications",
-        icon = icon("bell"),
-        badgeStatus = "danger",
-        headerText = paste0("Você tem ", n, " ", if (n == 1) "notificação." else "notificações"),
-        .list = dropsNotification
-      )
-      
-      if (dropdowncomponent$children[[1]]$children[[2]]$children[[1]] > 99) {
-        dropdowncomponent$children[[1]]$children[[2]]$children[[1]] <- "+99"
-      }
-      dropdowncomponent
-    })
+      renderMainbody(dash$ui(ns))
 
+      # chatia$server(ns, input, output, session)
+      dash$server(ns, input, output, session)
+      
+      reactiveNotification         <- reactiveVal(NULL)
+      reactiveMessageUsers         <- reactiveVal(NULL)
+      inputDropsNotification       <- reactiveVal(list())
+      inputDropsMessage            <- reactiveVal(list())
+      inputListNotificationNotRead <- list()
+      inputListMessageNotRead      <- list()
+      timeReactive                 <- reactiveTimer(60000)
+      queeNotification             <- NULL
+      queeMessageUsers             <- NULL
+      
+      
+      output$menuSideBarMain <- renderMenuSideBarMain(ns)
+      
+      # ---- Obsevent Menu Camera
+      observeEvent(input$camera, {
+        sel <- input$camera
+        
+        if (identical(sel, "cameraNew")) {
+          camera$uiNewCamera(ns, input, output, session, function() {
+            camera$dispose(session)
+          })
+        } else if (identical(sel, "cameraTable")) {
+          camera$uiEditCamera(ns, input, output, session, function() {
+            camera$dispose(session)
+          })
+        }
+        
+        if (!is.null(sel) && sel %in% c("cameraNew", "cameraTable")) {
+          updateTabItems(session, inputId = "camera", selected = "noop")
+        }
+      }, ignoreInit = TRUE, ignoreNULL = TRUE)
+      
+      # ---- Obsevent Menu Setor
+      observeEvent(input$setor, {
+        sel <- input$setor
+        
+        if (identical(sel, "setorNew")) {
+          setor$uiNewSetor(ns, input, output, session, function() {
+            setor$dispose(session)
+          })
+        } else if (identical(sel, "setorTable")) {
+          setor$uiEditSetor(ns, input, output, session, function() {
+            setor$dispose(session)
+          })
+        } else if (identical(sel, "setorAgenda")) {
+          setor_agenda$uiSetorAgenda(ns, input, output, session, callback = function() {})
+        }
+        
+        if (!is.null(sel) && sel %in% c("setorNew", "setorTable")) {
+          updateTabItems(session, inputId = "setor", selected = "noop")
+        }
+      }, ignoreInit = TRUE, ignoreNULL = TRUE)
+      
+      # ---- Obsevent Menu Objeto
+      observeEvent(input$objeto, {
+        sel <- input$objeto
+        
+        if (identical(sel, "objetoNew")) {
+          objeto$uiNewObjeto(ns, input, output, session, function() {
+            objeto$dispose(session)
+          })
+        } else if (identical(sel, "objetoTable")) {
+          objeto$uiEditObjeto(ns, input, output, session, function() {
+            objeto$dispose(session)
+          })
+        }
+        
+        if (!is.null(sel) && sel %in% c("objetoNew", "objetoTable")) {
+          updateTabItems(session, inputId = "objeto", selected = "noop")
+        }
+      }, ignoreInit = TRUE, ignoreNULL = TRUE)
+      
+      # ---- Obsevent Menu Estrutura
+      observeEvent(input$estrutura, {
+        sel <- input$estrutura
+        
+        if (identical(sel, "estruturaNew")) {
+          estrutura$uiNewEstrutura(ns, input, output, session, function() {
+            estrutura$dispose(session)
+          })
+        } else if (identical(sel, "estruturaTable")) {
+          estrutura$uiEditEstrutura(ns, input, output, session, function() {
+            estrutura$dispose(session)
+          })
+        }
+        
+        if (!is.null(sel) && sel %in% c("estruturaNew", "estruturaTable")) {
+          updateTabItems(session, inputId = "estrutura", selected = "noop")
+        }
+      }, ignoreInit = TRUE, ignoreNULL = TRUE)
+      
+      # ---- Obsevent Menu Alarme
+      observeEvent(input$alarme, {
+        sel <- input$alarme
+        
+        if (identical(sel, "alarmeNew")) {
+          alarme$uiNewAlarme(ns, input, output, session, callback = function() {
+            alarme$dispose(session)
+          })
+        } else if (identical(sel, "alarmeTable")) {
+          alarme$uiEditAlarme(ns, input, output, session, function() {
+            alarme$dispose(session)
+          })
+        }
+        
+        if (!is.null(sel) && sel %in% c("alarmeNew", "alarmeTable")) {
+          updateTabItems(session, inputId = "alarme", selected = "noop")
+        }
+      }, ignoreInit = TRUE, ignoreNULL = TRUE)
+      
+      # ---- Obsevent Menu Treinar
+      observeEvent(input$treinar, {
+        sel <- input$treinar
+        
+        if (identical(sel, "treinarNew")) {
+          treinar$uiNewTreinar(ns, input, output, session, function() {
+            treinar$dispose(session)
+          })
+        } else if (identical(sel, "treinarTable")) {
+          treinar$uiEditTreinar(ns, input, output, session, function() {
+            treinar$dispose(session)
+          })
+        }
+        
+        if (!is.null(sel) && sel %in% c("treinarNew", "treinarTable")) {
+          updateTabItems(session, inputId = "treinar", selected = "noop")
+        }
+      }, ignoreInit = TRUE, ignoreNULL = TRUE)
+      
+      componentHeader <- function(input, output, textoInformacao, size.right = 50 * 2) {
+        uiHeader <- renderUI({
+          div(
+            style = paste0(
+              "position: absolute; width: auto; height: 25px; right: ",
+              size.right,
+              "px; top: 25%;"
+            ),
+            tags$span(style = "float: left; color: white; font-size: 15px;", textoInformacao())
+          )
+        })
+        uiHeader
+      }
+      
+      output$containerHeader <- componentHeader(input, output, function() {
+        timeReactive()
+        span(format(Sys.time(), "%d/%m/%Y %H:%M"))
+      })
+      
+      output$dropsMensagem <- renderMenu({
+        dropsNotification <- inputDropsMessage()
+        n <- length(dropsNotification)
+        
+        if (n > 0) runjs("document.getElementById('soundBoxMessage').play();")
+        
+        dropdowncomponent <- dropdownMenu(
+          type = "messages",
+          badgeStatus = "danger",
+          headerText = paste0("Você tem ", n, " ", if (n == 1) "mensagem." else "mensagens"),
+          .list = dropsNotification
+        )
+        
+        if (dropdowncomponent$children[[1]]$children[[2]]$children[[1]] > 99) {
+          dropdowncomponent$children[[1]]$children[[2]]$children[[1]] <- "+99"
+        }
+        dropdowncomponent
+      })
+      
+      output$dropsAlertas <- renderMenu({
+        dropsNotification <- inputDropsNotification()
+        n <- length(dropsNotification)
+        
+        if (n > 0) runjs("document.getElementById('soundNotificationOn').play();")
+        
+        dropdowncomponent <- dropdownMenu(
+          type = "notifications",
+          icon = icon("bell"),
+          badgeStatus = "danger",
+          headerText = paste0("Você tem ", n, " ", if (n == 1) "notificação." else "notificações"),
+          .list = dropsNotification
+        )
+        
+        if (dropdowncomponent$children[[1]]$children[[2]]$children[[1]] > 99) {
+          dropdowncomponent$children[[1]]$children[[2]]$children[[1]] <- "+99"
+        }
+        dropdowncomponent
+      })
+      
+    })
   })
 }
 

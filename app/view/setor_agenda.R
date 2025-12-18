@@ -11,7 +11,7 @@ box::use(
     showNotification, req, icon
   ],
   shinyjs[inlineCSS],
-  shinyWidgets[airDatepickerInput, timepickerOptions, updateAirDateInput,prettyToggle],
+  shinyWidgets[airDatepickerInput, timepickerOptions, updateAirDateInput, prettyToggle],
   DT,
   dplyr[...],
   stringr,
@@ -60,7 +60,7 @@ box::use(
     CD_ID_SETOR  = integer(),
     NAME_SETOR   = character(),
     TITULO       = character(),
-    ATIVO        = logical(),      # <<< NOVO: controlado pelo toggle (DT)
+    ATIVO        = logical(),      # controlado pelo toggle (DT)
     TIPO         = character(),    # "ONCE" / "WEEKLY"
     DT_BEGIN     = as.POSIXct(character(), tz = "UTC"),
     DT_END       = as.POSIXct(character(), tz = "UTC"),
@@ -105,9 +105,23 @@ box::use(
 .week_labels <- function() c("SEG","TER","QUA","QUI","SEX","SAB","DOM")
 
 # ------------------------------------------------------------
-# TZ + helpers (date-only no UI, storage em UTC)
+# TZ + helpers (UI local, storage UTC)
 # ------------------------------------------------------------
-.app_tz <- "America/Sao_Paulo"
+.app_tz <- Sys.timezone()
+.once_time_range_text <- function(dtb_utc, dte_utc) {
+  if (is.null(dtb_utc) || is.na(dtb_utc) || is.null(dte_utc) || is.na(dte_utc)) return("")
+
+  b <- lubridate::with_tz(dtb_utc, .app_tz)
+  e <- lubridate::with_tz(dte_utc, .app_tz)
+
+  same_day <- as.Date(b) == as.Date(e)
+
+  if (isTRUE(same_day)) {
+    paste0(format(b, "%H:%M"), "-", format(e, "%H:%M"))
+  } else {
+    paste0(format(b, "%d/%m %H:%M"), " - ", format(e, "%d/%m %H:%M"))
+  }
+}
 
 .as_date_safe <- function(x) {
   if (is.null(x) || identical(x, "")) return(as.Date(NA))
@@ -130,14 +144,32 @@ box::use(
   format(lubridate::with_tz(x_utc, .app_tz), "%d/%m/%Y")
 }
 
+.format_dt_br <- function(x_utc, with_time = FALSE) {
+  if (is.null(x_utc) || is.na(x_utc)) return("")
+  fmt <- if (isTRUE(with_time)) "%d/%m/%Y %H:%M" else "%d/%m/%Y"
+  format(lubridate::with_tz(x_utc, .app_tz), fmt)
+}
+
 .clean_title <- function(x) {
   x <- stringr::str_squish(stringr::str_trim(x %||% ""))
   if (!nzchar(x)) return("")
   toupper(x)
 }
 
+# NOVO: valida HH:MM
+.ok_time_hhmm <- function(x) {
+  x <- stringr::str_trim(x %||% "")
+  if (!nzchar(x)) return(FALSE)
+  grepl("^([01]\\d|2[0-3]):[0-5]\\d$", x)
+}
+
+# NOVO: cria datetime local a partir de Date + "HH:MM"
+.datetime_local_from_date_hhmm <- function(d, hhmm) {
+  lubridate::as_datetime(paste0(format(as.Date(d), "%Y-%m-%d"), " ", hhmm, ":00"), tz = .app_tz)
+}
+
 # ------------------------------------------------------------
-# WINDOWS_JSON robusto (evita "$ operator is invalid for atomic vectors")
+# WINDOWS_JSON robusto
 # ------------------------------------------------------------
 .parse_windows_json <- function(x) {
   if (is.null(x) || !nzchar(x)) return(list())
@@ -148,7 +180,6 @@ box::use(
   )
   if (is.null(w)) return(list())
 
-  # Caso 1: lista de objetos
   if (is.list(w) && length(w) && is.list(w[[1]])) {
     out <- lapply(w, function(z) {
       list(
@@ -159,7 +190,6 @@ box::use(
     return(out)
   }
 
-  # Caso 2: lista colunar
   if (is.list(w) && !is.null(w$begin) && !is.null(w$end)) {
     b <- w$begin
     e <- w$end
@@ -173,7 +203,6 @@ box::use(
     return(out)
   }
 
-  # Caso 3: data.frame
   if (is.data.frame(w) && all(c("begin","end") %in% names(w))) {
     out <- lapply(seq_len(nrow(w)), function(i) {
       list(begin = as.character(w$begin[i] %||% ""), end = as.character(w$end[i] %||% ""))
@@ -237,21 +266,40 @@ uiSetorAgenda <- function(ns, input, output, session, callback = function() {}) 
   .reset_editor <- function() {
     rv_edit_id(NA_integer_)
     rv_windows(list())
+
     updateTextInput(session, "titulo", value = "")
     updateSelectInput(session, "tipo", selected = "ONCE")
     updateCheckboxGroupInput(session, "dias_week", selected = c("SEG","TER","QUA","QUI","SEX"))
+
     updateTextInput(session, "win_begin", value = "08:00")
-    updateTextInput(session, "win_end", value = "17:00")
+    updateTextInput(session, "win_end",   value = "17:00")
+
+    # NOVO (ONCE): horários opcionais
+    updateTextInput(session, "once_begin_time", value = "")
+    updateTextInput(session, "once_end_time",   value = "")
+
     shinyWidgets::updateAirDateInput(session, "dt_begin", value = Sys.Date())
-    shinyWidgets::updateAirDateInput(session, "dt_end", value = NULL)
+    shinyWidgets::updateAirDateInput(session, "dt_end",   value = NULL)
   }
 
   # ----------------------------
   # Editor UI
   # ----------------------------
   uiEditor <- function(ns) {
-    tagList(
+    div(
+      style = 'padding-top: 10px; padding-left: 15px; padding-right: 15px;',
+      br(),
       fluidRow(
+        column(
+          12,
+          textInput(
+            inputId = ns("titulo"),
+            label   = "Título do agendamento",
+            value   = "",
+            placeholder = "Ex: Manutenção preventiva / Setup / Inspeção / etc.",
+            width = "95%"
+          )
+        ),
         column(
           6,
           selectInput(
@@ -266,34 +314,17 @@ uiSetorAgenda <- function(ns, input, output, session, callback = function() {}) 
           div(
             style = "margin-top: 24px; text-align:right;",
             actionButton(ns("btLimparEditor"), "Limpar editor", icon = icon("eraser")),
-            actionButton(ns("btSalvarAgenda"), "Salvar", class = "btn-success", icon = icon("save"))
+            actionButton(ns("btSalvarAgenda"), "Incluir", class = "btn-success", icon = icon("save"))
           )
         )
       ),
-
       br(),
-
-      fluidRow(
-        column(
-          12,
-          textInput(
-            inputId = ns("titulo"),
-            label   = "Título do agendamento",
-            value   = "",
-            placeholder = "Ex: Manutenção preventiva / Setup / Inspeção / etc."
-          ),
-          tags$small(style="opacity:.75;", "O Ativar/Desativar é controlado direto na tabela (toggle).")
-        )
-      ),
-
-      br(),
-
       fluidRow(
         column(
           6,
           shinyWidgets::airDatepickerInput(
             inputId    = ns("dt_begin"),
-            label      = "DT_BEGIN (início)",
+            label      = "Início",
             value      = Sys.Date(),
             timepicker = FALSE,
             language   = "pt-BR",
@@ -308,7 +339,7 @@ uiSetorAgenda <- function(ns, input, output, session, callback = function() {}) 
           6,
           shinyWidgets::airDatepickerInput(
             inputId    = ns("dt_end"),
-            label      = "DT_END (fim) — opcional",
+            label      = "Fim — opcional",
             value      = NULL,
             timepicker = FALSE,
             language   = "pt-BR",
@@ -320,7 +351,6 @@ uiSetorAgenda <- function(ns, input, output, session, callback = function() {}) 
           )
         )
       ),
-
       br(),
       uiOutput(ns("uiTipoBody"))
     )
@@ -331,16 +361,21 @@ uiSetorAgenda <- function(ns, input, output, session, callback = function() {}) 
   # ----------------------------
   id       <- ns('dialogAgendaSetor')
   cssStyle <- list()
-  cssStyle[[paste0(' #parent',id,' .modal-dialog')]]  <- paste0('height: 80% !important;')
-  cssStyle[[paste0(' #parent',id,' .modal-content')]] <- paste0('width: 100% !important; height: 100% !important;')
-  cssStyle[[paste0(' #parent',id,' .modal-body')]]    <- paste0('width: 100% !important; height: calc(100% - 57px - 65px) !important; overflow-y: auto;')
-  
+  cssStyle[[paste0(' #parent',id,' .modal-dialog')]]  <- 'width: 95% !important; height: 90% !important;'
+  cssStyle[[paste0(' #parent',id,' .modal-content')]] <- 'width: 100% !important; height: 100% !important;'
+  cssStyle[[paste0(' #parent',id,' .modal-body')]]    <- 'width: 100% !important; height: calc(100% - 57px - 65px) !important; overflow-y: auto; overflow-x: hidden;'
+
   showModal(
     session = session,
     div(
       id = paste0('parent', id),
       style = paste0("height: 90%;"),
       inlineCSS(cssStyle),
+
+      # deps do pretty + força FontAwesome para os ícones (thumbs)
+      shinyWidgets::html_dependency_pretty(),
+      div(style = "display:none;", icon("thumbs-up"), icon("thumbs-down")),
+
       dialogModal(
         title = "Agenda do Setor",
         size  = "l",
@@ -365,15 +400,17 @@ uiSetorAgenda <- function(ns, input, output, session, callback = function() {}) 
                 background.color.title = "white",
                 title.color = "black",
                 border.color = "lightgray",
-                children = tagList(
+                children = div(
+                  style = 'padding-top: 10px; padding-left: 15px; padding-right: 15px;',
                   selectInput(
                     inputId = ns("setor_id"),
                     label   = "Setor",
                     choices = setNames(setores_df$CD_ID_SETOR, toupper(setores_df$NAME_SETOR))
                   ),
                   br(),
-                  actionButton(ns("btNovo"), "Novo agendamento", icon = icon("plus"), class = "btn-primary"),
-                  actionButton(ns("btFechar"), "Fechar", icon = icon("times"))
+                  actionButton(ns("btNovo"),   "Novo agendamento", icon = icon("plus"), class = "btn-primary"),
+                  actionButton(ns("btFechar"), "Fechar",           icon = icon("times")),
+                  br()
                 )
               )
             ),
@@ -384,9 +421,9 @@ uiSetorAgenda <- function(ns, input, output, session, callback = function() {}) 
           )
         ),
         footer = tagList(
-          actionButton(inputId = ns("btSair"),  "Sair",   icon = icon("arrow-left")),
-          actionButton(inputId = ns("btClear"), "Limpar", icon = icon("eraser")),
-          actionButton(inputId = ns("btSalvar"),"Salvar", class = "btn-primary", icon = icon("save"))
+          actionButton(inputId = ns("btSair"),   "Sair",   icon = icon("arrow-left")),
+          actionButton(inputId = ns("btClear"),  "Limpar", icon = icon("eraser")),
+          actionButton(inputId = ns("btSalvar"), "Salvar", class = "btn-primary", icon = icon("save"))
         )
       )
     )
@@ -400,20 +437,22 @@ uiSetorAgenda <- function(ns, input, output, session, callback = function() {}) 
     tagList(
       br(),
       panelTitle(
-        title = "Agendamentos cadastrados",
-        background.color.title = "white",
-        title.color = "black",
-        border.color = "lightgray",
-        children = div(style = "border: 1px solid #fff; overflow-x: auto;",
-                       DT::dataTableOutput(ns("tbAgenda")))
-      ),
-      br(),
-      panelTitle(
         title = "Editor de agendamento",
         background.color.title = "white",
         title.color = "black",
         border.color = "lightgray",
         children = uiEditor(ns)
+      ),
+      br(),
+      panelTitle(
+        title = "Agendamentos cadastrados",
+        background.color.title = "white",
+        title.color = "black",
+        border.color = "lightgray",
+        children = div(
+          style = "border: 1px solid #fff; overflow-x: auto; padding-top: 10px; padding-left: 15px; padding-right: 15px;",
+          DT::dataTableOutput(ns("tbAgenda"))
+        )
       )
     )
   })
@@ -425,9 +464,38 @@ uiSetorAgenda <- function(ns, input, output, session, callback = function() {}) 
     req(input$tipo)
 
     if (input$tipo == "ONCE") {
-      div(style = "opacity:.9; font-size: 12px;",
+      tagList(
+        div(
+          style = "opacity:.9; font-size: 12px; margin-bottom: 10px;",
           icon("info-circle"),
-          " Uma vez: use DT_BEGIN e (opcionalmente) DT_END.")
+          " UMA VEZ: horário início/fim é opcional.",
+          br(),
+          tags$strong("Regra: "),
+          "se você preencher horários, precisa informar o FIM (data).",
+          br(),
+          "Se não informar FIM, o sistema assume 24h e salva ATIVO = NÃO."
+        ),
+        fluidRow(
+          column(
+            6,
+            textInput(
+              inputId = ns("once_begin_time"),
+              label   = "Horário início (HH:MM) — opcional",
+              value   = "",
+              placeholder = "Ex: 08:00"
+            )
+          ),
+          column(
+            6,
+            textInput(
+              inputId = ns("once_end_time"),
+              label   = "Horário fim (HH:MM) — opcional",
+              value   = "",
+              placeholder = "Ex: 17:30"
+            )
+          )
+        )
+      )
     } else {
       tagList(
         checkboxGroupInput(
@@ -479,7 +547,7 @@ uiSetorAgenda <- function(ns, input, output, session, callback = function() {}) 
   })
 
   # ----------------------------
-  # DT (toggle ATIVAR no lugar do ID)
+  # DT (toggle ATIVAR)
   # ----------------------------
   output$tbAgenda <- DT::renderDataTable({
 
@@ -492,31 +560,48 @@ uiSetorAgenda <- function(ns, input, output, session, callback = function() {}) 
     DT::datatable({
       df2 <- df |>
         dplyr::mutate(
-          `INÍCIO` = vapply(.data$DT_BEGIN, .format_date_br, character(1)),
-          `FIM`    = ifelse(is.na(.data$DT_END), "", vapply(.data$DT_END, .format_date_br, character(1))),
-          `DIAS`   = ifelse(.data$TIPO == "WEEKLY", .data$DAYS_WEEK, ""),
-          `HORÁRIOS` = ifelse(
-            .data$TIPO == "WEEKLY",
-            vapply(.data$WINDOWS_JSON, function(x) {
+          `INÍCIO` = ifelse(.data$TIPO == "ONCE",
+                            vapply(.data$DT_BEGIN, function(x) .format_dt_br(x, TRUE), character(1)),
+                            vapply(.data$DT_BEGIN, .format_date_br, character(1))
+          ),
+          `FIM` = ifelse(is.na(.data$DT_END), "",
+                         ifelse(.data$TIPO == "ONCE",
+                                vapply(.data$DT_END, function(x) .format_dt_br(x, TRUE), character(1)),
+                                vapply(.data$DT_END, .format_date_br, character(1))
+                         )
+          ),
+          `DIAS` = ifelse(.data$TIPO == "WEEKLY", .data$DAYS_WEEK, ""),
+          `HORÁRIOS` = dplyr::case_when(
+            .data$TIPO == "WEEKLY" ~ vapply(.data$WINDOWS_JSON, function(x) {
               wl <- .parse_windows_json(x)
               .windows_to_text(wl)
             }, character(1)),
-            ""
+            
+            .data$TIPO == "ONCE" ~ vapply(seq_len(nrow(df)), function(i) {
+              .once_time_range_text(df$DT_BEGIN[i], df$DT_END[i])
+            }, character(1)),
+            
+            TRUE ~ ""
           ),
           `ATIVAR` = vapply(.data$ID_AGENDA, function(id_ag) {
             valueAtivo <- isTRUE(df$ATIVO[df$ID_AGENDA == id_ag][1])
             as.character(
-              div(style = "margin-top: 5px;",
-              shinyWidgets::prettyCheckbox(
-                inputId = ns(paste0("checkboxAtivoAgenda_", id_ag)),
-                label   = "",
-                value   = valueAtivo,
-                bigger  = TRUE,
-                status  = "success",
-                outline = TRUE
+              div(
+                style = "margin-top: 5px;",
+                shinyWidgets::prettyToggle(
+                  inputId  = ns(paste0("checkboxAtivoAgenda_", id_ag)),
+                  label_on = "Sim",
+                  label_off = "Não",
+                  outline  = TRUE,
+                  plain    = TRUE,
+                  value    = valueAtivo,
+                  icon_on  = icon("thumbs-up"),
+                  icon_off = icon("thumbs-down"),
+                  bigger   = TRUE,
+                  width    = "auto"
+                )
               )
             )
-          )
           }, character(1)),
           `EDITAR` = vapply(.data$ID_AGENDA, function(id_ag) {
             as.character(actionButton(
@@ -524,9 +609,7 @@ uiSetorAgenda <- function(ns, input, output, session, callback = function() {}) 
               label = "",
               icon = icon("pen"),
               class = "btn btn-default btn-sm",
-              onclick = paste0(
-                'Shiny.setInputValue("', ns("editPressed"), '", "', id_ag, '", {priority:"event"})'
-              )
+              onclick = paste0('Shiny.setInputValue("', ns("editPressed"), '", "', id_ag, '", {priority:"event"})')
             ))
           }, character(1)),
           `REMOVER` = vapply(.data$ID_AGENDA, function(id_ag) {
@@ -535,9 +618,7 @@ uiSetorAgenda <- function(ns, input, output, session, callback = function() {}) 
               label = "",
               icon = icon("trash"),
               class = "btn btn-default btn-sm",
-              onclick = paste0(
-                'Shiny.setInputValue("', ns("delPressed"), '", "', id_ag, '", {priority:"event"})'
-              )
+              onclick = paste0('Shiny.setInputValue("', ns("delPressed"), '", "', id_ag, '", {priority:"event"})')
             ))
           }, character(1))
         ) |>
@@ -564,22 +645,17 @@ uiSetorAgenda <- function(ns, input, output, session, callback = function() {}) 
       scrollY = "45vh",
       scrollX = TRUE,
       scrollCollapse = TRUE,
-      preDrawCallback = DT::JS("function() {
-        Shiny.unbindAll(this.api().table().node());
-      }"),
-          
-          drawCallback = DT::JS("function() {
-        Shiny.bindAll(this.api().table().node());
-      }"),
+      preDrawCallback = DT::JS("function() { Shiny.unbindAll(this.api().table().node()); }"),
+      drawCallback    = DT::JS("function() { Shiny.bindAll(this.api().table().node()); }"),
       columnDefs = list(
         list(className = "dt-center", targets = "_all"),
-        list(width = "160px", targets = c(0)), # ATIVAR toggle
-        list(width = "260px", targets = c(1)), # TÍTULO
-        list(width = "90px",  targets = c(2)), # TIPO
-        list(width = "120px", targets = c(3,4)),# INÍCIO/FIM
-        list(width = "140px", targets = c(5)), # DIAS
-        list(width = "520px", targets = c(6)), # <<< HORÁRIOS maior
-        list(width = "120px", targets = c(7,8))# EDITAR/REMOVER
+        list(width = "160px", targets = c(0)), # ATIVAR
+        list(width = "360px", targets = c(1)), # TÍTULO
+        list(width = "100px", targets = c(2)), # TIPO
+        list(width = "320px", targets = c(3,4)), # INÍCIO/FIM (com hora no ONCE)
+        list(width = "200px", targets = c(5)), # DIAS
+        list(width = "520px", targets = c(6)), # HORÁRIOS
+        list(width = "100px", targets = c(7,8))# EDITAR/REMOVER
       )
     ),
     escape = FALSE,
@@ -633,9 +709,9 @@ uiSetorAgenda <- function(ns, input, output, session, callback = function() {}) 
   # ------------------------------------------------------------
   # Ações do editor
   # ------------------------------------------------------------
-  obs$add(observeEvent(input$btNovo, { .reset_editor() }, ignoreInit = TRUE))
+  obs$add(observeEvent(input$btNovo,         { .reset_editor() }, ignoreInit = TRUE))
   obs$add(observeEvent(input$btLimparEditor, { .reset_editor() }, ignoreInit = TRUE))
-  obs$add(observeEvent(input$btClear, { .reset_editor() }, ignoreInit = TRUE))
+  obs$add(observeEvent(input$btClear,        { .reset_editor() }, ignoreInit = TRUE))
 
   # Add janela (weekly)
   obs$add(observeEvent(input$btAddWindow, {
@@ -685,6 +761,22 @@ uiSetorAgenda <- function(ns, input, output, session, callback = function() {}) 
 
     shinyWidgets::updateAirDateInput(session, "dt_begin", value = d_begin)
     shinyWidgets::updateAirDateInput(session, "dt_end",   value = if (is.na(d_end)) NULL else d_end)
+
+    # NOVO: carregar horários (ONCE)
+    if (row$TIPO[1] == "ONCE") {
+      dtb_local <- lubridate::with_tz(row$DT_BEGIN[1], .app_tz)
+      dte_local <- if (is.na(row$DT_END[1])) NA else lubridate::with_tz(row$DT_END[1], .app_tz)
+
+      hb <- format(dtb_local, "%H:%M")
+      he <- if (is.na(dte_local)) "" else format(dte_local, "%H:%M")
+
+      updateTextInput(session, "once_begin_time", value = hb)
+      updateTextInput(session, "once_end_time",   value = he)
+      rv_windows(list())
+    } else {
+      updateTextInput(session, "once_begin_time", value = "")
+      updateTextInput(session, "once_end_time",   value = "")
+    }
 
     if (row$TIPO[1] == "WEEKLY") {
       dias <- strsplit(row$DAYS_WEEK[1] %||% "", ",", fixed = TRUE)[[1]]
@@ -751,25 +843,94 @@ uiSetorAgenda <- function(ns, input, output, session, callback = function() {}) 
       return()
     }
 
-    d_e <- .as_date_safe(input$dt_end)
-
-    dtb <- .date_begin_utc(d_b)
-    if (!is.na(d_e)) {
-      if (d_e < d_b) {
-        showNotification("DT_END deve ser maior ou igual a DT_BEGIN.", type = "warning")
-        return()
-      }
-      dte <- .date_end_utc(d_e)
-    } else {
-      dte <- as.POSIXct(NA, tz = "UTC")
-    }
-
+    d_e <- .as_date_safe(input$dt_end) # pode ser NA
     tipo <- input$tipo
 
-    days_week <- ""
+    days_week    <- ""
     windows_json <- ""
 
-    if (tipo == "WEEKLY") {
+    # ------------------------------------------------------------
+    # ONCE: horário opcional + regra FIM obrigatório se preencher horário
+    # Se NÃO informar FIM => default 24h e ATIVO = NÃO
+    # ------------------------------------------------------------
+    once_force_inactive <- FALSE
+
+    if (tipo == "ONCE") {
+
+      hb <- stringr::str_trim(input$once_begin_time %||% "")
+      he <- stringr::str_trim(input$once_end_time   %||% "")
+
+      has_any_time <- nzchar(hb) || nzchar(he)
+
+      # se um veio e outro não, invalida (ou ambos, ou nenhum)
+      if (has_any_time && !(nzchar(hb) && nzchar(he))) {
+        showNotification("Preencha os dois horários (início e fim) ou deixe ambos em branco.", type = "warning")
+        return()
+      }
+
+      # Caso 1: sem horários -> início do dia
+      if (!has_any_time) {
+
+        dtb_local <- lubridate::as_datetime(d_b, tz = .app_tz)
+        dtb <- lubridate::with_tz(dtb_local, "UTC")
+
+        if (is.na(d_e)) {
+          # default 24h e desativa
+          dte <- dtb + lubridate::hours(24) - lubridate::seconds(1)
+          once_force_inactive <- TRUE
+        } else {
+          if (d_e < d_b) {
+            showNotification("DT_END deve ser maior ou igual a DT_BEGIN.", type = "warning")
+            return()
+          }
+          dte <- .date_end_utc(d_e)
+        }
+
+      } else {
+        # Caso 2: com horários -> valida e exige dt_end
+        if (!.ok_time_hhmm(hb) || !.ok_time_hhmm(he)) {
+          showNotification("Horário inválido. Use HH:MM (ex: 08:30).", type = "warning")
+          return()
+        }
+
+        dtb_local <- .datetime_local_from_date_hhmm(d_b, hb)
+        dtb <- lubridate::with_tz(dtb_local, "UTC")
+
+        if (is.na(d_e)) {
+          # regra pedida: sem FIM => default 24h e desativa
+          dte <- dtb + lubridate::hours(24) - lubridate::seconds(1)
+          once_force_inactive <- TRUE
+        } else {
+          if (d_e < d_b) {
+            showNotification("DT_END deve ser maior ou igual a DT_BEGIN.", type = "warning")
+            return()
+          }
+          dte_local <- .datetime_local_from_date_hhmm(d_e, he)
+          if (dte_local <= dtb_local) {
+            showNotification("Fim precisa ser maior que Início (data/hora).", type = "warning")
+            return()
+          }
+          dte <- lubridate::with_tz(dte_local, "UTC")
+        }
+      }
+
+    } else {
+      # ------------------------------------------------------------
+      # WEEKLY: mantém lógica original (date-only)
+      # ------------------------------------------------------------
+      dtb <- .date_begin_utc(d_b)
+
+      if (!is.na(d_e)) {
+        if (d_e < d_b) {
+          showNotification("DT_END deve ser maior ou igual a DT_BEGIN.", type = "warning")
+          return()
+        }
+        dte <- .date_end_utc(d_e)
+      } else {
+        dte <- as.POSIXct(NA, tz = "UTC")
+      }
+
+      # weekly exige dias + janelas
       dias <- input$dias_week %||% character()
       if (!length(dias)) {
         showNotification("Selecione pelo menos 1 dia da semana.", type = "warning")
@@ -800,7 +961,7 @@ uiSetorAgenda <- function(ns, input, output, session, callback = function() {}) 
         CD_ID_SETOR  = setor_id,
         NAME_SETOR   = setor_nm,
         TITULO       = titulo,
-        ATIVO        = TRUE,      # <<< padrão: ativo ao criar (toggle muda depois)
+        ATIVO        = if (tipo == "ONCE" && isTRUE(once_force_inactive)) FALSE else TRUE,
         TIPO         = tipo,
         DT_BEGIN     = dtb,
         DT_END       = dte,
@@ -813,7 +974,12 @@ uiSetorAgenda <- function(ns, input, output, session, callback = function() {}) 
 
       df2 <- dplyr::bind_rows(df_all, new_row)
       .persist(df2)
-      showNotification("Agendamento criado com sucesso!", type = "message")
+
+      if (tipo == "ONCE" && isTRUE(once_force_inactive)) {
+        showNotification("ONCE sem FIM: salvo com duração padrão de 24h e ATIVO = NÃO.", type = "warning", duration = 5)
+      } else {
+        showNotification("Agendamento criado com sucesso!", type = "message")
+      }
 
     } else {
 
@@ -835,7 +1001,12 @@ uiSetorAgenda <- function(ns, input, output, session, callback = function() {}) 
       # ATIVO NÃO muda aqui (controlado no DT)
 
       .persist(df2)
-      showNotification("Agendamento atualizado com sucesso!", type = "message")
+
+      if (tipo == "ONCE" && isTRUE(once_force_inactive)) {
+        showNotification("ONCE sem FIM: atualizado com duração padrão de 24h (ATIVO não foi alterado aqui).", type = "warning", duration = 5)
+      } else {
+        showNotification("Agendamento atualizado com sucesso!", type = "message")
+      }
     }
 
     .reset_editor()

@@ -172,6 +172,66 @@ library(processx)
 library(DBI)
 library(RMariaDB)
 library(blob)
+library(magick)
+
+# ------------------------------------------------------------
+# Valida RTSP: consegue pegar 1 frame?
+# - retorna uma lista com ok=TRUE/FALSE
+# - se ok=TRUE, plota a imagem com magick
+# ------------------------------------------------------------
+validate_rtsp_and_plot <- function(url,
+                                   size = c(512, 512),
+                                   quality = 2,
+                                   timeout_sec = 10,
+                                   plot = TRUE,
+                                   save_path = NULL) {
+  stopifnot(is.character(url), length(url) == 1L)
+
+  # Tenta capturar bytes do JPG
+  raw_jpg <- tryCatch(
+    grab_one_file_bytes(
+      url,
+      out_w = size[1], out_h = size[2],
+      quality = quality,
+      use_magick = FALSE
+    ),
+    error = function(e) NULL
+  )
+
+  # Validação básica
+  ok <- !is.null(raw_jpg) && length(raw_jpg) > 256
+
+  # Checagem extra: assinatura JPEG (0xFF 0xD8 ... 0xFF 0xD9)
+  if (ok) {
+    ok <- (raw_jpg[1] == as.raw(0xFF) && raw_jpg[2] == as.raw(0xD8) &&
+             tail(raw_jpg, 2)[1] == as.raw(0xFF) && tail(raw_jpg, 2)[2] == as.raw(0xD9))
+  }
+
+  if (!ok) {
+    return(list(ok = FALSE, img = NULL, bytes = NULL, message = "Falha ao capturar frame (RTSP/ffmpeg)."))
+  }
+
+  # Se OK: lê com magick e plota
+  img <- tryCatch(
+    magick::image_read(raw_jpg),
+    error = function(e) NULL
+  )
+
+  if (is.null(img)) {
+    return(list(ok = FALSE, img = NULL, bytes = raw_jpg, message = "Capturou bytes, mas magick não conseguiu ler o JPEG."))
+  }
+
+  if (isTRUE(plot)) {
+    print(img)  # plota no viewer/console do R
+  }
+
+  if (!is.null(save_path) && nzchar(save_path)) {
+    magick::image_write(img, path = save_path, format = "jpg")
+  }
+
+  list(ok = TRUE, img = img, bytes = raw_jpg, message = "OK: frame capturado e lido com magick.")
+}
+
 
 # ===================== HELPERS =====================
 make_rtsp_url <- function(ip, port = 554, user = NULL, pwd = NULL,
@@ -344,7 +404,12 @@ port <- 554
 user <- "everton"
 pwd  <- "kNFR#8wnT4p"
 
-rtsp_url <- make_rtsp_url(ip, port, user, pwd, channel = 5, subtype = 1)
+ip   <- "172.30.0.233"
+port <- 554
+user <- "everton"
+pwd  <- "ssbwarcq1586"
+
+rtsp_url <- make_rtsp_url(ip, port, user, pwd, channel = 19, subtype = 1)
 
 # Exemplo: 1 FPS, 512x512, COMMIT a cada 20, sem salvar cópia local
 capture_rtsp_loop(
@@ -358,3 +423,11 @@ capture_rtsp_loop(
   id_camera       = 1L,
   use_magick      = FALSE        # set TRUE se quiser manter image_read() internamente
 )
+
+res <- validate_rtsp_and_plot(rtsp_url, size = c(512,512), plot = TRUE)
+
+if (res$ok) {
+  cat("Deu certo!\n")
+} else {
+  cat("Falhou:", res$message, "\n")
+}

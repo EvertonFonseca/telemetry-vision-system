@@ -956,11 +956,11 @@ uiNewTreinar <- function(ns, input, output, session, callback){
 
   # ---------- Botão Buscar ----------
   obs$add(observeEvent(input$btBuscar, {
-    actionWebUser({
+   # actionWebUser({
       objeto <<- objetos |> dplyr::filter(NAME_OBJETO == isolate(input$comboObjeto))
       if (!nrow(objeto)) {
         showNotification("Selecione um objeto válido.", type = "warning")
-        removeProgressLoader()
+        #removeProgressLoader()
         return(invisible())
       }
 
@@ -969,11 +969,11 @@ uiNewTreinar <- function(ns, input, output, session, callback){
 
       if(is.null(time_begin)){
         showNotification("'Data e Hora De' está com campo vazio!", type = "warning")
-        removeProgressLoader()
+        #removeProgressLoader()
         return(invisible())
       }else if(is.null(time_end)){
         showNotification("'Data e Hora Até' está com campo vazio!", type = "warning")
-        removeProgressLoader()
+        #removeProgressLoader()
         return(invisible())
       }
 
@@ -1036,7 +1036,7 @@ uiNewTreinar <- function(ns, input, output, session, callback){
         removeProgressLoader(callback = function(){step_frame(+1L)})
       }, once = TRUE)
 
-    }, auto.remove = FALSE)
+   # }, auto.remove = FALSE)
   }, ignoreInit = TRUE))
 
   # ---------- Navegação frame a frame (player principal) ----------

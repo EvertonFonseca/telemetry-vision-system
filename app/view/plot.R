@@ -604,7 +604,7 @@ insertNewPlotComponent <- function(title,plot,componentPlot){
           #   tagAppendAttributesFind(2,style = 'margin-left: -250px; border-color: gray;')
         )
       ),
-      div(style = 'padding: 15px; height: auto; width: 100%;',componentPlot)
+      div(style = 'padding: 10px; height: auto; width: 100%;',componentPlot)
     ))
   
 }

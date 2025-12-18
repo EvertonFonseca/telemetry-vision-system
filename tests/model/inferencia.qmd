@@ -197,8 +197,8 @@ con <- DBI::dbConnect(
 ## Frames
 
 ```{r}
-
-frames <- get_frames_window(con,1001418,janela = 35)
+# | eval: false
+frames <- get_frames_window(con,16159573,janela = 35)
 #frames$DATE_TIME <- format(frames$DT_HR_LOCAL,"%d/%m/%y %H:%M:%S:%OS3")
 difftime(last(frames$DT_HR_LOCAL),first(frames$DT_HR_LOCAL))
 
@@ -207,8 +207,8 @@ difftime(last(frames$DT_HR_LOCAL),first(frames$DT_HR_LOCAL))
 # Video
 
 ```{r}
-codigo  <- 1650086
-anime   <- build_gif_from_blob( get_frames_window(con,codigo,janela = 35))
+codigo  <- 1790413
+anime   <- build_gif_from_blob(get_frames_window(con,codigo,janela = 35))
 print(anime)
 
 ```

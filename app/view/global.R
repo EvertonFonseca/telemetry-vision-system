@@ -1,25 +1,14 @@
 box::use(
- shiny[div,splitLayout,tags,absolutePanel,removeModal,insertUI,br,actionButton,observeEvent,removeUI],
- shinydashboard[menuSubItem],
- stringi[stri_isempty],
- shinyjs[onclick,runjs,delay],
- vov,
- R6
+  shiny[div, splitLayout, tags, absolutePanel, removeModal, insertUI, br,
+        actionButton, observeEvent, removeUI],
+  shinydashboard[menuSubItem],
+  stringi[stri_isempty],
+  shinyjs[onclick, runjs, delay],
+  vov,
+  R6
 )
 
 #' Coleção de observers com ciclo de vida controlado
-#'
-#' Mantém uma lista de objetos retornados por observe/observeEvent, permitindo
-#' adicionar, remover, limpar e destruir (chamar $destroy() em todos).
-#'
-#' Métodos:
-#'  - $add(o)         : adiciona um observer (ignora NULL)
-#'  - $clear()        : destroy() em todos e esvazia a lista
-#'  - $remove(obs)    : remove por referência (identical) ou por índice numérico
-#'  - $destroy()      : alias para $clear(); usado para desalocar
-#'  - $items (active) : acesso somente-leitura à lista interna
-#'
-
 #' @export
 ObserversBag <- R6$R6Class(
   "ObserversBag",
@@ -82,7 +71,7 @@ MenuSubItem  <- function(id = NULL,
                          icon = shiny::icon("angle-double-right"),
                          selected = NULL,
                          hide = FALSE) {
-  
+
   styleinline <- 'margin-left: 8px; padding: 5px; height: 35px;'
   styleinline <- if(hide) paste0(styleinline," display:none !important;")
   component     <- div(
@@ -118,7 +107,7 @@ panelTitle <- function(id = '',
                        background.color.title = 'white',
                        border.color = 'gray',
                        children) {
-  
+
   if(!stri_isempty(id.tooltip))
     tooltipComponent <- div(
       id = id.tooltip,
@@ -133,24 +122,26 @@ panelTitle <- function(id = '',
     )
   else
     tooltipComponent <- NULL
-  
+
   return(
     div(id = id,
-        style = paste0('position: relative; ', 'display: ', display, '; height: ',height,'; width: ',width,';','border-color: ',border.color,'; border-style: solid; border-width: 1px;'),
+        style = paste0('position: relative; ', 'display: ', display, '; height: ',height,'; width: ',width,';',
+                       'border-color: ',border.color,'; border-style: solid; border-width: 1px;'),
         div(class = 'panelTitle',
             div(tags$span(style = 'float: left;',paste0(" ",title," ")),tooltipComponent,
-                style = paste0(' position: absolute; top:-10px; left: 10px; background-color: ',background.color.title,'; color: ',title.color,';')),
+                style = paste0(' position: absolute; top:-10px; left: 10px; background-color: ',
+                               background.color.title,'; color: ',title.color,';')),
             div(style = 'margin-top: 5px; z-index: 99999999;',children))))
 }
 
 #' @export
 dialogTitleClose <- function(id,title,active.bt.close = TRUE){
-  
+
   btcloser <- NULL
-  
+
   if(active.bt.close)
     btcloser <- absolutePanel(id = id,right = 15,top = 10,'x',style = 'cursor: pointer; font-weight: bold;')
-  
+
   container <- div(title,btcloser)
   return(container)
 }
@@ -166,12 +157,12 @@ shinySetInputValue <- function(id,value = NULL){
 
   value <- ifelse(is.null(value),'null',value)
   value <- ifelse(stringi::stri_isempty(value),"''",value)
-  
+
   if(is.vector(id))
   {
-   js <- sapply(id, function(x)  paste0("Shiny.setInputValue('",x,"',",value,",{priority:'event'});"))
-   runjs(paste0(js,collapse = '\n '))
-    
+    js <- sapply(id, function(x)  paste0("Shiny.setInputValue('",x,"',",value,",{priority:'event'});"))
+    runjs(paste0(js,collapse = '\n '))
+
   }else{
     runjs(paste0("Shiny.setInputValue('",id,"',",value,",{priority:'event'});"))
   }
@@ -184,11 +175,11 @@ play_sound <- function(session,id_local) {
 
 #' @export
 debugLocal <- function(expr) {
-  
-   debug(expr)
-   x <- expr()
-   undebug(expr)
-   return(x)
+
+  debug(expr)
+  x <- expr()
+  undebug(expr)
+  return(x)
 }
 
 #' @export
@@ -199,7 +190,7 @@ console <- function(text){
 #Cria um dialog dinamico
 #' @export
 messageAlerta <- function(input,ns,title = 'Mensagem de Alerta!',message,callback.yes,callback.no) {
-  
+
   obs <- newObserve()
 
   insertUI(
@@ -239,9 +230,9 @@ messageAlerta <- function(input,ns,title = 'Mensagem de Alerta!',message,callbac
     runjs("document.getElementById('notificationWarning').remove();")
     obs$destroy()
     callback.yes()
-    
+
   },ignoreInit = TRUE))
-  
+
   obs$add(observeEvent(input$btNonotification,{
 
     runjs("document.getElementById('notificationWarning').remove();")
@@ -251,10 +242,11 @@ messageAlerta <- function(input,ns,title = 'Mensagem de Alerta!',message,callbac
   },ignoreInit = TRUE))
 
 }
+
 # Change Text's multiInput
 #' @export
 changetextPlaceHolder <- function(text = "Filtro ..."){
-  
+
   delay(100,{
     runjs(paste0('
                   let lista = document.getElementsByClassName("search-input");\n
@@ -265,19 +257,19 @@ changetextPlaceHolder <- function(text = "Filtro ..."){
 
 #' @export
 tagAppendChildFind <- function(tag,target,child){
-  
+
   tag$children[[target]]$children <- list.append(tag$children[[target]]$children,child)
   tag
 }
 #' @export
 tagAppendAttributesFind <- function(tag,target,...){
-  
+
   tag$children[[target]]$attribs <- c(tag$children[[target]]$attribs,...)
   tag
 }
 #' @export
 tagAppendAttributesFindSub <- function(tag,target,...){
-  
+
   if(length(target) == 2)
   {
     tag$children[[target[1]]]$children[[target[2]]]$attribs <- c(tag$children[[target[1]]]$children[[target[2]]]$attribs,...)
@@ -292,7 +284,7 @@ tagAppendAttributesFindSub <- function(tag,target,...){
 
 #' @export
 deleteElement <- function(id){
-   runjs(paste0("document.getElementById('",id,"').remove();"))
+  runjs(paste0("document.getElementById('",id,"').remove();"))
 }
 
 #' @export
@@ -324,15 +316,25 @@ set_readonly_js <- function(id, readonly = FALSE, session = shiny::getDefaultRea
   runjs(js)
 }
 
+# =========================================================
+# ✅ MELHORIA 1: newProgressLoader idempotente (não recria se já estiver live)
+# =========================================================
 #' @export
 newProgressLoader <- function(session = shiny::getDefaultReactiveDomain()) {
   if (is.null(session)) return(invisible(FALSE))
 
   if (is.null(session$userData$loader_count)) session$userData$loader_count <- 0L
-  session$userData$loader_count <- session$userData$loader_count + 1L
+  if (is.null(session$userData$loader_live))  session$userData$loader_live  <- FALSE
 
-  # se já existe, não reinsere
-  if (isTRUE(session$userData$loader_count > 1L)) return(invisible(TRUE))
+  # Já está live -> só incrementa contador e não reinsere DOM/runjs
+  if (isTRUE(session$userData$loader_live)) {
+    session$userData$loader_count <- session$userData$loader_count + 1L
+    return(invisible(TRUE))
+  }
+
+  # Primeira ativação
+  session$userData$loader_count <- session$userData$loader_count + 1L
+  session$userData$loader_live  <- TRUE
 
   shiny::withReactiveDomain(session, {
     shinyjs::runjs("
@@ -351,12 +353,17 @@ newProgressLoader <- function(session = shiny::getDefaultReactiveDomain()) {
   invisible(TRUE)
 }
 
+# =========================================================
+# ✅ MELHORIA 2: removeProgressLoader libera locks do actionWebUser e derruba loader_live
+# =========================================================
 #' @export
 removeProgressLoader <- function(timer_ms = 0, callback = NULL,
                                  session = shiny::getDefaultReactiveDomain()) {
   if (is.null(session)) return(invisible(FALSE))
 
   if (is.null(session$userData$loader_count)) session$userData$loader_count <- 0L
+  if (is.null(session$userData$loader_live))  session$userData$loader_live  <- FALSE
+
   session$userData$loader_count <- max(0L, session$userData$loader_count - 1L)
 
   # ainda tem "usuários" do loader -> não remove
@@ -368,20 +375,41 @@ removeProgressLoader <- function(timer_ms = 0, callback = NULL,
   later::later(function() {
     if (!isTRUE(alive)) return(invisible(NULL))
     shiny::withReactiveDomain(session, {
+
       if (!is.null(callback)) try(callback(), silent = TRUE)
+
       shinyjs::runjs("try{document.getElementById('progressoLoader')?.remove();}catch(e){}")
+
+      # ✅ flag live OFF (agora realmente não está mais ativo)
+      session$userData$loader_live <- FALSE
+
+      # ✅ libera locks do actionWebUser (tudo que estava travado por essa sessão)
+      lock_keys <- session$userData$.actionWebUser_lock_keys
+      if (length(lock_keys)) {
+        for (k in lock_keys) session$userData[[k]] <- FALSE
+      }
+      session$userData$.actionWebUser_lock_keys <- character()
+
     })
   }, timer_ms / 1000)
 
   invisible(TRUE)
 }
 
+# =========================================================
+# ✅ MELHORIA 3: actionWebUser com lock por sessão/usuário (não duplica callback)
+# - só libera quando removeProgressLoader zerar (loader_count==0)
+# =========================================================
 #' @export
 actionWebUser <- function(callback,
                           session = shiny::getDefaultReactiveDomain(),
                           auto.remove = TRUE,
                           new.progress = TRUE,
-                          delay = 500) {
+                          delay = 500,
+                          lock_id = "default",
+                          on_busy = c("ignore","notify")) {
+
+  on_busy <- match.arg(on_busy)
 
   # Se for chamado fora de sessão (boot do processo), não tenta UI
   if (is.null(session)) {
@@ -389,11 +417,37 @@ actionWebUser <- function(callback,
     return(invisible(FALSE))
   }
 
+  # infra de lock por sessão
+  if (is.null(session$userData$.actionWebUser_lock_keys))
+    session$userData$.actionWebUser_lock_keys <- character()
+
+  lock_key <- paste0(".actionWebUser_busy__", lock_id)
+
+  # Se já tem ação pendente/rodando -> não agenda outra
+  if (isTRUE(session$userData[[lock_key]])) {
+    if (identical(on_busy, "notify")) {
+      try(shiny::showNotification(
+        "Ação já em execução. Aguarde finalizar…",
+        type = "message", duration = 2
+      ), silent = TRUE)
+    }
+    return(invisible(FALSE))
+  }
+
+  # marca busy imediatamente (bloqueia spam antes do later)
+  session$userData[[lock_key]] <- TRUE
+  session$userData$.actionWebUser_lock_keys <- unique(c(session$userData$.actionWebUser_lock_keys, lock_key))
+
   alive <- TRUE
   session$onSessionEnded(function() alive <<- FALSE)
 
+  # cria loader (idempotente agora)
   if (isTRUE(new.progress)) {
     newProgressLoader(session)
+  } else {
+    # se não há loader, não faz sentido travar até removeProgressLoader
+    session$userData[[lock_key]] <- FALSE
+    session$userData$.actionWebUser_lock_keys <- setdiff(session$userData$.actionWebUser_lock_keys, lock_key)
   }
 
   later::later(function() {
@@ -402,8 +456,8 @@ actionWebUser <- function(callback,
     shiny::withReactiveDomain(session, {
       try(callback(), silent = TRUE)
 
-      if (isTRUE(auto.remove)) {
-        # se quiser um “fade”/atraso antes de remover, ajuste timer_ms aqui
+      if (isTRUE(auto.remove) && isTRUE(new.progress)) {
+        # removeProgressLoader vai liberar locks quando loader_count chegar em 0
         removeProgressLoader(timer_ms = 0, session = session)
       }
     })
@@ -414,7 +468,7 @@ actionWebUser <- function(callback,
 
 #' @export
 moveScrollToUp <- function(){
-    runjs(
+  runjs(
     "var el = document.querySelector('#shiny-modal .modal-body');
      if (el) el.scrollTo({top: 0, behavior: 'auto'});"
   )
@@ -425,16 +479,17 @@ moveScrollToUp <- function(){
   done <- FALSE
   function(base_subdir = file.path("app", "www", "reports")) {
     if (done) return(invisible(NULL))
-    
+
     app_base    <- getwd()
     reports_dir <- normalizePath(file.path(app_base, base_subdir),winslash = "/", mustWork = FALSE)
-    
+
     if (dir.exists(reports_dir)) {
-      unlink(list.files(reports_dir, full.names = TRUE, all.files = TRUE, no.. = TRUE),recursive = TRUE, force = TRUE)
+      unlink(list.files(reports_dir, full.names = TRUE, all.files = TRUE, no.. = TRUE),
+             recursive = TRUE, force = TRUE)
     } else {
       dir.create(reports_dir, recursive = TRUE, showWarnings = FALSE)
     }
-    
+
     dir.create(reports_dir, recursive = TRUE, showWarnings = FALSE)
 
     # Evita erro se já existir um path "reports"
