@@ -207,7 +207,7 @@ difftime(last(frames$DT_HR_LOCAL),first(frames$DT_HR_LOCAL))
 # Video
 
 ```{r}
-codigo  <- 1790413
+codigo  <- 1826696
 anime   <- build_gif_from_blob(get_frames_window(con,codigo,janela = 35))
 print(anime)
 
@@ -247,4 +247,17 @@ build_gif_from_blob(frames)
 
 #oks
 # 1,2,3,5
+
+dados <- dbGetQuery(con,"SELECT 
+        oc.DATA_OC     AS ATRIBUTOS,
+        oc.DT_HR_LOCAL AS DATE_TIME,
+        o.NAME_OBJETO  AS OBJETO,
+        s.NAME_SETOR   AS setor,
+        VISIBLE
+     FROM objeto_contexto oc
+     LEFT JOIN objeto o       ON o.CD_ID_OBJETO = oc.CD_ID_OBJETO
+     LEFT JOIN setor s        ON s.CD_ID_SETOR  = o.CD_ID_SETOR
+     WHERE o.FG_ATIVO = 1 AND VISIBLE >= 90 ORDER BY DT_HR_LOCAL DESC")
+
+write.csv(dados,"dados.csv")
 ```

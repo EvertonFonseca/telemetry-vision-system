@@ -577,7 +577,7 @@ initMap <- FALSE
               showNotification("Existe componente com nomes duplicados!", type = "warning")
               return()
             }
-            
+
             #check if it has already data of Câmera
             nomeObjeto     <- isolate(toupper(input$textNameObjeto))
             ativoObjeto    <- isolate(input$checkboxAtivoObjeto)  
@@ -599,19 +599,23 @@ initMap <- FALSE
             
             for(i in 1:nrow(componentes)){
               #insert componente do objeto
-              comp      <- componentes[i,]
-              estrutura <- comp$ESTRUTURA[[1]]
-              poligno   <- jsonlite$toJSON(comp$POLIGNO_COMPONENTE[[1]],auto_unbox = T)
+              comp       <- componentes[i,]
+              estruturas <- comp$ESTRUTURA[[1]]
               
-              objComp <- list()
-              objComp$NAME_COMPONENTE    <- comp$NAME_COMPONENTE
-              objComp$POLIGNO_COMPONENTE <- poligno
-              objComp$CD_ID_OBJ_CONF     <- id_obj_config
-              objComp$CD_ID_CAMERA       <- comp$CD_ID_CAMERA
-              objComp$CD_ID_COMPONENTE   <- db$nextSequenciaID(conn,'COMPONENTE')
-              objComp$CD_ID_ESTRUTURA    <- estrutura$CD_ID_ESTRUTURA
-              
-              db$insertTable(conn,"COMPONENTE",objComp)
+              for(k in 1:nrow(estruturas)){
+                estrutura <- estruturas[k,]
+                poligno   <- jsonlite$toJSON(comp$POLIGNO_COMPONENTE[[1]],auto_unbox = T)
+                
+                objComp <- list()
+                objComp$NAME_COMPONENTE    <- comp$NAME_COMPONENTE
+                objComp$POLIGNO_COMPONENTE <- poligno
+                objComp$CD_ID_OBJ_CONF     <- id_obj_config
+                objComp$CD_ID_CAMERA       <- comp$CD_ID_CAMERA
+                objComp$CD_ID_COMPONENTE   <- db$nextSequenciaID(conn,'COMPONENTE')
+                objComp$CD_ID_ESTRUTURA    <- estrutura$CD_ID_ESTRUTURA
+                
+                db$insertTable(conn,"COMPONENTE",objComp)
+              }
             }
             
             dialogConfirm(
@@ -1041,7 +1045,7 @@ uiEditObjeto <- function(ns,input,output,session,callback){
       if(tipoObjeto$CD_ID_OBJETO_TIPO == 2L){
 
         componente     <- objetoSelect$CONFIG[[1]]$COMPONENTES[[1]]
-        estruturasComp <- componente$ESTRUTURA[[1]]
+        estruturasComp <- purrr::map_df(componente$ESTRUTURA,~ .x)
      
         changetextPlaceHolder()
         estruturas_dinamicos <- tagList(
@@ -1248,7 +1252,7 @@ uiEditObjeto <- function(ns,input,output,session,callback){
           swiperSlideNext(idSwiper)
        
         }else if(current == 3L){
-          
+
           tipoObjeto  <- tiposObjeto |> filter(NAME_OBJETO_TIPO == isolate(input$comboTipoObjeto))
           componentes <- frame_data$componente[[1]]
           
@@ -1271,41 +1275,45 @@ uiEditObjeto <- function(ns,input,output,session,callback){
           }
           
           if(!db$tryTransaction(function(conn){
-            
+
             #check if it has already data of Câmera
             nomeObjeto     <- isolate(toupper(input$textNameObjeto))
             ativoObjeto    <- isolate(input$checkboxAtivoObjeto)  
             tipoObjeto     <- tiposObjeto |> filter(NAME_OBJETO_TIPO == isolate(input$comboTipoObjeto))
             setor          <- setores |> filter(NAME_SETOR == isolate(input$comboSetor))
-            
+       
             obj                      <- list()
             obj$NAME_OBJETO          <- nomeObjeto
             obj$FG_ATIVO             <- as.integer(ativoObjeto)
             obj$CD_ID_SETOR          <- setor$CD_ID_SETOR
             obj$TIMELINE_CONTEXT_SEC <- isolate(input$sliderTimeContexto)
-            
+        
             db$updateTable(conn,"OBJETO",obj,"CD_ID_OBJETO",objetoSelect$CD_ID_OBJETO)
-            
+     
             id_obj_config      <- db$nextSequenciaID(conn,'OBJETO_CONFIG')
             insertNewObjetoConfig(conn,id_obj_config,objetoSelect)
             
             for(i in 1:nrow(componentes)){
               #insert componente do objeto
-              comp      <- componentes[i,]
-              estrutura <- comp$ESTRUTURA[[1]]
-              poligno   <- jsonlite$toJSON(comp$POLIGNO_COMPONENTE[[1]],auto_unbox = T)
+              comp       <- componentes[i,]
+              estruturas <- comp$ESTRUTURA[[1]]
               
-              objComp <- list()
-              objComp$NAME_COMPONENTE    <- comp$NAME_COMPONENTE
-              objComp$POLIGNO_COMPONENTE <- poligno
-              objComp$CD_ID_OBJ_CONF     <- id_obj_config
-              objComp$CD_ID_CAMERA       <- comp$CD_ID_CAMERA
-              objComp$CD_ID_COMPONENTE   <- db$nextSequenciaID(conn,'COMPONENTE')
-              objComp$CD_ID_ESTRUTURA    <- estrutura$CD_ID_ESTRUTURA
-              
-              db$insertTable(conn,"COMPONENTE",objComp)
+              for(k in 1:nrow(estruturas)){
+                estrutura <- estruturas[k,]
+                poligno   <- jsonlite$toJSON(comp$POLIGNO_COMPONENTE[[1]],auto_unbox = T)
+                
+                objComp <- list()
+                objComp$NAME_COMPONENTE    <- comp$NAME_COMPONENTE
+                objComp$POLIGNO_COMPONENTE <- poligno
+                objComp$CD_ID_OBJ_CONF     <- id_obj_config
+                objComp$CD_ID_CAMERA       <- comp$CD_ID_CAMERA
+                objComp$CD_ID_COMPONENTE   <- db$nextSequenciaID(conn,'COMPONENTE')
+                objComp$CD_ID_ESTRUTURA    <- estrutura$CD_ID_ESTRUTURA
+                
+                db$insertTable(conn,"COMPONENTE",objComp)
+              }
             }
-            
+     
             #load todos os setores
             objetos(selectAllObjetos(conn))
             # volta para init

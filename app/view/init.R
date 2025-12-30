@@ -6,8 +6,6 @@ box::use(
   shiny[...],
   shinyjs[...],
   vov[...],
-  #waiter[use_waiter],
-  mirai,
   parallel,
   ../logic/time[format_br],
   ./model[...],
@@ -26,41 +24,6 @@ box::use(
   setor_agenda = ./setor_agenda,
   login        = ./login
 )
-
-# ===============================================================
-# ✅ Boot do MIRAI (1x por processo / worker)
-# ===============================================================
-.tvs_mirai_boot <- local({
-  started <- FALSE
-
-  function() {
-    if (isTRUE(started)) return(invisible(TRUE))
-
-    n <- suppressWarnings(as.integer(Sys.getenv("TVS_MIRAI_DAEMONS", "")))
-    if (is.na(n) || n < 1L) {
-      n <- max(parallel::detectCores(logical = TRUE) - 2L, 1L)
-    }
-
-    ok <- TRUE
-    tryCatch({
-      mirai::daemons(n)
-    }, error = function(e) {
-      ok <<- FALSE
-      message("[TVS] mirai boot falhou: ", conditionMessage(e))
-    })
-
-    started <<- isTRUE(ok)
-    invisible(ok)
-  }
-})
-
-# Sobe daemons já no boot do processo
-.tvs_mirai_boot()
-
-# Encerra daemons quando o processo do Shiny morrer
-shiny::onStop(function() {
-  try(mirai::daemons(0L), silent = TRUE)
-})
 
 # ===============================================================
 # DB pool: inicializa 1x por processo
@@ -247,15 +210,13 @@ server <- function(id) {
     ns <- NS(id)
     dbp$session_register(session)
     
-    # ✅ garante mirai pronto (idempotente)
-    .tvs_mirai_boot()
-    
     output$mainbody <- shiny::renderUI({
       renderMainbody()
     })
     
     login$uiLogin(ns,session,input,output,function(user){
       
+      newProgressLoader(session)
       renderMainbody(dash$ui(ns))
 
       # chatia$server(ns, input, output, session)

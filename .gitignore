@@ -12,6 +12,7 @@
 *.cache
 *.gif
 *.RDS
+*.csv
 
 # Test binary, built with `go test -c`
 *.test
@@ -33,6 +34,7 @@ go.work.sum
 .env
 
 app/www/
+tmp/
 
 # Editor/IDE
 # .idea/

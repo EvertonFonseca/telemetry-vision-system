@@ -380,8 +380,6 @@ CREATE TABLE IF NOT EXISTS EVENT_CLEAN_LOG (
   keep_hours INT NOT NULL,
   deleted_rows BIGINT NOT NULL
 );
--- (opcional) habilitar o event scheduler (requer permissão adequada)
-SET GLOBAL event_scheduler = ON;
 
 -- -------- Procedure: apaga em lotes usando janela em HORAS --------
 DROP PROCEDURE IF EXISTS PR_CLEAR_OLD_DATA_HOURS;

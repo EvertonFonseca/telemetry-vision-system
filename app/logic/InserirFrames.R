@@ -194,6 +194,8 @@ dataset <- frames |>
   unnest(data) |> 
   filter(map_vec(DATAS,~ !is.null(.x)))
 
+#saveRDS(dataset,paste0("train/dataset_embalagem.rds"))
+
 dataset_fining <- dataset[which(grepl("Finetuning",dataset$TITULO_IA,ignore.case = F)),]
 
 saveRDS(dataset |> filter(!grepl("Teste",TITULO_IA,ignore.case = F)),paste0("train/dataset_train.rds"))

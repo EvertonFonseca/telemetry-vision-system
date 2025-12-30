@@ -1254,7 +1254,7 @@ uiNewTreinar <- function(ns, input, output, session, callback){
           list(visible = FALSE, targets = 0),
           list(className = 'dt-center', targets = "_all"),
           # ajuste de widths: agora tem 7 colunas visíveis (1..7)
-          list(width = '75px', targets = c(1, 2, 6, 7))
+          list(width = '75px', targets = c(1, 6, 7))
         )
       ),
       callback = DT::JS(

@@ -61,11 +61,14 @@ deleteTable <- function(conn = get_pool(),table, where_cols = character(), where
 }
 
 # --------- TRANSAÇÃO SEGURA ---------
-tryTransaction <- function(expr) {
+tryTransaction <- function(expr,debug = FALSE) {
   # garante mesma conexão durante a transação
   with_conn(function(conn) {
     DBI$dbBegin(conn)
     ok <- FALSE
+    if(debug){
+      debug(expr)
+    }
     tryCatch({
       expr(conn)  # passe 'conn' e use DBI$* com essa conn
       DBI$dbCommit(conn)
@@ -73,6 +76,10 @@ tryTransaction <- function(expr) {
     }, error = function(e) {
       DBI$dbRollback(conn)
       warning(e)
+    },finally = {
+      if(debug){
+        undebug(expr)
+      }
     })
     ok
   })
