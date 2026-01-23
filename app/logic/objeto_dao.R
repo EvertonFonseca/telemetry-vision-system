@@ -1,152 +1,308 @@
-box::use(DBI,dplyr[pull,mutate],purrr[...],./camera_dao[selectCameraByComponente],./estrutura_dao[selectAllEstruturaByIdComponente],jsonlite)
+# app/infra/objeto_dao.R  (Postgres / RPostgres) - tudo em lowercase
+box::use(
+  DBI,
+  dplyr[pull, mutate],
+  purrr[...],
+  ./camera_dao[selectCameraByComponente],
+  ./estrutura_dao[selectAllEstruturaByIdComponente],
+  jsonlite
+)
+
+# ---- helpers ----
+.count1 <- function(df) as.integer(df[[1]][[1]])
+
+.names_to_lower <- function(x) {
+  if (!is.list(x) || is.null(names(x))) return(x)
+  names(x) <- tolower(names(x))
+  x
+}
+
+.df_names_lower <- function(df) {
+  if (is.data.frame(df) && ncol(df)) names(df) <- tolower(names(df))
+  df
+}
+
+# fg_ativo IN (...) com placeholders
+.in_placeholders <- function(n, start = 1L) paste0("$", start:(start + n - 1L), collapse = ",")
 
 #' @export
-checkifExistNameObjeto <- function(con,name){
-  DBI$dbGetQuery(con,'SELECT COUNT(*) AS STATUS FROM OBJETO WHERE NAME_OBJETO = ?',params = list(name)) |>  pull() > 0
-} 
-
-#' @export
-checkifExistNameComponente <- function(con,name){
-  DBI$dbGetQuery(con,'SELECT COUNT(*) AS STATUS FROM COMPONENTE WHERE NAME_COMPONENTE = ?',params = list(name)) |>  pull() > 0
+checkifExistNameObjeto <- function(con, name_objeto) {
+  df <- DBI$dbGetQuery(
+    con,
+    "select count(*) from objeto where name_objeto = $1",
+    params = list(name_objeto)
+  )
+  .count1(df) > 0
 }
 
 #' @export
-checkifExistNameObjetoEdit <- function(con,id,name){
-  DBI$dbGetQuery(con,'SELECT COUNT(*) AS STATUS FROM OBJETO WHERE NAME_OBJETO = ? AND CD_ID_OBJETO != ?',params = list(name,id)) |>  pull() > 0
-}
-
-
-#' @export
-insertNewObjeto <- function(con,id,objeto){
-
-    query <- 'INSERT INTO OBJETO (CD_ID_OBJETO,NAME_OBJETO,FG_ATIVO,CD_ID_SETOR,CD_ID_OBJETO_TIPO,TIMELINE_CONTEXT_SEC) VALUES (?,?,?,?,?,?)'
-    result <-  DBI$dbSendStatement(con,query)
-    DBI$dbBind(result, c(
-      as.integer(id),
-      objeto$NAME_OBJETO,
-      objeto$FG_ATIVO,
-      objeto$CD_ID_SETOR,
-      objeto$CD_ID_OBJETO_TIPO,
-      objeto$TIMELINE_CONTEXT_SEC
-    ))
-    DBI$dbClearResult(result)
-
-  return(as.integer(id))
+checkifExistNameComponente <- function(con, name_componente) {
+  df <- DBI$dbGetQuery(
+    con,
+    "select count(*) from componente where name_componente = $1",
+    params = list(name_componente)
+  )
+  .count1(df) > 0
 }
 
 #' @export
-insertNewObjetoConfig <- function(con,id,objeto){
-
-    query <- 'INSERT INTO OBJETO_CONFIG (CD_ID_OBJ_CONF,CD_ID_OBJETO) VALUES (?,?)'
-    result <-  DBI$dbSendStatement(con,query)
-    DBI$dbBind(result, c( 
-      as.integer(id),
-      objeto$CD_ID_OBJETO
-    ))
-    DBI$dbClearResult(result)
-
-  return(as.integer(id))
-}
-
-
-#' @export
-insertNewComponente <- function(con,id,objeto){
-
-    query  <- 'INSERT INTO COMPONENTE (CD_ID_COMPONENTE,NAME_COMPONENTE,POLIGNO_COMPONENTE,CD_ID_OBJ_CONF,CD_ID_CAMERA) VALUES (?,?,?,?,?)'
-    result <-  DBI$dbSendStatement(con,query)
-    DBI$dbBind(result, c(
-      as.integer(id),
-      objeto$NAME_COMPONENTE,
-      objeto$POLIGNO_COMPONENTE,
-      objeto$CD_ID_OBJ_CONF,
-      objeto$CD_ID_CAMERA
-    ))
-    DBI$dbClearResult(result)
+checkifExistNameObjetoEdit <- function(con, cd_id_objeto, name_objeto) {
+  df <- DBI$dbGetQuery(
+    con,
+    "select count(*)
+       from objeto
+      where name_objeto = $1
+        and cd_id_objeto <> $2",
+    params = list(name_objeto, as.integer(cd_id_objeto))
+  )
+  .count1(df) > 0
 }
 
 #' @export
-insertNewAtributo <- function(con,id,objeto){
+insertNewObjeto <- function(con, cd_id_objeto, objeto) {
+  objeto <- .names_to_lower(objeto)
 
-    query  <- 'INSERT INTO ATRIBUTO (CD_ID_ATRIBUTO,NAME_ATRIBUTO,VALUE_ATRIBUTO,FG_ATIVO,CD_ID_COMPONENTE,CD_ID_DATA) VALUES (?,?,?,?,?,?)'
-    result <-  DBI$dbSendStatement(con,query)
-    DBI$dbBind(result, c(
-      as.integer(id),
-      objeto$NAME_ATRIBUTO,
-      objeto$VALUE_ATRIBUTO,
-      objeto$FG_ATIVO,
-      objeto$CD_ID_COMPONENTE,
-      objeto$CD_ID_DATA
-    ))
-    DBI$dbClearResult(result)
+  stopifnot(
+    !is.null(cd_id_objeto),
+    !is.null(objeto$name_objeto),
+    !is.null(objeto$fg_ativo),
+    !is.null(objeto$cd_id_setor),
+    !is.null(objeto$cd_id_objeto_tipo),
+    !is.null(objeto$timeline_context_sec)
+  )
+
+  sql <- "
+    insert into objeto
+      (cd_id_objeto, name_objeto, fg_ativo, cd_id_setor, cd_id_objeto_tipo, timeline_context_sec)
+    values
+      ($1, $2, $3, $4, $5, $6)
+  "
+
+  DBI$dbExecute(
+    con, sql,
+    params = list(
+      as.integer(cd_id_objeto),
+      objeto$name_objeto,
+      as.logical(objeto$fg_ativo),
+      as.integer(objeto$cd_id_setor),
+      as.integer(objeto$cd_id_objeto_tipo),
+      as.integer(objeto$timeline_context_sec)
+    )
+  )
+
+  as.integer(cd_id_objeto)
 }
 
 #' @export
-updateObjeto <- function(con,obj){
+insertNewObjetoConfig <- function(con, cd_id_obj_conf, objeto) {
+  objeto <- .names_to_lower(objeto)
+  stopifnot(!is.null(cd_id_obj_conf), !is.null(objeto$cd_id_objeto))
 
-    query <- 'UPDATE OBJETO SET NAME_OBJETO = ?,
-                               CD_ID_SETOR = ?,
-                               FG_ATIVO= ?
-                               WHERE CD_ID_OBJETO = ?'
-    result <-  DBI$dbSendStatement(con,query)
-    DBI$dbBind(result,c(
-      obj$NAME_OBJETO,
-      obj$CD_ID_SETOR,
-      obj$FG_ATIVO,
-      obj$CD_ID_OBJETO
-    ))
-    DBI$dbClearResult(result)
+  sql <- "insert into objeto_config (cd_id_obj_conf, cd_id_objeto) values ($1, $2)"
 
+  DBI$dbExecute(
+    con, sql,
+    params = list(as.integer(cd_id_obj_conf), as.integer(objeto$cd_id_objeto))
+  )
+
+  as.integer(cd_id_obj_conf)
 }
 
 #' @export
-selectAllObjetos <- function(con,fg.ativo = c(TRUE,FALSE)){
-  objetos <- DBI$dbGetQuery(con,paste0('SELECT
-              o.*,
-              s.NAME_SETOR,
-              op.NAME_OBJETO_TIPO
-              FROM OBJETO o 
-              LEFT JOIN SETOR s ON s.CD_ID_SETOR = o.CD_ID_SETOR
-              LEFT JOIN OBJETO_TIPO op ON op.CD_ID_OBJETO_TIPO = o.CD_ID_OBJETO_TIPO
-              WHERE o.FG_ATIVO IN (',paste0(as.integer(fg.ativo),collapse = ","),')'))
-  
-  objetos$CONFIG <- map(seq_len(nrow(objetos)),function(i){
-    selectObjetoConfig(con,objetos[i,])
+insertNewComponente <- function(con, cd_id_componente, objeto) {
+  objeto <- .names_to_lower(objeto)
+
+  stopifnot(
+    !is.null(cd_id_componente),
+    !is.null(objeto$name_componente),
+    !is.null(objeto$poligno_componente),
+    !is.null(objeto$cd_id_obj_conf),
+    !is.null(objeto$cd_id_camera)
+  )
+
+  sql <- "
+    insert into componente
+      (cd_id_componente, name_componente, poligno_componente, cd_id_obj_conf, cd_id_camera)
+    values
+      ($1, $2, $3, $4, $5)
+  "
+
+  DBI$dbExecute(
+    con, sql,
+    params = list(
+      as.integer(cd_id_componente),
+      objeto$name_componente,
+      objeto$poligno_componente,          # JSON/text como você já grava
+      as.integer(objeto$cd_id_obj_conf),
+      as.integer(objeto$cd_id_camera)
+    )
+  )
+
+  invisible(TRUE)
+}
+
+#' @export
+insertNewAtributo <- function(con, cd_id_atributo, objeto) {
+  objeto <- .names_to_lower(objeto)
+
+  stopifnot(
+    !is.null(cd_id_atributo),
+    !is.null(objeto$name_atributo),
+    !is.null(objeto$value_atributo),
+    !is.null(objeto$fg_ativo),
+    !is.null(objeto$cd_id_componente),
+    !is.null(objeto$cd_id_data)
+  )
+
+  sql <- "
+    insert into atributo
+      (cd_id_atributo, name_atributo, value_atributo, fg_ativo, cd_id_componente, cd_id_data)
+    values
+      ($1, $2, $3, $4, $5, $6)
+  "
+
+  DBI$dbExecute(
+    con, sql,
+    params = list(
+      as.integer(cd_id_atributo),
+      objeto$name_atributo,
+      objeto$value_atributo,
+      as.logical(objeto$fg_ativo),
+      as.integer(objeto$cd_id_componente),
+      as.integer(objeto$cd_id_data)
+    )
+  )
+
+  invisible(TRUE)
+}
+
+#' @export
+updateObjeto <- function(con, obj) {
+  obj <- .names_to_lower(obj)
+  stopifnot(!is.null(obj$cd_id_objeto))
+
+  sql <- "
+    update objeto
+       set name_objeto = $1,
+           cd_id_setor = $2,
+           fg_ativo    = $3
+     where cd_id_objeto = $4
+  "
+
+  DBI$dbExecute(
+    con, sql,
+    params = list(
+      obj$name_objeto,
+      as.integer(obj$cd_id_setor),
+      as.logical(obj$fg_ativo),
+      as.integer(obj$cd_id_objeto)
+    )
+  )
+
+  invisible(TRUE)
+}
+
+#' @export
+selectAllObjetos <- function(con, fg_ativo = c(TRUE, FALSE)) {
+  fg_ativo <- as.logical(fg_ativo)
+  ph <- .in_placeholders(length(fg_ativo), start = 1L)
+
+  sql <- sprintf("
+    select
+      o.*,
+      s.name_setor,
+      op.name_objeto_tipo
+    from objeto o
+    left join setor s
+      on s.cd_id_setor = o.cd_id_setor
+    left join objeto_tipo op
+      on op.cd_id_objeto_tipo = o.cd_id_objeto_tipo
+    where o.fg_ativo in (%s)
+    order by o.cd_id_objeto
+  ", ph)
+
+  objetos <- DBI$dbGetQuery(con, sql, params = as.list(as.integer(fg_ativo)))
+  objetos <- .df_names_lower(objetos)
+
+  objetos$config <- purrr::map(seq_len(nrow(objetos)), function(i) {
+    selectObjetoConfig(con, objetos[i, , drop = FALSE])
   })
+
   objetos
 }
 
-selectObjetoConfig <- function(con,obj){
-  # pega ultimo registro mais recente
-  configs <- DBI$dbGetQuery(con,paste0('SELECT * FROM OBJETO_CONFIG 
-                                       WHERE CD_ID_OBJETO = ',obj$CD_ID_OBJETO,
-                                      " ORDER BY DT_HR_LOCAL DESC LIMIT 1"))
-  
-  configs$COMPONENTES <- map(seq_len(nrow(configs)),function(i){
-    selectAllComponentesByObjeto(con,configs[i,])
+# (interno)
+selectObjetoConfig <- function(con, obj) {
+  obj <- .df_names_lower(obj)
+  stopifnot(!is.null(obj$cd_id_objeto))
+
+  configs <- DBI$dbGetQuery(
+    con,
+    "select *
+       from objeto_config
+      where cd_id_objeto = $1
+      order by dt_hr_local desc
+      limit 1",
+    params = list(as.integer(obj$cd_id_objeto))
+  )
+  configs <- .df_names_lower(configs)
+
+  configs$componentes <- purrr::map(seq_len(nrow(configs)), function(i) {
+    selectAllComponentesByObjeto(con, configs[i, , drop = FALSE])
   })
+
   configs
 }
 
-selectAllComponentesByObjeto <- function(con,config){
+# (interno)
+selectAllComponentesByObjeto <- function(con, config) {
+  config <- .df_names_lower(config)
+  stopifnot(!is.null(config$cd_id_obj_conf))
 
-  componentes <- DBI$dbGetQuery(con,paste0('SELECT * FROM COMPONENTE WHERE CD_ID_OBJ_CONF = ',config$CD_ID_OBJ_CONF)) |> 
-                 mutate(POLIGNO_COMPONENTE = map(POLIGNO_COMPONENTE,~ jsonlite$fromJSON(.x)))
-  
-  componentes$ESTRUTURA <- map(seq_len(nrow(componentes)),function(i){
-    selectAllEstruturaByIdComponente(con,componentes$CD_ID_ESTRUTURA[i])
+  componentes <- DBI$dbGetQuery(
+    con,
+    "select *
+       from componente
+      where cd_id_obj_conf = $1
+      order by cd_id_componente",
+    params = list(as.integer(config$cd_id_obj_conf))
+  )
+  componentes <- .df_names_lower(componentes)
+
+  # poligno_componente: vem texto/json -> vira lista
+  if (nrow(componentes)) {
+    componentes <- dplyr::mutate(
+      componentes,
+      poligno_componente = purrr::map(poligno_componente, ~ jsonlite::fromJSON(.x))
+    )
+  } else {
+    componentes$poligno_componente <- list()
+  }
+
+  # estrutura e cameras
+  componentes$estrutura <- purrr::map(seq_len(nrow(componentes)), function(i) {
+    selectAllEstruturaByIdComponente(con, componentes$cd_id_estrutura[i])
   })
-  componentes$CAMERAS   <- map(seq_len(nrow(componentes)),function(i){
-     selectCameraByComponente(con,componentes[i,])
+
+  componentes$cameras <- purrr::map(seq_len(nrow(componentes)), function(i) {
+    selectCameraByComponente(con, componentes[i, , drop = FALSE])
   })
+
   componentes
 }
 
 #' @export
-deleteObjeto <- function(con,id){
-  DBI::dbExecute(con,paste0('DELETE FROM OBJETO WHERE CD_ID_OBJETO = ',id))
+deleteObjeto <- function(con, cd_id_objeto) {
+  DBI::dbExecute(
+    con,
+    "delete from objeto where cd_id_objeto = $1",
+    params = list(as.integer(cd_id_objeto))
+  )
+  invisible(TRUE)
 }
 
 #' @export
-selectTipoObjeto <- function(con){
-    DBI$dbGetQuery(con,'SELECT * FROM OBJETO_TIPO')
+selectTipoObjeto <- function(con) {
+  df <- DBI$dbGetQuery(con, "select * from objeto_tipo order by cd_id_objeto_tipo")
+  .df_names_lower(df)
 }

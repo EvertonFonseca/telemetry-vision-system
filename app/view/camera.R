@@ -154,11 +154,11 @@ dispose <- function(session, key = "setor_private") {
       }
 
       obj <- list()
-      obj$NAME_CAMERA   <- nomeCamera
-      obj$URL_CAMERA    <- urlCamera
-      obj$FPS_CAMERA    <- isolate(input$comboFps)
-      id                <- db$nextSequenciaID(conn,'CAMERA_VIEW')
-      obj$CD_ID_CAMERA  <- insertNewCamera(conn,id,obj)
+      obj$name_camera   <- nomeCamera
+      obj$url_camera    <- urlCamera
+      obj$fps_camera    <- isolate(input$comboFps)
+      id <- db$nextSequenciaID(conn, "camera_view", id_col = "cd_id_camera", schema = "public")
+      insertNewCamera(conn,id,obj)
      
       dialogConfirm(
         session = session,
@@ -256,7 +256,7 @@ uiEditCamera <- function(ns,input,output,session,callback = NULL){
         if(length(dataset) == 0) return(NULL)
         
         colunaNames <- c('LINHA','CAMERÂ',"URL",'VISUALIZAR / EDITAR','REMOVER')
-      
+
         DT$datatable({
           
           dataset |> 
@@ -265,9 +265,9 @@ uiEditCamera <- function(ns,input,output,session,callback = NULL){
             mutate_if(is.character,toupper) |> 
             mutate(
                   !!colunaNames[1] := 1:nrow(dataset),
-                  !!colunaNames[2] :=  dataset$NAME_CAMERA,
-                  !!colunaNames[3] :=  paste0(substr(dataset$URL_CAMERA, 1,10), "..."),
-                  !!colunaNames[4] :=  sapply(dataset$CD_ID_CAMERA, function (x) {
+                  !!colunaNames[2] :=  dataset$name_camera,
+                  !!colunaNames[3] :=  paste0(substr(dataset$url_camera, 1,10), "..."),
+                  !!colunaNames[4] :=  sapply(dataset$cd_id_camera, function (x) {
                     
                    as.character(
                       actionButton(
@@ -279,7 +279,7 @@ uiEditCamera <- function(ns,input,output,session,callback = NULL){
                       )
                     )
                   }),
-                  !!colunaNames[5] :=  sapply(dataset$CD_ID_CAMERA, function (x) {
+                  !!colunaNames[5] :=  sapply(dataset$cd_id_camera, function (x) {
                     
                    as.character(
                       actionButton(
@@ -326,15 +326,15 @@ uiEditCamera <- function(ns,input,output,session,callback = NULL){
     cameraSelect <- camera()
 
      uiMain(ns,
-            valueName = cameraSelect$NAME_CAMERA,
-            valueUrl = cameraSelect$URL_CAMERA,
-            valueFps = cameraSelect$FPS_CAMERA
+            valueName = cameraSelect$name_camera,
+            valueUrl = cameraSelect$url_camera,
+            valueFps = cameraSelect$fps_camera
           )
   })
 
   obs$add(observeEvent(input$editPressedRow,{
     
-    camera(isolate(cameras()) %>% filter(CD_ID_CAMERA == input$editPressedRow))
+    camera(isolate(cameras()) %>% filter(cd_id_camera == input$editPressedRow))
 
     swiperSlideNext(idSwiper)
     sliderPosition(isolate(sliderPosition()) + 1L)
@@ -343,13 +343,13 @@ uiEditCamera <- function(ns,input,output,session,callback = NULL){
   
   obs$add(observeEvent(input$deletePressedRow,{
     
-    camera <- isolate(cameras()) |> filter(CD_ID_CAMERA == input$deletePressedRow)
+    camera <- isolate(cameras()) |> filter(cd_id_camera == input$deletePressedRow)
 
     messageAlerta(
                   input,
                   ns,
                   title   = paste0('Todos os objetos ligado a esse câmera será excluido'),
-                  message = paste0('Deseja realmente excluir a câmera ',camera$NAME_CAMERA,"?"),
+                  message = paste0('Deseja realmente excluir a câmera ',camera$name_camera,"?"),
                   callback.no = function(){
                     
                   },
@@ -357,7 +357,7 @@ uiEditCamera <- function(ns,input,output,session,callback = NULL){
                     
                     db$tryTransaction(function(conn){
                       
-                      deleteCamera(conn,camera$CD_ID_CAMERA)
+                      deleteCamera(conn,camera$cd_id_camera)
                       cameras.aux <- selectAllCameras(conn)
                       if(nrow(cameras.aux) == 0){
                         #destroy all observe events
@@ -399,7 +399,7 @@ uiEditCamera <- function(ns,input,output,session,callback = NULL){
     
     db$tryTransaction(function(conn){
       
-      id         <- isolate(camera()$CD_ID_CAMERA)
+      id         <- isolate(camera()$cd_id_camera)
       nomeCamera <- isolate(toupper(input$textNameCamera))
       urlCamera  <- isolate(input$textUrlCamera)
 
@@ -421,10 +421,10 @@ uiEditCamera <- function(ns,input,output,session,callback = NULL){
       }
       #check if it has already data of Câmera
       obj <- list()
-      obj$CD_ID_CAMERA  <- id
-      obj$NAME_CAMERA   <- nomeCamera
-      obj$URL_CAMERA    <- urlCamera
-      obj$FPS_CAMERA    <- isolate(input$comboFps)
+      obj$cd_id_camera  <- id
+      obj$name_camera   <- nomeCamera
+      obj$url_camera    <- urlCamera
+      obj$fps_camera    <- isolate(input$comboFps)
 
       updateCamera(conn,obj)
       #load todos os setores

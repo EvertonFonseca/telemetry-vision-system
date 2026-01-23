@@ -1,5 +1,5 @@
 library(DBI)
-library(RMariaDB)
+library(RPostgres)
 library(dplyr)
 
 # conexão origem

@@ -124,10 +124,10 @@ uiNewEstrutura <- function(ns,input,output,session,callback){
             for (i in 1:len) {
               
               attributo  <- atributos[i,]
-              attAtivo   <- attributo$FG_ATIVO
-              attNome    <- attributo$NAME_ATRIBUTO
-              attTipo    <- attributo$NAME_DATA
-              attClasses <- attributo$VALUE_ATRIBUTO
+              attAtivo   <- attributo$fg_ativo
+              attNome    <- attributo$name_atributo
+              attTipo    <- attributo$name_data
+              attClasses <- attributo$value_atributo
               
               local({
                 ii <- i
@@ -188,7 +188,7 @@ uiNewEstrutura <- function(ns,input,output,session,callback){
                           ns(sprintf("comboTipodados_%d", i)),
                           label   = "Tipo",
                           selected = attTipo,
-                          choices = tipoDatas$NAME_DATA,
+                          choices = tipoDatas$name_data,
                           options  = list(
                             dropdownParent = 'body',
                             openOnFocus = TRUE,
@@ -271,26 +271,27 @@ uiNewEstrutura <- function(ns,input,output,session,callback){
              
                   #check if it has already data of Câmera
                   obj <- list()
-                  obj$NAME_ESTRUTURA   <- nomeEstrutura
-                  obj$CD_ID_ESTRUTURA  <- db$nextSequenciaID(conn,'ESTRUTURA')
-                  db$insertTable(conn,"ESTRUTURA",obj)
+                  obj$name_estrutura   <- nomeEstrutura
+                  obj$cd_id_estrutura  <- db$nextSequenciaID(conn, "estrutura", id_col = "cd_id_estrutura", schema = "public")
+                
+                  db$insertTable(conn,"estrutura",obj)
                  
                   #Estrutura Config
                   config <- list()
-                  config$CD_ID_ESTRUTURA         <- obj$CD_ID_ESTRUTURA
-                  config$CD_ID_ESTRUTURA_CONFIG  <- db$nextSequenciaID(conn,'ESTRUTURA_CONFIG')
-                  db$insertTable(conn,"ESTRUTURA_CONFIG",config)
+                  config$cd_id_estrutura         <- obj$cd_id_estrutura
+                  config$cd_id_estrutura_config  <- db$nextSequenciaID(conn, "estrutura_config", id_col = "cd_id_estrutura_config", schema = "public")
+                  db$insertTable(conn,"estrutura_config",config)
                  
                   #insert atributos do compnente
                   for(k in 1:nrow(atributos)){
                     
-                    tipo_data <- tipoDatas |> filter(NAME_DATA == atributos$NAME_DATA[k])
+                    tipo_data <- tipoDatas |> filter(name_data == atributos$name_data[k])
                     objAtt    <- list()
-                    objAtt$NAME_ATRIBUTO    <- atributos$NAME_ATRIBUTO[k] 
-                    objAtt$VALUE_ATRIBUTO  <- paste0(unlist(atributos$VALUE_ATRIBUTO[k]),collapse = ",")
-                    objAtt$FG_ATIVO         <- as.integer(atributos$FG_ATIVO[k])
-                    objAtt$CD_ID_ESTRUTURA_CONFIG  <- config$CD_ID_ESTRUTURA_CONFIG
-                    objAtt$CD_ID_DATA              <- tipo_data$CD_ID_DATA
+                    objAtt$name_atributo    <- atributos$name_atributo[k] 
+                    objAtt$value_atributo  <- paste0(unlist(atributos$value_atributo[k]),collapse = ",")
+                    objAtt$fg_ativo         <- as.integer(atributos$fg_ativo[k])
+                    objAtt$cd_id_estrutura_config  <- config$cd_id_estrutura_config
+                    objAtt$cd_id_data              <- tipo_data$cd_id_data
                     
                     db$insertTable(conn,"ATRIBUTO",objAtt)
                   }
@@ -413,8 +414,8 @@ uiEditEstrutura <- function(ns,input,output,session,callback){
             mutate_if(is.character,toupper) |> 
             mutate(
               !!colunaNames[1] := 1:nrow(dataset),
-              !!colunaNames[2] :=  dataset$NAME_ESTRUTURA,
-              !!colunaNames[3] :=  sapply(dataset$CD_ID_ESTRUTURA, function (x) {
+              !!colunaNames[2] :=  dataset$name_estrutura,
+              !!colunaNames[3] :=  sapply(dataset$cd_id_estrutura, function (x) {
                 
                 as.character(
                   actionButton(
@@ -426,7 +427,7 @@ uiEditEstrutura <- function(ns,input,output,session,callback){
                   )
                 )
               }),
-              !!colunaNames[4] :=  sapply(dataset$CD_ID_ESTRUTURA, function (x) {
+              !!colunaNames[4] :=  sapply(dataset$cd_id_estrutura, function (x) {
                 
                 as.character(
                   actionButton(
@@ -471,7 +472,7 @@ uiEditEstrutura <- function(ns,input,output,session,callback){
       
       req(estrutura())
       estruturaSelect <- estrutura()
-      attributoReactive(estruturaSelect$CONFIGS[[1]]$ATRIBUTOS[[1]] |> select(NAME_ATRIBUTO,NAME_DATA,VALUE_ATRIBUTO,FG_ATIVO))
+      attributoReactive(estruturaSelect$configs[[1]]$atributos[[1]] |> select(name_atributo,name_data,value_atributo,fg_ativo))
       
       obs2$clear()  # limpa observers antigos
       
@@ -492,10 +493,10 @@ uiEditEstrutura <- function(ns,input,output,session,callback){
           for (i in 1:len) {
             
             attributo  <- atributos[i,]
-            attAtivo   <- attributo$FG_ATIVO
-            attNome    <- attributo$NAME_ATRIBUTO
-            attTipo    <- attributo$NAME_DATA
-            attClasses <- attributo$VALUE_ATRIBUTO
+            attAtivo   <- attributo$fg_ativo
+            attNome    <- attributo$name_atributo
+            attTipo    <- attributo$name_data
+            attClasses <- attributo$value_atributo
             
             local({
               ii <- i
@@ -556,7 +557,7 @@ uiEditEstrutura <- function(ns,input,output,session,callback){
                         ns(sprintf("comboTipodados_%d", i)),
                         label   = "Tipo",
                         selected = attTipo,
-                        choices = tipoDatas$NAME_DATA,
+                        choices = tipoDatas$name_data,
                         options  = list(
                           dropdownParent = 'body',
                           openOnFocus = TRUE,
@@ -604,12 +605,12 @@ uiEditEstrutura <- function(ns,input,output,session,callback){
             })
           )
           
-          uiAtributos(ns,estruturaSelect$NAME_ESTRUTURA)
+          uiAtributos(ns,estruturaSelect$name_estrutura)
         })
         
         obs$add(observeEvent(input$editPressedRow,{
           
-          estrutura(isolate(estruturas()) |> filter(CD_ID_ESTRUTURA == input$editPressedRow))
+          estrutura(isolate(estruturas()) |> filter(cd_id_estrutura == input$editPressedRow))
           
           swiperSlideNext(idSwiper)
           sliderPosition(isolate(sliderPosition()) + 1L)
@@ -618,13 +619,13 @@ uiEditEstrutura <- function(ns,input,output,session,callback){
         
         obs$add(observeEvent(input$deletePressedRow,{
           
-          estrutura <- isolate(estruturas()) |> filter(CD_ID_ESTRUTURA == input$deletePressedRow)
+          estrutura <- isolate(estruturas()) |> filter(cd_id_estrutura == input$deletePressedRow)
           
           messageAlerta(
             input,
             ns,
             title   = paste0('Todos os objetos ligado a essa estrutura será excluido'),
-            message = paste0('Deseja realmente excluir a estrutura ',estrutura$NAME_ESTRUTURA,"?"),
+            message = paste0('Deseja realmente excluir a estrutura ',estrutura$name_estrutura,"?"),
             callback.no = function(){
               
             },
@@ -632,7 +633,7 @@ uiEditEstrutura <- function(ns,input,output,session,callback){
               
               db$tryTransaction(function(conn){
                 
-                db$deleteTable(conn,"ESTRUTURA",where_cols = "CD_ID_ESTRUTURA", where_vals = estrutura$CD_ID_ESTRUTURA)
+                db$deleteTable(conn,"ESTRUTURA",where_cols = "cd_id_estrutura", where_vals = estrutura$cd_id_estrutura)
 
                 estruturas.aux <- selectAllEstrutura(conn)
                 if(nrow(estruturas.aux) == 0){
@@ -683,7 +684,7 @@ uiEditEstrutura <- function(ns,input,output,session,callback){
               return()
             }
             
-            if(checkifExistNameEstruturaEdit(dbp$get_pool(),estruturaSelect$CD_ID_ESTRUTURA,name = nomeEstrutura)){
+            if(checkifExistNameEstruturaEdit(dbp$get_pool(),estruturaSelect$cd_id_estrutura,name = nomeEstrutura)){
               showNotification("O nome da Estrutura já possui nos registros!", type = "warning")
               return()
             }
@@ -698,25 +699,26 @@ uiEditEstrutura <- function(ns,input,output,session,callback){
               
               #check if it has already data of Câmera
               obj <- list()
-              obj$NAME_ESTRUTURA   <- nomeEstrutura
-              db$updateTable(conn,"ESTRUTURA",obj, where_cols = "CD_ID_ESTRUTURA", where_vals = estruturaSelect$CD_ID_ESTRUTURA)
+              obj$name_estrutura   <- nomeEstrutura
+              db$updateTable(conn,"ESTRUTURA",obj, where_cols = "cd_id_estrutura", where_vals = estruturaSelect$cd_id_estrutura)
               
               #Estrutura Config
               config <- list()
-              config$CD_ID_ESTRUTURA         <- estruturaSelect$CD_ID_ESTRUTURA
-              config$CD_ID_ESTRUTURA_CONFIG  <- db$nextSequenciaID(conn,'ESTRUTURA_CONFIG')
+              config$cd_id_estrutura         <- estruturaSelect$cd_id_estrutura
+              config$cd_id_estrutura_config  <- db$nextSequenciaID(conn, "estrutura_config", id_col = "cd_id_estrutura_config", schema = "public")
+
               db$insertTable(conn,"ESTRUTURA_CONFIG",config)
               
               #insert atributos do compnente
               for(k in 1:nrow(atributos)){
                 
-                tipo_data <- tipoDatas |> filter(NAME_DATA == atributos$NAME_DATA[k])
+                tipo_data <- tipoDatas |> filter(name_data == atributos$name_data[k])
                 objAtt    <- list()
-                objAtt$NAME_ATRIBUTO    <- atributos$NAME_ATRIBUTO[k] 
-                objAtt$VALUE_ATRIBUTO  <- paste0(unlist(atributos$VALUE_ATRIBUTO[k]),collapse = ",")
-                objAtt$FG_ATIVO         <- as.integer(atributos$FG_ATIVO[k])
-                objAtt$CD_ID_ESTRUTURA_CONFIG  <- config$CD_ID_ESTRUTURA_CONFIG
-                objAtt$CD_ID_DATA              <- tipo_data$CD_ID_DATA
+                objAtt$name_atributo    <- atributos$name_atributo[k] 
+                objAtt$value_atributo  <- paste0(unlist(atributos$value_atributo[k]),collapse = ",")
+                objAtt$fg_ativo         <- as.integer(atributos$fg_ativo[k])
+                objAtt$cd_id_estrutura_config  <- config$cd_id_estrutura_config
+                objAtt$cd_id_data              <- tipo_data$cd_id_data
                 
                 db$insertTable(conn,"ATRIBUTO",objAtt)
               }
@@ -748,16 +750,16 @@ uiEditEstrutura <- function(ns,input,output,session,callback){
 
 #template atributo
 modelAtributo <- function() {
-  tibble(NAME_ATRIBUTO = "",NAME_DATA = "QUALITATIVE",VALUE_ATRIBUTO = list(NULL),FG_ATIVO = TRUE)
+  tibble(name_atributo = "",name_data = "QUALITATIVE",value_atributo = list(NULL),fg_ativo = TRUE)
 }
 
 obterAllAtributos <- function(input,atributos){
 
   for(k in seq_len(nrow(atributos))){
-    atributos$FG_ATIVO[k]         <- input[[sprintf("checkboxAtributoAtivo_%d", k)]]
-    atributos$NAME_ATRIBUTO[k]    <- toupper(input[[sprintf("atributo_%d",k)]])
-    atributos$NAME_DATA[k]        <- input[[sprintf("comboTipodados_%d",k)]]
-    atributos$VALUE_ATRIBUTO[k]  <- ajusteTextoClasses(toupper(input[[sprintf("textoClasse_%d",k)]]))
+    atributos$fg_ativo[k]         <- input[[sprintf("checkboxAtributoAtivo_%d", k)]]
+    atributos$name_atributo[k]    <- toupper(input[[sprintf("atributo_%d",k)]])
+    atributos$name_data[k]        <- input[[sprintf("comboTipodados_%d",k)]]
+    atributos$value_atributo[k]  <- ajusteTextoClasses(toupper(input[[sprintf("textoClasse_%d",k)]]))
   }
   atributos
 }
@@ -766,10 +768,10 @@ adicionarNewAtributo <- function(input,atributos){
   
   att_tmp   <- modelAtributo()
   for(k in seq_len(nrow(atributos))){
-    atributos$FG_ATIVO[k]         <- input[[sprintf("checkboxAtributoAtivo_%d", k)]]
-    atributos$NAME_ATRIBUTO[k]    <- toupper(input[[sprintf("atributo_%d",k)]])
-    atributos$NAME_DATA[k]        <- input[[sprintf("comboTipodados_%d",k)]]
-    atributos$VALUE_ATRIBUTO[k]  <- toupper(input[[sprintf("textoClasse_%d",k)]])
+    atributos$fg_ativo[k]         <- input[[sprintf("checkboxAtributoAtivo_%d", k)]]
+    atributos$name_atributo[k]    <- toupper(input[[sprintf("atributo_%d",k)]])
+    atributos$name_data[k]        <- input[[sprintf("comboTipodados_%d",k)]]
+    atributos$value_atributo[k]  <- toupper(input[[sprintf("textoClasse_%d",k)]])
   }
   rbind(atributos,att_tmp)
 }
@@ -777,10 +779,10 @@ adicionarNewAtributo <- function(input,atributos){
 removerAtributo <- function(input,atributos){
 
   for(k in seq_len(nrow(atributos))){
-    atributos$FG_ATIVO[k]         <- input[[sprintf("checkboxAtributoAtivo_%d", k)]]
-    atributos$NAME_ATRIBUTO[k]    <- toupper(input[[sprintf("atributo_%d",k)]])
-    atributos$NAME_DATA[k]        <- input[[sprintf("comboTipodados_%d",k)]]
-    atributos$VALUE_ATRIBUTO[k]  <- toupper(input[[sprintf("textoClasse_%d",k)]])
+    atributos$fg_ativo[k]         <- input[[sprintf("checkboxAtributoAtivo_%d", k)]]
+    atributos$name_atributo[k]    <- toupper(input[[sprintf("atributo_%d",k)]])
+    atributos$name_data[k]        <- input[[sprintf("comboTipodados_%d",k)]]
+    atributos$value_atributo[k]  <- toupper(input[[sprintf("textoClasse_%d",k)]])
   }
   atributos
 }
@@ -790,17 +792,17 @@ checkAtributoValidadao <- function(atributos){
   #checa e analisar os componentes
   for(i in 1:nrow(atributos)){
     att <- atributos[i,]
-    if(any(stringi$stri_isempty(att$NAME_ATRIBUTO))){
+    if(any(stringi$stri_isempty(att$name_atributo))){
       showNotification("Alguns atributos não esta com nome preenchido!", type = "warning")
       return(FALSE)
-    }else if(any(duplicated(att$NAME_ATRIBUTO))){
+    }else if(any(duplicated(att$name_atributo))){
       showNotification("Alguns nomes de atributo possui duplicação!", type = "warning")
       return(FALSE)
-    }else if(!any(att$FG_ATIVO)){
+    }else if(!any(att$fg_ativo)){
       showNotification("Pelo menos deve possuir algum atributo ativo!", type = "warning")
       return(FALSE)
-    }else if(stringi$stri_isempty(att$VALUE_ATRIBUTO) && att$NAME_DATA == "QUALITATIVE"){
-      showNotification(paste0("Nenhuma classe foi preenchida para o atributo ",toupper(att$NAME_ATRIBUTO)), type = "warning")
+    }else if(stringi$stri_isempty(att$value_atributo) && att$name_data == "QUALITATIVE"){
+      showNotification(paste0("Nenhuma classe foi preenchida para o atributo ",toupper(att$name_atributo)), type = "warning")
       return(FALSE)
     }
     

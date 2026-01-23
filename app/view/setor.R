@@ -144,12 +144,12 @@ dispose <- function(session, key = "setor_private") {
 
       #check if it has already data of Setor
       obj <- list()
-      obj$NAME_SETOR                   <- nomeSetor
-      obj$TEMPO_REATIVAR_SETOR         <- isolate(input$comboTimer)
-      obj$TEMPO_REATIVAR_UNIDADE_SETOR <- isolate(input$comboUnit)
-      obj$TEMPO_PASSADO_SETOR          <- isolate(input$comboTimerLook)
-      obj$TEMPO_PASSADO_UNIDADE_SETOR  <- isolate(input$comboUnitLook)
-      id                               <- db$nextSequenciaID(conn,'SETOR')
+      obj$name_setor                   <- nomeSetor
+      obj$tempo_reativar_setor         <- isolate(input$comboTimer)
+      obj$tempo_reativar_unidade_setor <- isolate(input$comboUnit)
+      obj$tempo_passado_setor          <- isolate(input$comboTimerLook)
+      obj$tempo_passado_unidade_setor  <- isolate(input$comboUnitLook)
+      id <- db$nextSequenciaID(conn, "setor", id_col = "cd_id_setor", schema = "public")
       
       insertNewSetor(conn,id,obj)
 
@@ -259,8 +259,8 @@ uiEditSetor <- function(ns,input,output,session,callback){
               mutate_if(is.character,toupper) |> 
               mutate(
                     !!colunaNames[1] := 1:nrow(dataset),
-                    !!colunaNames[2] :=  dataset$NAME_SETOR,
-                    !!colunaNames[3] :=  sapply(dataset$CD_ID_SETOR, function (x) {
+                    !!colunaNames[2] :=  dataset$name_setor,
+                    !!colunaNames[3] :=  sapply(dataset$cd_id_setor, function (x) {
                       
                     as.character(
                         actionButton(
@@ -272,7 +272,7 @@ uiEditSetor <- function(ns,input,output,session,callback){
                         )
                       )
                     }),
-                    !!colunaNames[4] :=  sapply(dataset$CD_ID_SETOR, function (x) {
+                    !!colunaNames[4] :=  sapply(dataset$cd_id_setor, function (x) {
                       
                     as.character(
                         actionButton(
@@ -320,17 +320,17 @@ uiEditSetor <- function(ns,input,output,session,callback){
       setorSelect <- setor()
         
          uiMain(ns,
-           valueName = setorSelect$NAME_SETOR,
-           valueComboTimer = setorSelect$TEMPO_REATIVAR_SETOR,
-           valueComboUnit =  setorSelect$TEMPO_REATIVAR_UNIDADE_SETOR,
-           valueComboTimerLook = setorSelect$TEMPO_PASSADO_SETOR,
-           valueComboUnitLook = setorSelect$TEMPO_PASSADO_UNIDADE_SETOR
+           valueName = setorSelect$name_setor,
+           valueComboTimer = setorSelect$tempo_reativar_setor,
+           valueComboUnit =  setorSelect$tempo_reativar_unidade_setor,
+           valueComboTimerLook = setorSelect$tempo_passado_setor,
+           valueComboUnitLook = setorSelect$tempo_passado_unidade_setor
           )
     })
 
     obs$add(observeEvent(input$editPressedRow,{
       
-      setor(isolate(setores()) |> filter(CD_ID_SETOR == input$editPressedRow))
+      setor(isolate(setores()) |> filter(cd_id_setor == input$editPressedRow))
       
       swiperSlideNext(idSwiper)
       sliderPosition(isolate(sliderPosition()) + 1L)
@@ -339,13 +339,13 @@ uiEditSetor <- function(ns,input,output,session,callback){
     
     obs$add(observeEvent(input$deletePressedRow,{
       
-      setor <- isolate(setores()) |> filter(CD_ID_SETOR == input$deletePressedRow)
+      setor <- isolate(setores()) |> filter(cd_id_setor == input$deletePressedRow)
 
       messageAlerta(
                     input,
                     ns,
                     title   = paste0('Todos os objetos ligado a esse setor será excluido'),
-                    message = paste0('Deseja realmente excluir a setor ',setor$NAME_SETOR,"?"),
+                    message = paste0('Deseja realmente excluir a setor ',setor$name_setor,"?"),
                     callback.no = function(){
                       
                     },
@@ -353,7 +353,7 @@ uiEditSetor <- function(ns,input,output,session,callback){
                       
                        db$tryTransaction(function(conn){
                         
-                        deleteSetor(conn,setor$CD_ID_SETOR)
+                        deleteSetor(conn,setor$cd_id_setor)
                         setores.aux <- selectAllSetors(conn)
                         if(nrow(setores.aux) == 0){
                           #destroy all observe events
@@ -397,7 +397,7 @@ uiEditSetor <- function(ns,input,output,session,callback){
       
       db$tryTransaction(function(conn){
 
-        id        <- isolate(setor()$CD_ID_SETOR)
+        id        <- isolate(setor()$cd_id_setor)
         nomeSetor <- isolate(toupper(input$textNameSetor))
 
         if(stringi$stri_isempty(stringr$str_trim(nomeSetor))){
@@ -411,12 +411,12 @@ uiEditSetor <- function(ns,input,output,session,callback){
 
         #check if it has already data of Setor
         obj <- list()
-        obj$CD_ID_SETOR                  <- id
-        obj$NAME_SETOR                   <- nomeSetor
-        obj$TEMPO_REATIVAR_SETOR         <- isolate(input$comboTimer)
-        obj$TEMPO_REATIVAR_UNIDADE_SETOR <- isolate(input$comboUnit)
-        obj$TEMPO_PASSADO_SETOR          <- isolate(input$comboTimerLook)
-        obj$TEMPO_PASSADO_UNIDADE_SETOR  <- isolate(input$comboUnitLook)
+        obj$cd_id_setor                  <- id
+        obj$name_setor                   <- nomeSetor
+        obj$tempo_reativar_setor         <- isolate(input$comboTimer)
+        obj$tempo_reativar_unidade_setor <- isolate(input$comboUnit)
+        obj$tempo_passado_setor          <- isolate(input$comboTimerLook)
+        obj$tempo_passado_unidade_setor  <- isolate(input$comboUnitLook)
 
         if(!updateSetor(conn,obj)){
           showNotification("setor não foi atualizado com sucesso erro durante processo!", type = "warning")

@@ -950,7 +950,7 @@ process_df_raw <- function(df_raw, dt_de_local, dt_ate_local, tzL) {
   df <- apply_setup_state(df, "DOBRA.ESTADO",  "AREA_DE_TRABALHO.TRABALHADOR",   min_parado_secs = 60, by_cols = c("SETOR","OBJETO"))
   df <- apply_setup_state(df, "SOLDA.ESTADO",  "AREA_DE_TRABALHO.TRABALHADOR",   min_parado_secs = 60, by_cols = c("SETOR","OBJETO"))
 
-  ep <- build_episodes(df, min_secs = 30, dt_ate = dt_ate_local, max_gap_secs = 60)
+  ep <- build_episodes(df, min_secs = 60, dt_ate = dt_ate_local, max_gap_secs = 60)
   rm(df); gc(FALSE)
 
   ep <- cap_episodes(ep, dt_de_local, dt_ate_local)
@@ -1933,7 +1933,7 @@ server <- function(ns, input, output, session) {
           time_end   = te_,
           camera_ids = cameras_ids,
           fps        = 5L,
-          max_frames = 30000L,
+          max_frames = 300L,
           callback   = function(){
             rv_clip$status <- FALSE
           }

@@ -216,11 +216,11 @@ server <- function(id) {
     
     login$uiLogin(ns,session,input,output,function(user){
       
-      newProgressLoader(session)
-      renderMainbody(dash$ui(ns))
+      #newProgressLoader(session)
+      #renderMainbody(dash$ui(ns))
 
       # chatia$server(ns, input, output, session)
-      dash$server(ns, input, output, session)
+      #dash$server(ns, input, output, session)
       
       reactiveNotification         <- reactiveVal(NULL)
       reactiveMessageUsers         <- reactiveVal(NULL)

@@ -1,7 +1,7 @@
 # app/infra/db_pool.R
 box::use(
   pool[dbPool, poolClose, poolCheckout, poolReturn],
-  RMariaDB[MariaDB],
+  RPostgres[...],
   DBI,
   shiny[onStop]
 )
@@ -12,24 +12,15 @@ init <- function() {
   if (!is.null(.state$pool)) return(invisible(.state$pool))
 
   .state$pool <- dbPool(
-    drv      = MariaDB(),
+    drv      = RPostgres::Postgres(),
     dbname   = Sys.getenv("DB_NAME", "system"),
     host     = Sys.getenv("DB_HOST", "127.0.0.1"),
     port     = as.integer(Sys.getenv("DB_PORT", "3306")),
-    username = Sys.getenv("DB_USER", "root"),
+    user = Sys.getenv("DB_USER", "root"),
     password = Sys.getenv("DB_PASS", "ssbwarcq"),
     idleTimeout = as.integer(Sys.getenv("DB_IDLE_TIMEOUT", "120"))
   )
 
-#  .state$pool <- dbPool(
-#     drv      = MariaDB(),
-#     dbname   = Sys.getenv("DB_NAME", "system"),
-#     host     = Sys.getenv("DB_HOST", "172.30.0.26"),
-#     port     = as.integer(Sys.getenv("DB_PORT", "3306")),
-#     username = Sys.getenv("DB_USER", "root"),
-#     password = Sys.getenv("DB_PASS", "elite@"),
-#     idleTimeout = as.integer(Sys.getenv("DB_IDLE_TIMEOUT", "120"))
-#   )
 
   onStop(function() {
     if (!is.null(.state$pool)) poolClose(.state$pool)

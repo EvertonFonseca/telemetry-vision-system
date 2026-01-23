@@ -201,3 +201,356 @@ dataset_fining <- dataset[which(grepl("Finetuning",dataset$TITULO_IA,ignore.case
 saveRDS(dataset |> filter(!grepl("Teste",TITULO_IA,ignore.case = F)),paste0("train/dataset_train.rds"))
 saveRDS(dataset |> filter(grepl("Teste",TITULO_IA,ignore.case = F)),paste0("train/dataset_test.rds"))
 saveRDS(dataset,paste0("train/dataset_esquadros.rds"))
+saveRDS(last(dataset),paste0("train/dataset_train_dynamic.rds"))
+
+df <- last(dataset)
+df$OUTPUT_IA
+
+###############################
+
+library(jsonlite)
+library(tibble)
+library(dplyr)
+
+`%||%` <- function(x, y) if (is.null(x)) y else x
+
+# ----------------------------
+# parse robusto de timestamp
+# ----------------------------
+.parse_time_any <- function(x, tz = "UTC") {
+  if (inherits(x, "POSIXct")) return(as.POSIXct(x, tz = tz))
+  if (is.null(x) || is.na(x) || !nzchar(as.character(x))) return(as.POSIXct(NA, tz = tz))
+
+  s <- as.character(x)
+
+  out <- suppressWarnings(as.POSIXct(s, tz = tz, format = "%Y-%m-%d %H:%M:%OS"))
+  if (!is.na(out)) return(out)
+
+  out <- suppressWarnings(as.POSIXct(s, tz = tz, format = "%Y-%m-%d %H:%M:%S"))
+  if (!is.na(out)) return(out)
+
+  suppressWarnings(as.POSIXct(s, tz = tz))
+}
+
+.as_list <- function(x) {
+  if (is.null(x)) return(list())
+  if (is.list(x)) return(x)
+  list(x)
+}
+
+# sempre retorna character (nunca classe "json")
+.attrs_to_json_chr <- function(attrs) {
+  as.character(jsonlite::toJSON(attrs %||% list(), auto_unbox = TRUE, null = "null"))
+}
+
+# ============================================================
+# FUNÇÃO PRINCIPAL
+# ============================================================
+build_keyframe_interval_tables <- function(output_ia_json,
+                                          clip_begin,
+                                          clip_end,
+                                          tz_clip = "UTC",
+                                          tz_keyframes = "UTC",
+                                          clamp_to_clip = TRUE,
+                                          include_attrs_json = TRUE) {
+
+  clip_begin <- .parse_time_any(clip_begin, tz = tz_clip)
+  clip_end   <- .parse_time_any(clip_end,   tz = tz_clip)
+
+  if (is.na(clip_begin) || is.na(clip_end)) stop("clip_begin e clip_end precisam ser datas válidas.")
+  if (clip_end <= clip_begin) stop("clip_end precisa ser > clip_begin.")
+
+  root <- tryCatch(fromJSON(output_ia_json, simplifyVector = FALSE),
+                   error = function(e) NULL)
+  if (is.null(root)) stop("output_ia_json inválido (não parseou).")
+
+  root_list <- if (is.list(root) && !is.null(names(root))) list(root) else .as_list(root)
+
+  all_dyn_rects <- list()
+  for (item in root_list) {
+    if (is.list(item) && !is.null(item$DYN_RECTS)) {
+      all_dyn_rects <- c(all_dyn_rects, .as_list(item$DYN_RECTS))
+    }
+  }
+
+  if (!length(all_dyn_rects)) {
+    return(list(intervals_tbl = tibble(), poly_tbl = tibble(), rects = list()))
+  }
+
+  rects_out <- list()
+  intervals_rows <- list()
+  poly_rows <- list()
+
+  seg_id <- 0L
+
+  for (ridx in seq_along(all_dyn_rects)) {
+    rect <- all_dyn_rects[[ridx]]
+
+    rect_id      <- rect$RECT_ID %||% NA
+    camera_id    <- rect$CAMERA_ID %||% NA
+    cd_estrutura <- rect$CD_ID_ESTRUTURA %||% NA
+    name_estr    <- rect$NAME_ESTRUTURA %||% NA
+
+    kfs <- .as_list(rect$KEYFRAMES)
+
+    # sem keyframes -> 1 segmento pro clip todo
+    if (!length(kfs)) {
+      seg_id <- seg_id + 1L
+      attrs <- rect$ATRIBUTOS %||% list()
+
+      seg <- list(
+        SEGMENT_ID = seg_id,
+        RECT_ID = rect_id,
+        CAMERA_ID = camera_id,
+        CD_ID_ESTRUTURA = cd_estrutura,
+        NAME_ESTRUTURA = name_estr,
+        BEGIN = clip_begin,
+        END   = clip_end,
+        ATRIBUTOS = attrs,
+        POLY = NULL,
+        TS_KEYFRAME = NA
+      )
+
+      rects_out[[length(rects_out) + 1L]] <- list(rect = rect, intervals = list(seg))
+
+      intervals_rows[[length(intervals_rows) + 1L]] <- tibble(
+        SEGMENT_ID = seg_id,
+        RECT_ID = rect_id,
+        CAMERA_ID = camera_id,
+        CD_ID_ESTRUTURA = cd_estrutura,
+        NAME_ESTRUTURA = name_estr,
+        SEG_IDX = 1L,
+        BEGIN = as.POSIXct(clip_begin, tz = tz_clip),
+        END   = as.POSIXct(clip_end,   tz = tz_clip),
+        TS_KEYFRAME = as.POSIXct(NA, tz = tz_clip),
+        ATRIBUTOS_JSON = if (isTRUE(include_attrs_json)) .attrs_to_json_chr(attrs) else NA_character_
+      )
+      next
+    }
+
+    # parse timestamps
+    ts <- vapply(kfs, function(k) {
+      .parse_time_any(k$TS_UTC %||% k$TS %||% k$DATE_TIME, tz = tz_keyframes)
+    }, FUN.VALUE = as.POSIXct(NA, tz = tz_keyframes))
+
+    ord <- order(ts)
+    kfs <- kfs[ord]
+    ts  <- ts[ord]
+
+    keep <- !is.na(ts)
+    kfs <- kfs[keep]
+    ts  <- ts[keep]
+
+    if (!length(kfs)) {
+      seg_id <- seg_id + 1L
+      attrs <- rect$ATRIBUTOS %||% list()
+
+      seg <- list(
+        SEGMENT_ID = seg_id,
+        RECT_ID = rect_id,
+        CAMERA_ID = camera_id,
+        CD_ID_ESTRUTURA = cd_estrutura,
+        NAME_ESTRUTURA = name_estr,
+        BEGIN = clip_begin,
+        END   = clip_end,
+        ATRIBUTOS = attrs,
+        POLY = NULL,
+        TS_KEYFRAME = NA
+      )
+      rects_out[[length(rects_out) + 1L]] <- list(rect = rect, intervals = list(seg))
+
+      intervals_rows[[length(intervals_rows) + 1L]] <- tibble(
+        SEGMENT_ID = seg_id,
+        RECT_ID = rect_id,
+        CAMERA_ID = camera_id,
+        CD_ID_ESTRUTURA = cd_estrutura,
+        NAME_ESTRUTURA = name_estr,
+        SEG_IDX = 1L,
+        BEGIN = as.POSIXct(clip_begin, tz = tz_clip),
+        END   = as.POSIXct(clip_end,   tz = tz_clip),
+        TS_KEYFRAME = as.POSIXct(NA, tz = tz_clip),
+        ATRIBUTOS_JSON = if (isTRUE(include_attrs_json)) .attrs_to_json_chr(attrs) else NA_character_
+      )
+      next
+    }
+
+    if (isTRUE(clamp_to_clip)) {
+      ts <- pmax(ts, clip_begin)
+      ts <- pmin(ts, clip_end)
+    }
+
+    intervals <- list()
+    prev_begin <- clip_begin
+
+    # segmentos até cada keyframe i
+    for (i in seq_along(kfs)) {
+      end_i <- ts[i]
+      if (end_i <= prev_begin) next
+
+      seg_id <- seg_id + 1L
+
+      attrs_i <- kfs[[i]]$ATRIBUTOS %||% rect$ATRIBUTOS %||% list()
+      poly_i  <- kfs[[i]]$POLY %||% NULL
+
+      seg <- list(
+        SEGMENT_ID = seg_id,
+        RECT_ID = rect_id,
+        CAMERA_ID = camera_id,
+        CD_ID_ESTRUTURA = cd_estrutura,
+        NAME_ESTRUTURA = name_estr,
+        BEGIN = prev_begin,
+        END   = end_i,
+        ATRIBUTOS = attrs_i,
+        POLY = poly_i,
+        TS_KEYFRAME = end_i
+      )
+      intervals[[length(intervals) + 1L]] <- seg
+
+      intervals_rows[[length(intervals_rows) + 1L]] <- tibble(
+        SEGMENT_ID = seg_id,
+        RECT_ID = rect_id,
+        CAMERA_ID = camera_id,
+        CD_ID_ESTRUTURA = cd_estrutura,
+        NAME_ESTRUTURA = name_estr,
+        SEG_IDX = length(intervals),
+        BEGIN = as.POSIXct(prev_begin, tz = tz_clip),
+        END   = as.POSIXct(end_i,      tz = tz_clip),
+        TS_KEYFRAME = as.POSIXct(end_i, tz = tz_clip),
+        ATRIBUTOS_JSON = if (isTRUE(include_attrs_json)) .attrs_to_json_chr(attrs_i) else NA_character_
+      )
+
+      # explode POLY
+      if (!is.null(poly_i) && length(poly_i) > 0) {
+        if (is.data.frame(poly_i)) {
+          xs <- poly_i$x; ys <- poly_i$y
+        } else {
+          xs <- vapply(poly_i, function(p) p$x %||% NA_real_, numeric(1))
+          ys <- vapply(poly_i, function(p) p$y %||% NA_real_, numeric(1))
+        }
+        n <- length(xs)
+        if (n > 0) {
+          poly_rows[[length(poly_rows) + 1L]] <- tibble(
+            SEGMENT_ID = seg_id,
+            RECT_ID = rect_id,
+            CAMERA_ID = camera_id,
+            CD_ID_ESTRUTURA = cd_estrutura,
+            NAME_ESTRUTURA = name_estr,
+            SEG_IDX = length(intervals),
+            BEGIN = as.POSIXct(prev_begin, tz = tz_clip),
+            END   = as.POSIXct(end_i,      tz = tz_clip),
+            POINT_IDX = seq_len(n),
+            x = as.numeric(xs),
+            y = as.numeric(ys)
+          )
+        }
+      }
+
+      prev_begin <- end_i
+    }
+
+    # último segmento [ts_last, clip_end]
+    if (prev_begin < clip_end) {
+      last_kf <- kfs[[length(kfs)]]
+      attrs_last <- last_kf$ATRIBUTOS %||% rect$ATRIBUTOS %||% list()
+      poly_last  <- last_kf$POLY %||% NULL
+      ts_last    <- ts[length(ts)]
+
+      seg_id <- seg_id + 1L
+      seg <- list(
+        SEGMENT_ID = seg_id,
+        RECT_ID = rect_id,
+        CAMERA_ID = camera_id,
+        CD_ID_ESTRUTURA = cd_estrutura,
+        NAME_ESTRUTURA = name_estr,
+        BEGIN = prev_begin,
+        END   = clip_end,
+        ATRIBUTOS = attrs_last,
+        POLY = poly_last,
+        TS_KEYFRAME = ts_last
+      )
+      intervals[[length(intervals) + 1L]] <- seg
+
+      intervals_rows[[length(intervals_rows) + 1L]] <- tibble(
+        SEGMENT_ID = seg_id,
+        RECT_ID = rect_id,
+        CAMERA_ID = camera_id,
+        CD_ID_ESTRUTURA = cd_estrutura,
+        NAME_ESTRUTURA = name_estr,
+        SEG_IDX = length(intervals),
+        BEGIN = as.POSIXct(prev_begin, tz = tz_clip),
+        END   = as.POSIXct(clip_end,   tz = tz_clip),
+        TS_KEYFRAME = as.POSIXct(ts_last, tz = tz_clip),
+        ATRIBUTOS_JSON = if (isTRUE(include_attrs_json)) .attrs_to_json_chr(attrs_last) else NA_character_
+      )
+
+      if (!is.null(poly_last) && length(poly_last) > 0) {
+        if (is.data.frame(poly_last)) {
+          xs <- poly_last$x; ys <- poly_last$y
+        } else {
+          xs <- vapply(poly_last, function(p) p$x %||% NA_real_, numeric(1))
+          ys <- vapply(poly_last, function(p) p$y %||% NA_real_, numeric(1))
+        }
+        n <- length(xs)
+        if (n > 0) {
+          poly_rows[[length(poly_rows) + 1L]] <- tibble(
+            SEGMENT_ID = seg_id,
+            RECT_ID = rect_id,
+            CAMERA_ID = camera_id,
+            CD_ID_ESTRUTURA = cd_estrutura,
+            NAME_ESTRUTURA = name_estr,
+            SEG_IDX = length(intervals),
+            BEGIN = as.POSIXct(prev_begin, tz = tz_clip),
+            END   = as.POSIXct(clip_end,   tz = tz_clip),
+            POINT_IDX = seq_len(n),
+            x = as.numeric(xs),
+            y = as.numeric(ys)
+          )
+        }
+      }
+    }
+
+    rects_out[[length(rects_out) + 1L]] <- list(rect = rect, intervals = intervals)
+  }
+
+  intervals_tbl <- if (length(intervals_rows)) bind_rows(intervals_rows) else tibble()
+  poly_tbl      <- if (length(poly_rows))      bind_rows(poly_rows)      else tibble()
+
+  intervals_tbl <- intervals_tbl %>%
+    arrange(CAMERA_ID, RECT_ID, BEGIN, END, SEGMENT_ID)
+
+  poly_tbl <- poly_tbl %>%
+    arrange(SEGMENT_ID, POINT_IDX)
+
+  list(
+    intervals_tbl = intervals_tbl,
+    poly_tbl      = poly_tbl,
+    rects         = rects_out
+  )
+}
+
+
+OUTPUT_IA_string  = last(frames$OUTPUT_IA)
+dt_hr_local_begin = last(frames$DT_HR_LOCAL_BEGIN)
+dt_hr_local_end  = last(frames$DT_HR_LOCAL_END)
+
+# ============================
+# EXEMPLO DE USO
+# ============================
+res <- build_keyframe_interval_tables(
+  output_ia_json = OUTPUT_IA_string,
+  clip_begin = dt_hr_local_begin,
+  clip_end   = dt_hr_local_end,
+  tz_clip = "UTC",
+  tz_keyframes = "UTC",
+  clamp_to_clip = TRUE,
+  include_attrs_json = TRUE
+)
+
+res$intervals_tbl  # 1 linha por segmento (BEGIN/END) + SEGMENT_ID
+res$poly_tbl       # 1 linha por ponto do POLY, ligado pelo SEGMENT_ID
+
+
+View(res$poly_tbl )
+View(res$intervals_tbl)
+
+x <- res$poly_tbl  |> filter(SEGMENT_ID == 1)
