@@ -216,6 +216,38 @@ selectAllCameras <- function(con) {
 }
 
 #' @export
+selectAllCamerasIfExistFrame <- function(con) {
+    sql <- "
+      select
+      cv.cd_id_camera,
+      cv.name_camera,
+      cv.url_camera,
+      cc.fps_camera,
+      cc.dt_hr_local
+    from camera_view cv
+    left join (
+      select c1.cd_id_camera, c1.fps_camera, c1.dt_hr_local
+      from camera_config c1
+      join (
+        select cd_id_camera, max(dt_hr_local) as max_dt
+        from camera_config
+        group by cd_id_camera
+      ) latest
+        on latest.cd_id_camera = c1.cd_id_camera
+      and latest.max_dt      = c1.dt_hr_local
+    ) cc
+      on cc.cd_id_camera = cv.cd_id_camera
+    where exists (
+      select 1
+      from frame_camera fc
+      where fc.cd_id_camera = cv.cd_id_camera
+    )
+    order by cv.cd_id_camera;
+    "
+  DBI$dbGetQuery(con, sql)
+}
+
+#' @export
 selectCameraByComponente <- function(con, componente) {
   componente <- .names_to_lower(componente)
   stopifnot(!is.null(componente$cd_id_camera))

@@ -43,13 +43,13 @@ fmt_sql_dt_utc <- function(x_utc) {
 # monta "$k,$(k+1),..." para IN (...)
 .pg_in <- function(vec, start_index = 1L) {
   vec <- vec[!is.na(vec) & nzchar(as.character(vec))]
-  if (!length(vec)) return(list(sql = NULL, params = list(), next = start_index))
+  if (!length(vec)) return(list(sql = NULL, params = list(), nextt = start_index))
   n <- length(vec)
   idx <- start_index:(start_index + n - 1L)
   list(
     sql    = paste0("($", paste(idx, collapse = ",$"), ")"),
     params = as.list(as.character(vec)),
-    next   = start_index + n
+    nextt   = start_index + n
   )
 }
 
@@ -114,7 +114,7 @@ build_sql <- function(dt_de_utc, dt_ate_utc, setor = NULL, objeto = NULL) {
     if (!is.null(in_s$sql)) {
       where <- c(where, paste0("s.name_setor in ", in_s$sql))
       params <- c(params, in_s$params)
-      p <- in_s$next
+      p <- in_s$nextt
     }
   }
 
@@ -124,7 +124,7 @@ build_sql <- function(dt_de_utc, dt_ate_utc, setor = NULL, objeto = NULL) {
     if (!is.null(in_o$sql)) {
       where <- c(where, paste0("o.name_objeto in ", in_o$sql))
       params <- c(params, in_o$params)
-      p <- in_o$next
+      p <- in_o$nextt
     }
   }
 

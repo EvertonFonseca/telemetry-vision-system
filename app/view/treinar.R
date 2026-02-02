@@ -984,7 +984,7 @@ uiCamerasComponentes <- function(ns, input, output, objeto, componentes) {
             group   = "comp",
             lng = poligno$x, lat = poligno$y,
             layerId = comp$cd_id_componente, weight = 2, fillOpacity = 0.1, label = label,
-            options = leaflet::pathOptions(clickable = FALSE)
+            options = leaflet::pathOptions(clickable = objeto$cd_id_objeto_tipo != 2L)
           )
         }
 
@@ -1963,26 +1963,34 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
   }
   obs$add(observeEvent(input$prevFrame, { step_frame(-1L) }, ignoreInit = TRUE))
   obs$add(observeEvent(input$nextFrame, { step_frame(+1L) }, ignoreInit = TRUE))
-
+  
+  # ---------- Loop Play principal ----------
   # ---------- Loop Play principal ----------
   play_step <- function() {
     withReactiveDomain(session, {
       isolate({
         if (!isTRUE(playing())) { loop_on <<- FALSE; return(invisible()) }
         if (is.null(rv$seq) || nrow(rv$seq) == 0L) { playing(FALSE); loop_on <<- FALSE; return(invisible()) }
-
+        
+        t0 <- proc.time()[3]  # <- tempo inicio do tick
+        
         n   <- nrow(rv$seq)
         dir <- play_dir()
         if ((dir > 0L && rv$i >= n) || (dir < 0L && rv$i <= 1L)) {
           playing(FALSE); loop_on <<- FALSE; return(invisible())
         }
-
+        
         rv$i <- rv$i + dir
         st <- ctx$render_current(rv$seq, rv$i, rv$w, rv$h, rv$id_by_cam, fit_bounds = FALSE)
         if (isTRUE(st$ok)) { rv$w <- st$w; rv$h <- st$h }
-        ctx$prefetch_ahead_batch(rv$seq, rv$i, PREFETCH_AHEAD)
-
+        
+        # ✅ prefetch não precisa rodar TODO frame (ver item 3 abaixo)
+        if ((rv$i %% 4L) == 0L) {
+          ctx$prefetch_ahead_batch(rv$seq, rv$i, PREFETCH_AHEAD)
+        }
+        
         clockupdate(Sys.time())
+        
         if (clip_limit_exceeded(rv, suppressWarnings(as.numeric(input$clip_max_min)))) {
           playing(FALSE); loop_on <<- FALSE
           ts_start <- rv$clip_t0; i0 <- rv$clip_i0
@@ -1992,9 +2000,13 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
           clips_add(ts_start, ts_end, i0, i1)
           return(invisible())
         }
-
-        delay <- suppressWarnings(as.numeric(input$step_ms) / 1000)
-        if (!is.finite(delay) || delay <= 0) delay <- 0.001
+        
+        target <- suppressWarnings(as.numeric(input$step_ms) / 1000)
+        if (!is.finite(target) || target <= 0) target <- 0.05
+        
+        elapsed <- proc.time()[3] - t0
+        delay <- max(0.001, target - elapsed)   # ✅ não “pune” com delay extra
+        
         later::later(function() { play_step() }, delay)
       })
     })
