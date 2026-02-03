@@ -2375,7 +2375,7 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
     }
 
     rownum      <- seq_len(nrow(df))
-    tiposPacote <- tiposPacotes$NAME_TIPO_PACOTE
+    tiposPacote <- tiposPacotes$name_tipo_pacote
 
     titulo <- vapply(df$id, function(id) {
       as.character(
@@ -2883,7 +2883,7 @@ build_objeto_descricao <- function(input, df, objeto, tiposPacotes, dyn_rects = 
     df_tmp$title <- input[[paste0("clip_title_", id)]]
     t0           <- input[[paste0("clip_t0_", id)]]
     t1           <- input[[paste0("clip_t1_", id)]]
-    tipoPacote   <- tiposPacotes |> dplyr::filter(NAME_TIPO_PACOTE == input[[paste0("clip_tipo_", id)]])
+    tipoPacote   <- tiposPacotes |> dplyr::filter(name_tipo_pacote == input[[paste0("clip_tipo_", id)]])
 
     if (!validaDateFormat(t0) || !validaDateFormat(t1)) {
       status  <- FALSE
