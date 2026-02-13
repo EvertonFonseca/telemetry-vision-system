@@ -88,7 +88,16 @@ dispose <- function(session, key = "setor_private") {
 }
 
 # ---------- Parâmetros ----------
-PREFETCH_AHEAD  <- 16L
+PREFETCH_AHEAD  <- local({
+  x <- suppressWarnings(as.integer(Sys.getenv("TVS_PREFETCH_AHEAD", "32")))
+  if (!is.finite(x) || x < 8L) x <- 32L
+  x
+})
+PREFETCH_EVERY_N <- local({
+  x <- suppressWarnings(as.integer(Sys.getenv("TVS_PREFETCH_EVERY_N", "6")))
+  if (!is.finite(x) || x < 1L) x <- 6L
+  x
+})
 MAX_CACHE_ITEMS <- 400L
 
 # (sync/interp) defaults
@@ -143,6 +152,7 @@ img_dims <- function(raw) {
 key_of <- function(cam, ts_utc) sprintf(
   "%s|%s", as.character(cam), format(ts_utc, "%Y-%m-%d %H:%M:%OS", tz = "UTC")
 )
+key_of_frame <- function(frame_id) sprintf("fid|%s", as.character(as.integer(frame_id)))
 fmt_pt <- function(x, tz) format(x, tz = tz, format = "%d/%m/%y %H:%M:%S")
 
 fmt_ts_utc_iso <- function(x, digits = 3L) {
@@ -209,18 +219,49 @@ new_player_ctx <- function(session, pool, lru_cache) {
   env$cache   <- lru_cache
 
   # cache interno por sequência (para nearest rápido)
-  env$seq_sig      <- NULL
-  env$times_by_cam <- NULL
-  env$pos_by_cam   <- NULL
+  env$seq_sig           <- NULL
+  env$times_by_cam      <- NULL
+  env$frame_ids_by_cam  <- NULL
+  env$pos_by_cam        <- NULL
+  env$last_frame_by_cam <- NULL
+  env$prefetch_busy      <- FALSE
+  env$prefetch_scheduled <- FALSE
+  env$prefetch_next      <- NULL
 
-  env$fetch_dataurl_single <- function(cam, ts_utc) {
+  env$fetch_dataurl_by_frame <- function(frame_id, cam = NULL, ts_utc = NULL) {
+    frame_id <- suppressWarnings(as.integer(frame_id))
+    if (!is.finite(frame_id)) return(NULL)
+
+    k <- key_of_frame(frame_id)
+    hit <- env$cache$get(k)
+    if (!is.null(hit)) {
+      if (!is.null(cam) && !is.null(ts_utc)) env$cache$put(key_of(cam, ts_utc), hit)
+      return(hit)
+    }
+
+    res <- db_fetch_frame_by_id(env$pool, frame_id)
+    if (!nrow(res) || is.null(res$data_frame[[1]])) return(NULL)
+
+    uri <- to_data_url(res$data_frame[[1]])
+    env$cache$put(k, uri)
+    if (!is.null(cam) && !is.null(ts_utc)) env$cache$put(key_of(cam, ts_utc), uri)
+    uri
+  }
+
+  env$fetch_dataurl_single <- function(cam, ts_utc, frame_id = NA_integer_) {
+    frame_id <- suppressWarnings(as.integer(frame_id))
+    if (is.finite(frame_id)) {
+      return(env$fetch_dataurl_by_frame(frame_id, cam = cam, ts_utc = ts_utc))
+    }
+
     k <- key_of(cam, ts_utc)
     hit <- env$cache$get(k)
     if (!is.null(hit)) return(hit)
+
     res <- db_fetch_frame_raw(env$pool, cam, ts_utc)
     if (!nrow(res) || is.null(res$data_frame[[1]])) return(NULL)
-    raw <- res$data_frame[[1]]
-    uri <- to_data_url(raw)
+
+    uri <- to_data_url(res$data_frame[[1]])
     env$cache$put(k, uri)
     uri
   }
@@ -242,9 +283,16 @@ new_player_ctx <- function(session, pool, lru_cache) {
     if (!identical(sig, env$seq_sig)) {
       seq_df2 <- seq_df
       seq_df2$dt_hr_local <- as.POSIXct(seq_df2$dt_hr_local, tz = "UTC")
-      env$times_by_cam <- split(seq_df2$dt_hr_local, seq_df2$cd_id_camera)
-      env$pos_by_cam   <- lapply(env$times_by_cam, function(x) 1L)
-      env$seq_sig      <- sig
+      seq_df2$cd_id_camera <- as.integer(seq_df2$cd_id_camera)
+      seq_df2$cd_id_frame  <- as.integer(seq_df2$cd_id_frame)
+
+      env$times_by_cam      <- split(seq_df2$dt_hr_local, seq_df2$cd_id_camera)
+      env$frame_ids_by_cam  <- split(seq_df2$cd_id_frame, seq_df2$cd_id_camera)
+      env$pos_by_cam        <- lapply(env$times_by_cam, function(x) 1L)
+      env$last_frame_by_cam <- as.list(rep(NA_integer_, length(env$times_by_cam)))
+      names(env$last_frame_by_cam) <- names(env$times_by_cam)
+      env$prefetch_next <- NULL
+      env$seq_sig <- sig
     }
     invisible(TRUE)
   }
@@ -281,6 +329,9 @@ new_player_ctx <- function(session, pool, lru_cache) {
     tol_s <- suppressWarnings(as.numeric(tol_ms) / 1000)
     if (!is.finite(tol_s) || tol_s <= 0) tol_s <- as.numeric(SYNC_TOL_MS_DEFAULT) / 1000
 
+    jobs <- list()
+    job_n <- 0L
+
     for (cam_str in names(id_map)) {
       cam <- suppressWarnings(as.integer(cam_str))
       dom_id <- id_map[[cam_str]]
@@ -288,26 +339,67 @@ new_player_ctx <- function(session, pool, lru_cache) {
 
       times <- env$times_by_cam[[cam_str]]
       if (is.null(times) || !length(times)) next
+      ids <- env$frame_ids_by_cam[[cam_str]]
+      if (is.null(ids) || !length(ids)) next
 
       idx0 <- env$pos_by_cam[[cam_str]]
       idx1 <- env$nearest_idx_monotonic(times, ts_ref, idx0)
       if (!is.finite(idx1)) next
+      if (length(ids) < idx1) next
       env$pos_by_cam[[cam_str]] <- idx1
 
       ts_cam <- as.POSIXct(times[[idx1]], tz = "UTC")
       dist_s <- abs(as.numeric(difftime(ts_cam, ts_ref, units = "secs")))
       if (!is.finite(dist_s) || dist_s > tol_s) next  # hold last visual
 
-      uri <- env$fetch_dataurl_single(cam, ts_cam)
+      frame_id <- suppressWarnings(as.integer(ids[[idx1]]))
+      if (!is.finite(frame_id)) next
+
+      last_id <- suppressWarnings(as.integer(env$last_frame_by_cam[[cam_str]]))
+      if (!isTRUE(fit_bounds) && length(last_id) == 1L && is.finite(last_id) && last_id == frame_id) next
+
+      job_n <- job_n + 1L
+      jobs[[job_n]] <- list(
+        cam = cam,
+        cam_str = cam_str,
+        dom_id = dom_id,
+        ts_cam = ts_cam,
+        frame_id = frame_id
+      )
+    }
+
+    if (!job_n) return(list(ok = FALSE, w = w, h = h))
+
+    miss_ids <- unique(vapply(jobs, function(j) as.integer(j$frame_id), integer(1)))
+    miss_ids <- miss_ids[
+      vapply(miss_ids, function(fid) is.null(env$cache$get(key_of_frame(fid))), logical(1L))
+    ]
+
+    if (length(miss_ids)) {
+      blobs <- tryCatch(db_fetch_many_frames_by_id(env$pool, miss_ids), error = function(e) NULL)
+      if (!is.null(blobs) && nrow(blobs)) {
+        for (j in seq_len(nrow(blobs))) {
+          fid <- suppressWarnings(as.integer(blobs$cd_id_frame[[j]]))
+          raw <- blobs$data_frame[[j]]
+          if (is.finite(fid) && !is.null(raw)) {
+            env$cache$put(key_of_frame(fid), to_data_url(raw))
+          }
+        }
+      }
+    }
+
+    for (job in jobs) {
+      uri <- env$fetch_dataurl_by_frame(job$frame_id, cam = job$cam, ts_utc = job$ts_cam)
       if (is.null(uri)) next
 
       env$session$sendCustomMessage("set_frame_to", list(
-        id  = dom_id,
+        id  = job$dom_id,
         url = uri,
         w   = as.integer(w),
         h   = as.integer(h),
         fit = isTRUE(fit_bounds)
       ))
+      env$last_frame_by_cam[[job$cam_str]] <- job$frame_id
       ok_any <- TRUE
     }
 
@@ -322,33 +414,73 @@ new_player_ctx <- function(session, pool, lru_cache) {
     tgt_idx <- seq.int(i + 1L, min(n, i + N))
     if (!length(tgt_idx)) return(invisible(FALSE))
     seg <- seq_df[tgt_idx, , drop = FALSE]
-    seg$k <- mapply(key_of, seg$cd_id_camera, seg$dt_hr_local)
-    seg <- seg[!vapply(seg$k, function(z) !is.null(env$cache$get(z)), logical(1L)), , drop = FALSE]
-    if (!nrow(seg)) return(invisible(TRUE))
 
-    groups <- split(seg, seg$cd_id_camera)
-    for (cam_str in names(groups)) {
-      g      <- groups[[cam_str]]
-      cam    <- as.integer(cam_str)
-      ts_vec <- as.POSIXct(g$dt_hr_local, tz = "UTC")
+    frame_ids <- suppressWarnings(as.integer(seg$cd_id_frame))
+    frame_ids <- unique(frame_ids[is.finite(frame_ids)])
+    if (!length(frame_ids)) return(invisible(FALSE))
 
-      res <- tryCatch(db_fetch_many_frames(env$pool, cam, ts_vec), error = function(e) NULL)
-      if (!is.null(res) && nrow(res)) {
-        res$dt_hr_local <- as.POSIXct(res$dt_hr_local, tz = "UTC")
-        idx_map <- match(ts_vec, res$dt_hr_local)
-        for (j in seq_along(ts_vec)) {
-          if (!is.na(idx_map[j])) {
-            raw <- res$data_frame[[idx_map[j]]]
-            if (!is.null(raw)) env$cache$put(key_of(cam, ts_vec[j]), to_data_url(raw))
-          }
-        }
-      }
-      for (j in seq_along(ts_vec)) {
-        if (is.null(env$cache$get(key_of(cam, ts_vec[j])))) {
-          invisible(env$fetch_dataurl_single(cam, ts_vec[j]))
+    miss <- frame_ids[
+      vapply(frame_ids, function(fid) is.null(env$cache$get(key_of_frame(fid))), logical(1L))
+    ]
+    if (!length(miss)) return(invisible(TRUE))
+
+    blobs <- tryCatch(db_fetch_many_frames_by_id(env$pool, miss), error = function(e) NULL)
+    if (!is.null(blobs) && nrow(blobs)) {
+      for (j in seq_len(nrow(blobs))) {
+        fid <- suppressWarnings(as.integer(blobs$cd_id_frame[[j]]))
+        raw <- blobs$data_frame[[j]]
+        if (is.finite(fid) && !is.null(raw)) {
+          env$cache$put(key_of_frame(fid), to_data_url(raw))
         }
       }
     }
+
+    miss2 <- miss[
+      vapply(miss, function(fid) is.null(env$cache$get(key_of_frame(fid))), logical(1L))
+    ]
+    if (length(miss2)) {
+      for (fid in miss2) {
+        invisible(env$fetch_dataurl_by_frame(fid))
+      }
+    }
+
+    invisible(TRUE)
+  }
+
+  env$prefetch_request <- function(seq_df, i, N = PREFETCH_AHEAD) {
+    if (is.null(seq_df) || !nrow(seq_df)) return(invisible(FALSE))
+
+    i <- suppressWarnings(as.integer(i))
+    if (!is.finite(i)) return(invisible(FALSE))
+
+    N <- suppressWarnings(as.integer(N))
+    if (!is.finite(N) || N < 1L) N <- PREFETCH_AHEAD
+
+    env$prefetch_next <- list(seq_df = seq_df, i = i, N = N)
+
+    if (isTRUE(env$prefetch_scheduled) || isTRUE(env$prefetch_busy)) {
+      return(invisible(TRUE))
+    }
+
+    env$prefetch_scheduled <- TRUE
+    later::later(function() {
+      env$prefetch_scheduled <- FALSE
+
+      task <- env$prefetch_next
+      env$prefetch_next <- NULL
+      if (is.null(task)) return(invisible(FALSE))
+
+      env$prefetch_busy <- TRUE
+      on.exit({
+        env$prefetch_busy <- FALSE
+        if (!is.null(env$prefetch_next) && !isTRUE(env$prefetch_scheduled)) {
+          env$prefetch_request(env$prefetch_next$seq_df, env$prefetch_next$i, env$prefetch_next$N)
+        }
+      }, add = TRUE)
+
+      try(env$prefetch_ahead_batch(task$seq_df, task$i, task$N), silent = TRUE)
+      invisible(TRUE)
+    }, 0)
 
     invisible(TRUE)
   }
@@ -815,7 +947,7 @@ ui_js_handlers <- function() {
     ),
     tags$script(HTML("
       (function(){
-        const overlays = {}; const boundsOf = {}; const maps = {};
+        const overlays = {}; const boundsOf = {}; const maps = {}; const lastUrl = {};
 
         function fitWholeImage(map, w, h){
           const size = map.getSize();
@@ -838,6 +970,7 @@ ui_js_handlers <- function() {
             try { if (overlays[msg.id]) overlays[msg.id].remove(); } catch(e){}
             overlays[msg.id] = L.imageOverlay(msg.url, b, {opacity:1}).addTo(map);
             maps[msg.id]     = map;
+            lastUrl[msg.id]  = msg.url;
             boundsOf[msg.id] = fitWholeImage(map, w, h);
             return;
           }
@@ -847,13 +980,16 @@ ui_js_handlers <- function() {
             boundsOf[msg.id] = b;
             if (msg.fit) boundsOf[msg.id] = fitWholeImage(map, w, h);
           }
-          overlays[msg.id].setUrl(msg.url);
+          if (lastUrl[msg.id] !== msg.url){
+            overlays[msg.id].setUrl(msg.url);
+            lastUrl[msg.id] = msg.url;
+          }
         });
 
         Shiny.addCustomMessageHandler('reset_overlays', function(ids){
           (ids || []).forEach(function(id){
             try { if (overlays[id]) overlays[id].remove(); } catch(e){}
-            delete overlays[id]; delete boundsOf[id]; delete maps[id];
+            delete overlays[id]; delete boundsOf[id]; delete maps[id]; delete lastUrl[id];
           });
         });
 
@@ -1339,9 +1475,28 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
       same_ts <- clipOverlayPlayer$seq[clipOverlayPlayer$seq$dt_hr_local == ts, , drop = FALSE]
       if (!nrow(same_ts)) return(invisible())
 
+      fids <- suppressWarnings(as.integer(same_ts$cd_id_frame))
+      fids <- unique(fids[is.finite(fids)])
+      if (length(fids)) {
+        miss <- fids[vapply(fids, function(fid) is.null(ctx$cache$get(key_of_frame(fid))), logical(1L))]
+        if (length(miss)) {
+          blobs <- tryCatch(db_fetch_many_frames_by_id(ctx$pool, miss), error = function(e) NULL)
+          if (!is.null(blobs) && nrow(blobs)) {
+            for (jj in seq_len(nrow(blobs))) {
+              fid_j <- suppressWarnings(as.integer(blobs$cd_id_frame[[jj]]))
+              raw_j <- blobs$data_frame[[jj]]
+              if (is.finite(fid_j) && !is.null(raw_j)) {
+                ctx$cache$put(key_of_frame(fid_j), to_data_url(raw_j))
+              }
+            }
+          }
+        }
+      }
+
       for (r in seq_len(nrow(same_ts))) {
         cam <- as.integer(same_ts$cd_id_camera[r])
-        uri <- ctx$fetch_dataurl_single(cam, ts)
+        fid <- suppressWarnings(as.integer(same_ts$cd_id_frame[r]))
+        uri <- ctx$fetch_dataurl_single(cam, ts, frame_id = fid)
         if (!is.null(uri)) {
           session$sendCustomMessage("set_clip_overlay_frame", list(
             img_id = ns(paste0("clipOverlayImg_", cam)),
@@ -1393,6 +1548,111 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
     selecting_from_map = FALSE
   )
 
+  dyn_track_cache <- new.env(parent = emptyenv())
+  dyn_track_cache$rev       <- 0L
+  dyn_track_cache$built_rev <- -1L
+  dyn_track_cache$index     <- list()
+  dyn_track_cache$cursor    <- new.env(parent = emptyenv())
+  dyn_track_cache$last_box_sig <- new.env(parent = emptyenv())
+
+  dyn_clear_env <- function(env_obj) {
+    if (!is.environment(env_obj)) return(invisible(FALSE))
+    nm <- ls(envir = env_obj, all.names = TRUE)
+    if (length(nm)) rm(list = nm, envir = env_obj)
+    invisible(TRUE)
+  }
+
+  dyn_track_key <- function(rect_id, cam_id) {
+    paste0(as.integer(rect_id), "|", as.integer(cam_id))
+  }
+
+  dyn_cache_clear_boxes <- function() {
+    dyn_clear_env(dyn_track_cache$last_box_sig)
+  }
+
+  dyn_cache_invalidate_tracks <- function() {
+    rev <- suppressWarnings(as.integer(dyn_track_cache$rev))
+    if (!is.finite(rev)) rev <- 0L
+    dyn_track_cache$rev <- rev + 1L
+    dyn_track_cache$built_rev <- -1L
+    dyn_track_cache$index <- list()
+    dyn_clear_env(dyn_track_cache$cursor)
+    dyn_cache_clear_boxes()
+    invisible(TRUE)
+  }
+
+  dyn_get_track_index <- function() {
+    if (identical(dyn_track_cache$built_rev, dyn_track_cache$rev)) {
+      return(dyn_track_cache$index)
+    }
+
+    tr <- dyn$tracks
+    if (is.null(tr) || !nrow(tr)) {
+      dyn_track_cache$index <- list()
+      dyn_track_cache$built_rev <- dyn_track_cache$rev
+      dyn_clear_env(dyn_track_cache$cursor)
+      return(dyn_track_cache$index)
+    }
+
+    tr2 <- tr
+    tr2$rect_id <- suppressWarnings(as.integer(tr2$rect_id))
+    tr2$cam_id  <- suppressWarnings(as.integer(tr2$cam_id))
+    tr2$ts_utc  <- as.POSIXct(tr2$ts_utc, tz = "UTC")
+
+    ok <- is.finite(tr2$rect_id) & is.finite(tr2$cam_id) & !is.na(tr2$ts_utc)
+    if (!any(ok)) {
+      dyn_track_cache$index <- list()
+      dyn_track_cache$built_rev <- dyn_track_cache$rev
+      dyn_clear_env(dyn_track_cache$cursor)
+      return(dyn_track_cache$index)
+    }
+    tr2 <- tr2[ok, , drop = FALSE]
+
+    keys <- paste0(tr2$rect_id, "|", tr2$cam_id)
+    grp <- split(seq_len(nrow(tr2)), keys)
+
+    out <- vector("list", length(grp))
+    names(out) <- names(grp)
+
+    for (k in names(grp)) {
+      ii <- grp[[k]]
+      ii <- ii[order(tr2$ts_utc[ii])]
+
+      boxes <- vector("list", length(ii))
+      ts_num <- as.numeric(tr2$ts_utc[ii])
+
+      for (j in seq_along(ii)) {
+        row_id <- ii[[j]]
+        b <- NULL
+        if ("box" %in% names(tr2)) b <- tr2$box[[row_id]]
+        if (is.null(b) && "poly" %in% names(tr2)) b <- poly_to_box(tr2$poly[[row_id]])
+        if (!is.null(b)) {
+          vals <- suppressWarnings(as.numeric(c(b$x_min, b$y_min, b$x_max, b$y_max)))
+          if (!all(is.finite(vals))) {
+            b <- NULL
+          } else {
+            b <- list(x_min = vals[1], y_min = vals[2], x_max = vals[3], y_max = vals[4])
+          }
+        }
+        boxes[[j]] <- b
+      }
+
+      out[[k]] <- list(ts = ts_num, box = boxes)
+    }
+
+    dyn_track_cache$index <- out
+    dyn_track_cache$built_rev <- dyn_track_cache$rev
+    dyn_clear_env(dyn_track_cache$cursor)
+    out
+  }
+
+  dyn_box_signature <- function(box) {
+    if (is.null(box)) return(NULL)
+    vals <- suppressWarnings(as.numeric(c(box$x_min, box$y_min, box$x_max, box$y_max)))
+    if (!all(is.finite(vals))) return(NULL)
+    paste(format(round(vals, 3), nsmall = 3, trim = TRUE), collapse = "|")
+  }
+
   dyn_has_leaflet_id <- function(leaflet_id) {
     df <- dyn$rects
     if (is.null(df) || !nrow(df)) return(FALSE)
@@ -1422,6 +1682,7 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
   dyn_reset <- function() {
     dyn$rects  <- dynrect_empty_df()
     dyn$tracks <- dyntrack_empty_df()
+    dyn_cache_invalidate_tracks()
     dyn_reset_pending()
     dyn$selected_leaflet_id    <- NA_character_
     dyn$selected_rect_id       <- NA_integer_
@@ -1481,52 +1742,56 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
   }
 
   dyn_get_box_at_ts <- function(rect_id, cam_id, ts_utc, interpolate = DYN_INTERPOLATE_DEFAULT) {
-    tr <- dyn$tracks
-    if (is.null(tr) || !nrow(tr)) return(NULL)
+    idx_all <- dyn_get_track_index()
+    key <- dyn_track_key(rect_id, cam_id)
+    idx <- idx_all[[key]]
+    if (is.null(idx) || !length(idx$ts)) return(NULL)
 
-    ts_utc <- as.POSIXct(ts_utc, tz = "UTC")
-    if (is.na(ts_utc)) return(NULL)
+    t_now <- suppressWarnings(as.numeric(as.POSIXct(ts_utc, tz = "UTC")))
+    if (!is.finite(t_now)) return(NULL)
 
-    kf <- tr |>
-      dplyr::filter(as.integer(.data$rect_id) == as.integer(rect_id),
-                    as.integer(.data$cam_id)  == as.integer(cam_id)) |>
-      dplyr::mutate(ts_utc = as.POSIXct(.data$ts_utc, tz = "UTC")) |>
-      dplyr::arrange(.data$ts_utc)
+    ts_vec <- idx$ts
+    n <- length(ts_vec)
 
-    if (!nrow(kf)) return(NULL)
+    pos <- 1L
+    if (exists(key, envir = dyn_track_cache$cursor, inherits = FALSE)) {
+      pos <- suppressWarnings(as.integer(get(key, envir = dyn_track_cache$cursor, inherits = FALSE)))
+    }
+    if (!is.finite(pos) || pos < 1L) pos <- 1L
+    if (pos > n) pos <- n
 
-    prev <- kf |> dplyr::filter(.data$ts_utc <= ts_utc) |> dplyr::slice_tail(n = 1)
-    if (!nrow(prev)) return(NULL)
+    while (pos < n && ts_vec[pos + 1L] <= t_now) pos <- pos + 1L
+    while (pos > 1L && ts_vec[pos] > t_now) pos <- pos - 1L
+    assign(key, pos, envir = dyn_track_cache$cursor)
 
-    b0 <- NULL
-    if ("box" %in% names(prev)) b0 <- prev$box[[1]]
-    if (is.null(b0)) b0 <- poly_to_box(prev$poly[[1]])
+    if (ts_vec[pos] > t_now) return(NULL)
+
+    b0 <- idx$box[[pos]]
     if (is.null(b0)) return(NULL)
 
     if (!isTRUE(interpolate)) return(b0)
 
-    nxt <- kf |> dplyr::filter(.data$ts_utc >= ts_utc) |> dplyr::slice_head(n = 1)
-    if (!nrow(nxt)) return(b0)
+    nxt <- pos + 1L
+    while (nxt <= n && ts_vec[nxt] <= t_now) nxt <- nxt + 1L
+    if (nxt > n) return(b0)
 
-    t0 <- prev$ts_utc[[1]]
-    t1 <- nxt$ts_utc[[1]]
-    dt <- as.numeric(difftime(t1, t0, units = "secs"))
-    if (!is.finite(dt) || dt <= 0) return(b0)
-
-    b1 <- NULL
-    if ("box" %in% names(nxt)) b1 <- nxt$box[[1]]
-    if (is.null(b1)) b1 <- poly_to_box(nxt$poly[[1]])
+    b1 <- idx$box[[nxt]]
     if (is.null(b1)) return(b0)
 
-    a <- as.numeric(difftime(ts_utc, t0, units = "secs")) / dt
+    t0 <- ts_vec[pos]
+    t1 <- ts_vec[nxt]
+    dt <- t1 - t0
+    if (!is.finite(dt) || dt <= 0) return(b0)
+
+    a <- (t_now - t0) / dt
     if (!is.finite(a)) a <- 0
     a <- max(0, min(1, a))
 
     list(
-      x_min = (1-a)*as.numeric(b0$x_min) + a*as.numeric(b1$x_min),
-      y_min = (1-a)*as.numeric(b0$y_min) + a*as.numeric(b1$y_min),
-      x_max = (1-a)*as.numeric(b0$x_max) + a*as.numeric(b1$x_max),
-      y_max = (1-a)*as.numeric(b0$y_max) + a*as.numeric(b1$y_max)
+      x_min = (1 - a) * b0$x_min + a * b1$x_min,
+      y_min = (1 - a) * b0$y_min + a * b1$y_min,
+      x_max = (1 - a) * b0$x_max + a * b1$x_max,
+      y_max = (1 - a) * b0$y_max + a * b1$y_max
     )
   }
 
@@ -1537,24 +1802,43 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
     ts_utc <- as.POSIXct(ts_utc, tz = "UTC")
     if (is.na(ts_utc)) return(invisible(FALSE))
 
+    live_lids <- character(0)
+
     for (k in seq_len(nrow(df))) {
       lid <- as.character(df$leaflet_id[[k]])
       cam <- as.integer(df$cam_id[[k]])
       rid <- as.integer(df$rect_id[[k]])
       if (!nzchar(lid) || !is.finite(cam) || !is.finite(rid)) next
+      live_lids <- c(live_lids, lid)
 
       box <- dyn_get_box_at_ts(rid, cam, ts_utc, interpolate = DYN_INTERPOLATE_DEFAULT)
       if (is.null(box)) next
+
+      sig <- dyn_box_signature(box)
+      if (is.null(sig)) next
+
+      prev_sig <- NULL
+      if (exists(lid, envir = dyn_track_cache$last_box_sig, inherits = FALSE)) {
+        prev_sig <- get(lid, envir = dyn_track_cache$last_box_sig, inherits = FALSE)
+      }
+      if (identical(prev_sig, sig)) next
+
+      assign(lid, sig, envir = dyn_track_cache$last_box_sig)
       dyn_send_bounds(cam, lid, box)
     }
 
-    dyn_highlight_selected()
+    if (is.environment(dyn_track_cache$last_box_sig)) {
+      old <- ls(envir = dyn_track_cache$last_box_sig, all.names = TRUE)
+      stale <- setdiff(old, unique(live_lids))
+      if (length(stale)) rm(list = stale, envir = dyn_track_cache$last_box_sig)
+    }
+
     TRUE
   }
 
 
 
-  dyn_highlight_selected <- function() {
+  dyn_highlight_selected <- function(force = FALSE) {
     cur <- dyn$selected_leaflet_id
     if (is.null(cur) || !nzchar(cur)) return(invisible(FALSE))
 
@@ -1565,6 +1849,8 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
         dyn_send_style(prev_row$cam_id[[1]], prev, color = "red")
       }
     }
+
+    if (!isTRUE(force) && identical(prev, cur)) return(invisible(TRUE))
 
     row <- dyn_get_by_leaflet(cur)
     if (!is.null(row) && nrow(row)) {
@@ -1649,6 +1935,7 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
           estrutura_nome = estrutura_nome,
           attrs = list(attrs)
         )
+        dyn_cache_invalidate_tracks()
         return(TRUE)
       }
       
@@ -1679,6 +1966,7 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
       }
       
       dyn$tracks <- tr
+      dyn_cache_invalidate_tracks()
       TRUE
     }
 
@@ -1758,6 +2046,7 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
     idx <- which(as.character(df$leaflet_id) == as.character(leaflet_id))
     if (!length(idx)) return(invisible(FALSE))
     dyn_set_pending_poly(leaflet_id, ts_utc, poly)
+    dyn_highlight_selected(force = TRUE)
     TRUE
   }
   
@@ -1866,6 +2155,7 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
         dyn$highlighted_leaflet_id <- NA_character_
       }
     }
+    dyn_cache_invalidate_tracks()
     TRUE
   }
   
@@ -2051,7 +2341,12 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
 
     # Descobre w/h do primeiro frame
     first <- frames_idx[1, ]
-    res1  <- db_fetch_frame_raw(dbp$get_pool(), first$cd_id_camera, first$dt_hr_local)
+    fid1 <- suppressWarnings(as.integer(first$cd_id_frame[[1]]))
+    if (is.finite(fid1)) {
+      res1 <- db_fetch_frame_by_id(dbp$get_pool(), fid1)
+    } else {
+      res1 <- db_fetch_frame_raw(dbp$get_pool(), first$cd_id_camera, first$dt_hr_local)
+    }
     if (nrow(res1) && !is.null(res1$data_frame[[1]])) {
       wh <- img_dims(res1$data_frame[[1]])
       rv$w <- if (is.finite(wh[1])) as.integer(wh[1]) else 512L
@@ -2066,7 +2361,7 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
       shiny::isolate({
         dyn_update_view_on_ts(rv_get_current_ts(rv))
       })
-      ctx$prefetch_ahead_batch(seq_df = seq_df, i = i0, N = PREFETCH_AHEAD)
+      ctx$prefetch_request(seq_df = seq_df, i = i0, N = PREFETCH_AHEAD)
 
       removeProgressLoader(callback = function() {
         step_frame(+1L)
@@ -2258,7 +2553,7 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
     rv$i <- new_i
     st <- ctx$render_current(rv$seq, rv$i, rv$w, rv$h, rv$id_by_cam, fit_bounds = FALSE)
     if (isTRUE(st$ok)) { rv$w <- st$w; rv$h <- st$h }
-    ctx$prefetch_ahead_batch(rv$seq, rv$i, PREFETCH_AHEAD)
+    ctx$prefetch_request(rv$seq, rv$i, PREFETCH_AHEAD)
     dyn_update_view_on_ts(rv_get_current_ts(rv))
 
     if (clip_limit_exceeded(rv, suppressWarnings(as.numeric(input$clip_max_min)))) {
@@ -2295,12 +2590,11 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
         dyn_update_view_on_ts(rv_get_current_ts(rv))
         
         # ✅ prefetch não precisa rodar TODO frame (ver item 3 abaixo)
-        if ((rv$i %% 4L) == 0L) {
-          ctx$prefetch_ahead_batch(rv$seq, rv$i, PREFETCH_AHEAD)
+        if ((rv$i %% PREFETCH_EVERY_N) == 0L) {
+          ctx$prefetch_request(rv$seq, rv$i, PREFETCH_AHEAD)
         }
-        
         clockupdate(Sys.time())
-        
+
         if (clip_limit_exceeded(rv, suppressWarnings(as.numeric(input$clip_max_min)))) {
           playing(FALSE); loop_on <<- FALSE
           ts_start <- rv$clip_t0; i0 <- rv$clip_i0
@@ -2617,6 +2911,7 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
       dplyr::select(-ts_raw)
 
     dyn$tracks <- tr2
+    dyn_cache_invalidate_tracks()
 
     showNotification(
       paste0("Excluído(s) ", length(ts_del), " keyframe(s) do Retângulo #", as.integer(rid), "."),
@@ -2635,6 +2930,7 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
 
     dyn$tracks <- tr |>
       dplyr::filter(as.integer(rect_id) != as.integer(rid))
+    dyn_cache_invalidate_tracks()
 
     showNotification(
       paste0("Todos os keyframes do Retângulo #", as.integer(rid), " foram removidos."),
