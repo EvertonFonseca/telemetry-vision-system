@@ -234,121 +234,148 @@ server <- function(id) {
       
       
       output$menuSideBarMain <- renderMenuSideBarMain(ns)
+
+      run_menu_loader <- function(lock_id, callback) {
+        actionWebUser(
+          callback = function() {
+            try(callback(), silent = TRUE)
+            removeProgressLoader(timer_ms = 120, session = session)
+          },
+          session = session,
+          auto.remove = FALSE,
+          new.progress = TRUE,
+          delay = 0,
+          lock_id = paste0("menu_", lock_id),
+          on_busy = "ignore"
+        )
+      }
       
       # ---- Obsevent Menu Camera
       observeEvent(input$camera, {
         sel <- input$camera
-        
-        if (identical(sel, "cameraNew")) {
-          camera$uiNewCamera(ns, input, output, session, function() {
-            camera$dispose(session)
-          })
-        } else if (identical(sel, "cameraTable")) {
-          camera$uiEditCamera(ns, input, output, session, function() {
-            camera$dispose(session)
-          })
-        }
-        
-        if (!is.null(sel) && sel %in% c("cameraNew", "cameraTable")) {
-          updateTabItems(session, inputId = "camera", selected = "noop")
-        }
+        if (is.null(sel) || identical(sel, "noop")) return(invisible())
+        run_menu_loader("camera", function() {
+          if (identical(sel, "cameraNew")) {
+            camera$uiNewCamera(ns, input, output, session, function() {
+              camera$dispose(session)
+            })
+          } else if (identical(sel, "cameraTable")) {
+            camera$uiEditCamera(ns, input, output, session, function() {
+              camera$dispose(session)
+            })
+          }
+          
+          if (!is.null(sel) && sel %in% c("cameraNew", "cameraTable")) {
+            updateTabItems(session, inputId = "camera", selected = "noop")
+          }
+        })
       }, ignoreInit = TRUE, ignoreNULL = TRUE)
       
       # ---- Obsevent Menu Setor
       observeEvent(input$setor, {
         sel <- input$setor
-        
-        if (identical(sel, "setorNew")) {
-          setor$uiNewSetor(ns, input, output, session, function() {
-            setor$dispose(session)
-          })
-        } else if (identical(sel, "setorTable")) {
-          setor$uiEditSetor(ns, input, output, session, function() {
-            setor$dispose(session)
-          })
-        } else if (identical(sel, "setorAgenda")) {
-          setor_agenda$uiSetorAgenda(ns, input, output, session, callback = function() {})
-        }
-        
-        if (!is.null(sel) && sel %in% c("setorNew", "setorTable")) {
-          updateTabItems(session, inputId = "setor", selected = "noop")
-        }
+        if (is.null(sel) || identical(sel, "noop")) return(invisible())
+        run_menu_loader("setor", function() {
+          if (identical(sel, "setorNew")) {
+            setor$uiNewSetor(ns, input, output, session, function() {
+              setor$dispose(session)
+            })
+          } else if (identical(sel, "setorTable")) {
+            setor$uiEditSetor(ns, input, output, session, function() {
+              setor$dispose(session)
+            })
+          } else if (identical(sel, "setorAgenda")) {
+            setor_agenda$uiSetorAgenda(ns, input, output, session, callback = function() {})
+          }
+          
+          if (!is.null(sel) && sel %in% c("setorNew", "setorTable")) {
+            updateTabItems(session, inputId = "setor", selected = "noop")
+          }
+        })
       }, ignoreInit = TRUE, ignoreNULL = TRUE)
       
       # ---- Obsevent Menu Objeto
       observeEvent(input$objeto, {
         sel <- input$objeto
-        
-        if (identical(sel, "objetoNew")) {
-          objeto$uiNewObjeto(ns, input, output, session, function() {
-            objeto$dispose(session)
-          })
-        } else if (identical(sel, "objetoTable")) {
-          objeto$uiEditObjeto(ns, input, output, session, function() {
-            objeto$dispose(session)
-          })
-        }
-        
-        if (!is.null(sel) && sel %in% c("objetoNew", "objetoTable")) {
-          updateTabItems(session, inputId = "objeto", selected = "noop")
-        }
+        if (is.null(sel) || identical(sel, "noop")) return(invisible())
+        run_menu_loader("objeto", function() {
+          if (identical(sel, "objetoNew")) {
+            objeto$uiNewObjeto(ns, input, output, session, function() {
+              objeto$dispose(session)
+            })
+          } else if (identical(sel, "objetoTable")) {
+            objeto$uiEditObjeto(ns, input, output, session, function() {
+              objeto$dispose(session)
+            })
+          }
+          
+          if (!is.null(sel) && sel %in% c("objetoNew", "objetoTable")) {
+            updateTabItems(session, inputId = "objeto", selected = "noop")
+          }
+        })
       }, ignoreInit = TRUE, ignoreNULL = TRUE)
       
       # ---- Obsevent Menu Estrutura
       observeEvent(input$estrutura, {
         sel <- input$estrutura
-        
-        if (identical(sel, "estruturaNew")) {
-          estrutura$uiNewEstrutura(ns, input, output, session, function() {
-            estrutura$dispose(session)
-          })
-        } else if (identical(sel, "estruturaTable")) {
-          estrutura$uiEditEstrutura(ns, input, output, session, function() {
-            estrutura$dispose(session)
-          })
-        }
-        
-        if (!is.null(sel) && sel %in% c("estruturaNew", "estruturaTable")) {
-          updateTabItems(session, inputId = "estrutura", selected = "noop")
-        }
+        if (is.null(sel) || identical(sel, "noop")) return(invisible())
+        run_menu_loader("estrutura", function() {
+          if (identical(sel, "estruturaNew")) {
+            estrutura$uiNewEstrutura(ns, input, output, session, function() {
+              estrutura$dispose(session)
+            })
+          } else if (identical(sel, "estruturaTable")) {
+            estrutura$uiEditEstrutura(ns, input, output, session, function() {
+              estrutura$dispose(session)
+            })
+          }
+          
+          if (!is.null(sel) && sel %in% c("estruturaNew", "estruturaTable")) {
+            updateTabItems(session, inputId = "estrutura", selected = "noop")
+          }
+        })
       }, ignoreInit = TRUE, ignoreNULL = TRUE)
       
       # ---- Obsevent Menu Alarme
       observeEvent(input$alarme, {
         sel <- input$alarme
-        
-        if (identical(sel, "alarmeNew")) {
-          alarme$uiNewAlarme(ns, input, output, session, callback = function() {
-            alarme$dispose(session)
-          })
-        } else if (identical(sel, "alarmeTable")) {
-          alarme$uiEditAlarme(ns, input, output, session, function() {
-            alarme$dispose(session)
-          })
-        }
-        
-        if (!is.null(sel) && sel %in% c("alarmeNew", "alarmeTable")) {
-          updateTabItems(session, inputId = "alarme", selected = "noop")
-        }
+        if (is.null(sel) || identical(sel, "noop")) return(invisible())
+        run_menu_loader("alarme", function() {
+          if (identical(sel, "alarmeNew")) {
+            alarme$uiNewAlarme(ns, input, output, session, callback = function() {
+              alarme$dispose(session)
+            })
+          } else if (identical(sel, "alarmeTable")) {
+            alarme$uiEditAlarme(ns, input, output, session, function() {
+              alarme$dispose(session)
+            })
+          }
+          
+          if (!is.null(sel) && sel %in% c("alarmeNew", "alarmeTable")) {
+            updateTabItems(session, inputId = "alarme", selected = "noop")
+          }
+        })
       }, ignoreInit = TRUE, ignoreNULL = TRUE)
       
       # ---- Obsevent Menu Treinar
       observeEvent(input$treinar, {
         sel <- input$treinar
-        
-        if (identical(sel, "treinarNew")) {
-          treinar$uiNewTreinar(ns, input, output, session, function() {
-            treinar$dispose(session)
-          })
-        } else if (identical(sel, "treinarTable")) {
-          treinar$uiEditTreinar(ns, input, output, session, function() {
-            treinar$dispose(session)
-          })
-        }
-        
-        if (!is.null(sel) && sel %in% c("treinarNew", "treinarTable")) {
-          updateTabItems(session, inputId = "treinar", selected = "noop")
-        }
+        if (is.null(sel) || identical(sel, "noop")) return(invisible())
+        run_menu_loader("treinar", function() {
+          if (identical(sel, "treinarNew")) {
+            treinar$uiNewTreinar(ns, input, output, session, function() {
+              treinar$dispose(session)
+            })
+          } else if (identical(sel, "treinarTable")) {
+            treinar$uiEditTreinar(ns, input, output, session, function() {
+              treinar$dispose(session)
+            })
+          }
+          
+          if (!is.null(sel) && sel %in% c("treinarNew", "treinarTable")) {
+            updateTabItems(session, inputId = "treinar", selected = "noop")
+          }
+        })
       }, ignoreInit = TRUE, ignoreNULL = TRUE)
       
       componentHeader <- function(input, output, textoInformacao, size.right = 50 * 2) {
