@@ -33,7 +33,7 @@ Sys.setenv(
   DB_HOST = "127.0.0.1",
   DB_PORT = 5434,
   DB_USER = "analytia",
-  DB_PASS = "analytia"
+  DB_PASS = "lytIA#2026!Elite@"
 )
 
 # # IMPORTANT: crie o app ANTES do with()

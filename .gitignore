@@ -13,6 +13,9 @@
 *.gif
 *.RDS
 *.csv
+*.pt
+*.ptx
+.debug/
 
 # Test binary, built with `go test -c`
 *.test

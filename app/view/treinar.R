@@ -91,6 +91,10 @@ dispose <- function(session, key = "setor_private") {
 PREFETCH_AHEAD  <- 16L
 MAX_CACHE_ITEMS <- 400L
 
+# (sync/interp) defaults
+SYNC_TOL_MS_DEFAULT <- 120L   # tolerância de sync por câmera (ms)
+DYN_INTERPOLATE_DEFAULT <- TRUE  # TRUE: interpola BOX entre keyframes
+
 # ==================================================
 # Utils: MIME / Data URL / Dimensões de imagem
 # ==================================================
@@ -195,11 +199,19 @@ new_lru_cache <- function(max_items = MAX_CACHE_ITEMS) {
 # ==================================================
 # PlayerContext (render + prefetch), independente do módulo
 # ==================================================
+# ==================================================
+# PlayerContext (render + prefetch), independente do módulo
+# ==================================================
 new_player_ctx <- function(session, pool, lru_cache) {
   env <- new.env(parent = emptyenv())
   env$session <- session
   env$pool    <- pool
   env$cache   <- lru_cache
+
+  # cache interno por sequência (para nearest rápido)
+  env$seq_sig      <- NULL
+  env$times_by_cam <- NULL
+  env$pos_by_cam   <- NULL
 
   env$fetch_dataurl_single <- function(cam, ts_utc) {
     k <- key_of(cam, ts_utc)
@@ -213,22 +225,80 @@ new_player_ctx <- function(session, pool, lru_cache) {
     uri
   }
 
-  env$render_current <- function(seq_df, i, w, h, id_map, fit_bounds = FALSE) {
+  # assinatura simples pra detectar troca de seq_df
+  env$seq_signature <- function(seq_df) {
+    if (is.null(seq_df) || !nrow(seq_df)) return("empty")
+    a <- as.POSIXct(seq_df$dt_hr_local[1], tz = "UTC")
+    b <- as.POSIXct(seq_df$dt_hr_local[nrow(seq_df)], tz = "UTC")
+    paste0(
+      nrow(seq_df), "|",
+      format(a, "%Y-%m-%d %H:%M:%OS", tz = "UTC"), "|",
+      format(b, "%Y-%m-%d %H:%M:%OS", tz = "UTC")
+    )
+  }
+
+  env$ensure_cam_times <- function(seq_df) {
+    sig <- env$seq_signature(seq_df)
+    if (!identical(sig, env$seq_sig)) {
+      seq_df2 <- seq_df
+      seq_df2$dt_hr_local <- as.POSIXct(seq_df2$dt_hr_local, tz = "UTC")
+      env$times_by_cam <- split(seq_df2$dt_hr_local, seq_df2$cd_id_camera)
+      env$pos_by_cam   <- lapply(env$times_by_cam, function(x) 1L)
+      env$seq_sig      <- sig
+    }
+    invisible(TRUE)
+  }
+
+  env$nearest_idx_monotonic <- function(times, ref, idx0) {
+    n <- length(times)
+    if (!n) return(NA_integer_)
+    idx <- as.integer(idx0)
+    if (!is.finite(idx) || idx < 1L) idx <- 1L
+    if (idx > n) idx <- n
+
+    d <- function(ii) abs(as.numeric(difftime(times[ii], ref, units = "secs")))
+
+    while (idx < n) {
+      if (d(idx + 1L) <= d(idx)) idx <- idx + 1L else break
+    }
+    while (idx > 1L) {
+      if (d(idx - 1L) < d(idx)) idx <- idx - 1L else break
+    }
+    idx
+  }
+
+  # ✅ Render sincronizado multi-câmera (nearest timestamp por câmera)
+  env$render_current <- function(seq_df, i, w, h, id_map, fit_bounds = FALSE,
+                                 tol_ms = SYNC_TOL_MS_DEFAULT) {
+
     if (is.null(seq_df) || !nrow(seq_df)) return(list(ok = FALSE, w = w, h = h))
     i <- max(1L, min(nrow(seq_df), as.integer(i)))
+    env$ensure_cam_times(seq_df)
 
     ts_ref <- as.POSIXct(seq_df$dt_hr_local[i], tz = "UTC")
-    same_ts <- seq_df[seq_df$dt_hr_local == ts_ref, , drop = FALSE]
-    if (!nrow(same_ts)) return(list(ok = FALSE, w = w, h = h))
-
     ok_any <- FALSE
 
-    for (row in seq_len(nrow(same_ts))) {
-      cam    <- as.integer(same_ts$cd_id_camera[row])
-      dom_id <- id_map[[as.character(cam)]]
-      if (is.null(dom_id) || is.na(dom_id)) next
+    tol_s <- suppressWarnings(as.numeric(tol_ms) / 1000)
+    if (!is.finite(tol_s) || tol_s <= 0) tol_s <- as.numeric(SYNC_TOL_MS_DEFAULT) / 1000
 
-      uri <- env$fetch_dataurl_single(cam, ts_ref)
+    for (cam_str in names(id_map)) {
+      cam <- suppressWarnings(as.integer(cam_str))
+      dom_id <- id_map[[cam_str]]
+      if (is.null(dom_id) || is.na(dom_id) || !is.finite(cam)) next
+
+      times <- env$times_by_cam[[cam_str]]
+      if (is.null(times) || !length(times)) next
+
+      idx0 <- env$pos_by_cam[[cam_str]]
+      idx1 <- env$nearest_idx_monotonic(times, ts_ref, idx0)
+      if (!is.finite(idx1)) next
+      env$pos_by_cam[[cam_str]] <- idx1
+
+      ts_cam <- as.POSIXct(times[[idx1]], tz = "UTC")
+      dist_s <- abs(as.numeric(difftime(ts_cam, ts_ref, units = "secs")))
+      if (!is.finite(dist_s) || dist_s > tol_s) next  # hold last visual
+
+      uri <- env$fetch_dataurl_single(cam, ts_cam)
       if (is.null(uri)) next
 
       env$session$sendCustomMessage("set_frame_to", list(
@@ -737,77 +807,162 @@ uiClipsPanel <- function(ns) {
 }
 
 ui_js_handlers <- function() {
-  tags$script(HTML("
-    (function(){
-      const overlays = {}; const boundsOf = {}; const maps = {};
-      function fitWholeImage(map, w, h){
-        const size = map.getSize();
-        const scale = Math.min(size.x / w, size.y / h);
-        let z = Math.log2(scale); if (!isFinite(z)) z = 0;
-        const center = [h/2, w/2];
-        map.setView(center, z, {animate:false});
-        const b = [[0,0],[h,w]];
-        map.setMaxBounds(b); map.options.maxBoundsViscosity = 1.0; map.setMinZoom(z);
-        setTimeout(function(){ map.invalidateSize(); }, 0);
-        return b;
-      }
-      Shiny.addCustomMessageHandler('set_frame_to', function(msg){
-        const widget = HTMLWidgets.find('#' + msg.id); if (!widget) return;
-        const map = widget.getMap(); if (!map) return;
-        const w = msg.w || 512, h = msg.h || 512; const b = [[0,0],[h,w]];
-        const needRecreate = (!overlays[msg.id]) || (!maps[msg.id]) || (maps[msg.id] !== map);
-        if (needRecreate) {
-          try { if (overlays[msg.id]) overlays[msg.id].remove(); } catch(e){}
-          overlays[msg.id] = L.imageOverlay(msg.url, b, {opacity:1}).addTo(map);
-          maps[msg.id]     = map;
-          boundsOf[msg.id] = fitWholeImage(map, w, h);
-          return;
-        }
-        const changed = !boundsOf[msg.id] || boundsOf[msg.id][1][0] !== h || boundsOf[msg.id][1][1] !== w;
-        if (changed){
-          overlays[msg.id].setBounds(b);
-          boundsOf[msg.id] = b;
-          if (msg.fit) boundsOf[msg.id] = fitWholeImage(map, w, h);
-        }
-        overlays[msg.id].setUrl(msg.url);
-      });
-      Shiny.addCustomMessageHandler('reset_overlays', function(ids){
-        (ids || []).forEach(function(id){
-          try { if (overlays[id]) overlays[id].remove(); } catch(e){}
-          delete overlays[id]; delete boundsOf[id]; delete maps[id];
-        });
-      });
+  tagList(
+    tags$head(
+      tags$style(HTML("
+        tr.tvs-hover td { background: rgba(255, 235, 59, 0.25) !important; }
+      "))
+    ),
+    tags$script(HTML("
+      (function(){
+        const overlays = {}; const boundsOf = {}; const maps = {};
 
-            Shiny.addCustomMessageHandler('set_draw_style', function(msg){
-        try{
-          var el = document.getElementById(msg.map_id);
-          if(!el) return;
-          var widget = HTMLWidgets.find(el);
-          if(!widget || !widget.getMap) return;
-          var map = widget.getMap();
-          var lid = msg.leaflet_id;
-          if(lid === null || lid === undefined) return;
-          var layer = map._layers[lid];
-          if(layer && layer.setStyle){
-            layer.setStyle({
-              color: msg.color || 'red',
-              fillColor: msg.fillColor || msg.color || 'red',
-              weight: msg.weight || 3,
-              opacity: (msg.opacity === null || msg.opacity === undefined) ? 1 : msg.opacity,
-              fillOpacity: (msg.fillOpacity === null || msg.fillOpacity === undefined) ? 0.1 : msg.fillOpacity
-            });
+        function fitWholeImage(map, w, h){
+          const size = map.getSize();
+          const scale = Math.min(size.x / w, size.y / h);
+          let z = Math.log2(scale); if (!isFinite(z)) z = 0;
+          const center = [h/2, w/2];
+          map.setView(center, z, {animate:false});
+          const b = [[0,0],[h,w]];
+          map.setMaxBounds(b); map.options.maxBoundsViscosity = 1.0; map.setMinZoom(z);
+          setTimeout(function(){ map.invalidateSize(); }, 0);
+          return b;
+        }
+
+        Shiny.addCustomMessageHandler('set_frame_to', function(msg){
+          const widget = HTMLWidgets.find('#' + msg.id); if (!widget) return;
+          const map = widget.getMap(); if (!map) return;
+          const w = msg.w || 512, h = msg.h || 512; const b = [[0,0],[h,w]];
+          const needRecreate = (!overlays[msg.id]) || (!maps[msg.id]) || (maps[msg.id] !== map);
+          if (needRecreate) {
+            try { if (overlays[msg.id]) overlays[msg.id].remove(); } catch(e){}
+            overlays[msg.id] = L.imageOverlay(msg.url, b, {opacity:1}).addTo(map);
+            maps[msg.id]     = map;
+            boundsOf[msg.id] = fitWholeImage(map, w, h);
+            return;
           }
-        } catch(e){}
-      });
+          const changed = !boundsOf[msg.id] || boundsOf[msg.id][1][0] !== h || boundsOf[msg.id][1][1] !== w;
+          if (changed){
+            overlays[msg.id].setBounds(b);
+            boundsOf[msg.id] = b;
+            if (msg.fit) boundsOf[msg.id] = fitWholeImage(map, w, h);
+          }
+          overlays[msg.id].setUrl(msg.url);
+        });
 
-Shiny.addCustomMessageHandler('set_clip_overlay_frame', function(msg){
-        var imgEl = document.getElementById(msg.img_id);
-        if(!imgEl) return;
-        imgEl.src = msg.url || '';
-      });
+        Shiny.addCustomMessageHandler('reset_overlays', function(ids){
+          (ids || []).forEach(function(id){
+            try { if (overlays[id]) overlays[id].remove(); } catch(e){}
+            delete overlays[id]; delete boundsOf[id]; delete maps[id];
+          });
+        });
 
-    })();
-  "))
+        Shiny.addCustomMessageHandler('set_draw_style', function(msg){
+          try{
+            var el = document.getElementById(msg.map_id);
+            if(!el) return;
+            var widget = HTMLWidgets.find(el);
+            if(!widget || !widget.getMap) return;
+            var map = widget.getMap();
+            var lid = msg.leaflet_id;
+            if(lid === null || lid === undefined) return;
+            var layer = map._layers[lid];
+            if(layer && layer.setStyle){
+              layer.setStyle({
+                color: msg.color || 'red',
+                fillColor: msg.fillColor || msg.color || 'red',
+                weight: msg.weight || 3,
+                opacity: (msg.opacity === null || msg.opacity === undefined) ? 1 : msg.opacity,
+                fillOpacity: (msg.fillOpacity === null || msg.fillOpacity === undefined) ? 0.1 : msg.fillOpacity
+              });
+            }
+          } catch(e){}
+        });
+
+        Shiny.addCustomMessageHandler('set_draw_bounds', function(msg){
+          try{
+            var el = document.getElementById(msg.map_id);
+            if(!el) return;
+            var widget = HTMLWidgets.find(el);
+            if(!widget || !widget.getMap) return;
+            var map = widget.getMap();
+            if(!map) return;
+
+            var lid = msg.leaflet_id;
+            if(lid === null || lid === undefined) return;
+            var layer = map._layers[lid];
+            if(!layer) return;
+
+            var x0 = Number(msg.x_min), y0 = Number(msg.y_min), x1 = Number(msg.x_max), y1 = Number(msg.y_max);
+            if(!isFinite(x0)||!isFinite(y0)||!isFinite(x1)||!isFinite(y1)) return;
+
+            var b = [[y0, x0],[y1, x1]];
+            if(layer.setBounds){
+              layer.setBounds(b, {animate:false});
+            } else if(layer.setLatLngs){
+              layer.setLatLngs([[ [y0,x0],[y0,x1],[y1,x1],[y1,x0] ]]);
+            }
+          } catch(e){}
+        });
+
+        Shiny.addCustomMessageHandler('set_draw_tooltip', function(msg){
+          try{
+            var el = document.getElementById(msg.map_id);
+            if(!el) return;
+            var widget = HTMLWidgets.find(el);
+            if(!widget || !widget.getMap) return;
+            var map = widget.getMap();
+            if(!map) return;
+
+            var lid = msg.leaflet_id;
+            var layer = map._layers[lid];
+            if(!layer) return;
+
+            var text = msg.text || '';
+            if(!text) return;
+
+            try { if(layer.unbindTooltip) layer.unbindTooltip(); } catch(e){}
+            if(layer.bindTooltip){
+              layer.bindTooltip(text, { sticky:true, direction:'top', opacity:0.95 });
+            }
+          } catch(e){}
+        });
+
+        Shiny.addCustomMessageHandler('dynrect_hover_row', function(msg){
+          try{
+            var rootId = msg.table_id;
+            var rid = String(msg.rect_id || '');
+            var on  = !!msg.on;
+
+            var $root = $('#' + rootId);
+            if(!$root.length) return;
+
+            var $table = $root.is('table') ? $root : $root.find('table').first();
+            if(!$table.length) return;
+
+            var dt = $table.DataTable();
+            dt.rows().nodes().to$().removeClass('tvs-hover');
+            if(!on) return;
+
+            dt.rows().every(function(){
+              var data = this.data();
+              var idCell = (data && data[0] !== undefined) ? String(data[0]) : '';
+              if(idCell === rid){
+                $(this.node()).addClass('tvs-hover');
+              }
+            });
+          } catch(e){}
+        });
+
+        Shiny.addCustomMessageHandler('set_clip_overlay_frame', function(msg){
+          var imgEl = document.getElementById(msg.img_id);
+          if(!imgEl) return;
+          imgEl.src = msg.url || '';
+        });
+
+      })();
+    "))
+  )
 }
 
 uiMain <- function(ns, setores) {
@@ -949,6 +1104,24 @@ uiCamerasComponentes <- function(ns, input, output, objeto, componentes) {
                     if(!window.Shiny) return;
                     if(!layer._leaflet_id) return;
                     Shiny.setInputValue(el.id + '_shape_draw_click', {id: String(layer._leaflet_id)}, {priority: 'event'});
+                  } catch(err){}
+                });
+
+                layer.on('mouseover', function(e){
+                  try{
+                    if(!window.Shiny) return;
+                    if(!layer._leaflet_id) return;
+                    Shiny.setInputValue(el.id + '_shape_draw_hover', {id: String(layer._leaflet_id), nonce: Math.random()}, {priority:'event'});
+                    if(layer.openTooltip) layer.openTooltip();
+                  } catch(err){}
+                });
+
+                layer.on('mouseout', function(e){
+                  try{
+                    if(!window.Shiny) return;
+                    if(!layer._leaflet_id) return;
+                    Shiny.setInputValue(el.id + '_shape_draw_out', {id: String(layer._leaflet_id), nonce: Math.random()}, {priority:'event'});
+                    if(layer.closeTooltip) layer.closeTooltip();
                   } catch(err){}
                 });
               }
@@ -1292,6 +1465,95 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
     TRUE
   }
 
+  # ===== NOVO: aplicar BOX no layer do Leaflet (retângulo) =====
+  dyn_send_bounds <- function(cam_id, leaflet_id, box) {
+    if (is.null(cam_id) || !is.finite(cam_id) || is.null(leaflet_id) || !nzchar(leaflet_id)) return(invisible(FALSE))
+    if (is.null(box)) return(invisible(FALSE))
+    session$sendCustomMessage("set_draw_bounds", list(
+      map_id = ns(paste0("map_", as.integer(cam_id))),
+      leaflet_id = as.character(leaflet_id),
+      x_min = as.numeric(box$x_min),
+      y_min = as.numeric(box$y_min),
+      x_max = as.numeric(box$x_max),
+      y_max = as.numeric(box$y_max)
+    ))
+    TRUE
+  }
+
+  dyn_get_box_at_ts <- function(rect_id, cam_id, ts_utc, interpolate = DYN_INTERPOLATE_DEFAULT) {
+    tr <- dyn$tracks
+    if (is.null(tr) || !nrow(tr)) return(NULL)
+
+    ts_utc <- as.POSIXct(ts_utc, tz = "UTC")
+    if (is.na(ts_utc)) return(NULL)
+
+    kf <- tr |>
+      dplyr::filter(as.integer(.data$rect_id) == as.integer(rect_id),
+                    as.integer(.data$cam_id)  == as.integer(cam_id)) |>
+      dplyr::mutate(ts_utc = as.POSIXct(.data$ts_utc, tz = "UTC")) |>
+      dplyr::arrange(.data$ts_utc)
+
+    if (!nrow(kf)) return(NULL)
+
+    prev <- kf |> dplyr::filter(.data$ts_utc <= ts_utc) |> dplyr::slice_tail(n = 1)
+    if (!nrow(prev)) return(NULL)
+
+    b0 <- NULL
+    if ("box" %in% names(prev)) b0 <- prev$box[[1]]
+    if (is.null(b0)) b0 <- poly_to_box(prev$poly[[1]])
+    if (is.null(b0)) return(NULL)
+
+    if (!isTRUE(interpolate)) return(b0)
+
+    nxt <- kf |> dplyr::filter(.data$ts_utc >= ts_utc) |> dplyr::slice_head(n = 1)
+    if (!nrow(nxt)) return(b0)
+
+    t0 <- prev$ts_utc[[1]]
+    t1 <- nxt$ts_utc[[1]]
+    dt <- as.numeric(difftime(t1, t0, units = "secs"))
+    if (!is.finite(dt) || dt <= 0) return(b0)
+
+    b1 <- NULL
+    if ("box" %in% names(nxt)) b1 <- nxt$box[[1]]
+    if (is.null(b1)) b1 <- poly_to_box(nxt$poly[[1]])
+    if (is.null(b1)) return(b0)
+
+    a <- as.numeric(difftime(ts_utc, t0, units = "secs")) / dt
+    if (!is.finite(a)) a <- 0
+    a <- max(0, min(1, a))
+
+    list(
+      x_min = (1-a)*as.numeric(b0$x_min) + a*as.numeric(b1$x_min),
+      y_min = (1-a)*as.numeric(b0$y_min) + a*as.numeric(b1$y_min),
+      x_max = (1-a)*as.numeric(b0$x_max) + a*as.numeric(b1$x_max),
+      y_max = (1-a)*as.numeric(b0$y_max) + a*as.numeric(b1$y_max)
+    )
+  }
+
+  dyn_update_view_on_ts <- function(ts_utc) {
+    if (is.null(objeto) || !isTRUE(objeto$cd_id_objeto_tipo == 2L)) return(invisible(FALSE))
+    df <- dyn$rects
+    if (is.null(df) || !nrow(df)) return(invisible(FALSE))
+    ts_utc <- as.POSIXct(ts_utc, tz = "UTC")
+    if (is.na(ts_utc)) return(invisible(FALSE))
+
+    for (k in seq_len(nrow(df))) {
+      lid <- as.character(df$leaflet_id[[k]])
+      cam <- as.integer(df$cam_id[[k]])
+      rid <- as.integer(df$rect_id[[k]])
+      if (!nzchar(lid) || !is.finite(cam) || !is.finite(rid)) next
+
+      box <- dyn_get_box_at_ts(rid, cam, ts_utc, interpolate = DYN_INTERPOLATE_DEFAULT)
+      if (is.null(box)) next
+      dyn_send_bounds(cam, lid, box)
+    }
+
+    dyn_highlight_selected()
+    TRUE
+  }
+
+
+
   dyn_highlight_selected <- function() {
     cur <- dyn$selected_leaflet_id
     if (is.null(cur) || !nzchar(cur)) return(invisible(FALSE))
@@ -1470,6 +1732,13 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
   dyn_set_pending_poly(leaflet_id, ts_utc, poly)
 
   dyn_highlight_selected()
+  # ✅ tooltip no hover: Retângulo #ID
+  session$sendCustomMessage("set_draw_tooltip", list(
+    map_id     = ns(paste0("map_", as.integer(cam_id))),
+    leaflet_id = as.character(leaflet_id),
+    text       = paste0("Retângulo #", as.integer(new_id))
+  ))
+
 
   # ✅ MUITO IMPORTANTE:
   # o DT re-renderiza depois que dyn$rects muda.
@@ -1794,6 +2063,9 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
       session$sendCustomMessage("reset_overlays", unname(id_map))
       st <- ctx$render_current(seq_df = seq_df, i = i0, w = w0, h = h0, id_map = id_map, fit_bounds = TRUE)
       isolate({ if (isTRUE(st$ok)) { rv$w <- st$w; rv$h <- st$h } })
+      shiny::isolate({
+        dyn_update_view_on_ts(rv_get_current_ts(rv))
+      })
       ctx$prefetch_ahead_batch(seq_df = seq_df, i = i0, N = PREFETCH_AHEAD)
 
       removeProgressLoader(callback = function() {
@@ -1821,7 +2093,7 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
         obs$add(observeEvent(input[[paste0(map_out_id, "_draw_new_feature")]], {
           req(isTRUE(objeto$cd_id_objeto_tipo == 2L))
           feat <- input[[paste0(map_out_id, "_draw_new_feature")]]
-          print("Novo")
+          
           if (is.null(feat)) return()
           poly <- poly_from_feature(feat)
           if (is.null(poly) || !nrow(poly)) return()
@@ -1852,8 +2124,7 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
           # ✅ só permite editar/memorizar pending quando Clip está ativo
           if (!isTRUE(rv$clip_active)) return()
           feats <- input[[paste0(map_out_id, "_draw_edited_features")]]
-          print("Editado")
-
+          
           if (is.null(feats$features) || length(feats$features) == 0) return()
           ts <- rv_get_current_ts(rv)
           if (is.null(ts)) ts <- as.POSIXct(Sys.time(), tz = "UTC")
@@ -1935,7 +2206,44 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
           if (!dyn_has_leaflet_id(lid)) return()
           
           dyn_select_by_leaflet(lid)
+
+        obs$add(observeEvent(input[[paste0(map_out_id, "_shape_draw_out")]], {
+          req(isTRUE(objeto$cd_id_objeto_tipo == 2L))
+          ev <- input[[paste0(map_out_id, "_shape_draw_out")]]
+          if (is.null(ev) || is.null(ev$id)) return()
+          lid <- as.character(ev$id)
+          if (!dyn_has_leaflet_id(lid)) return()
+
+          session$sendCustomMessage("dynrect_hover_row", list(
+            table_id = ns("dynrectTable"),
+            rect_id  = 0,
+            on       = FALSE
+          ))
         }, ignoreInit = TRUE, ignoreNULL = TRUE))
+
+        }, ignoreInit = TRUE, ignoreNULL = TRUE))
+
+        # ---- hover no retângulo -> destaca linha na tabela (sem selecionar) ----
+        obs$add(observeEvent(input[[paste0(map_out_id, "_shape_draw_hover")]], {
+          req(isTRUE(objeto$cd_id_objeto_tipo == 2L))
+          if (isTRUE(dyn$deleting) || isTRUE(dyn$editing)) return()
+
+          ev <- input[[paste0(map_out_id, "_shape_draw_hover")]]
+          if (is.null(ev) || is.null(ev$id)) return()
+          lid <- as.character(ev$id)
+          if (!dyn_has_leaflet_id(lid)) return()
+
+          row <- dyn_get_by_leaflet(lid)
+          if (is.null(row) || !nrow(row)) return()
+          rid <- as.integer(row$rect_id[[1]])
+
+          session$sendCustomMessage("dynrect_hover_row", list(
+            table_id = ns("dynrectTable"),
+            rect_id  = rid,
+            on       = TRUE
+          ))
+        }, ignoreInit = TRUE, ignoreNULL = TRUE))
+
 
       } # for cams
     }
@@ -1951,6 +2259,7 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
     st <- ctx$render_current(rv$seq, rv$i, rv$w, rv$h, rv$id_by_cam, fit_bounds = FALSE)
     if (isTRUE(st$ok)) { rv$w <- st$w; rv$h <- st$h }
     ctx$prefetch_ahead_batch(rv$seq, rv$i, PREFETCH_AHEAD)
+    dyn_update_view_on_ts(rv_get_current_ts(rv))
 
     if (clip_limit_exceeded(rv, suppressWarnings(as.numeric(input$clip_max_min)))) {
       playing(FALSE); loop_on <<- FALSE
@@ -1983,6 +2292,7 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
         rv$i <- rv$i + dir
         st <- ctx$render_current(rv$seq, rv$i, rv$w, rv$h, rv$id_by_cam, fit_bounds = FALSE)
         if (isTRUE(st$ok)) { rv$w <- st$w; rv$h <- st$h }
+        dyn_update_view_on_ts(rv_get_current_ts(rv))
         
         # ✅ prefetch não precisa rodar TODO frame (ver item 3 abaixo)
         if ((rv$i %% 4L) == 0L) {
@@ -2044,7 +2354,7 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
   # ==========================================================
   # NOVO: Render/Editor do painel de retângulos dinâmicos
   # ==========================================================
-  output$dynrectTable <- DT::renderDT({
+    output$dynrectTable <- DT::renderDT({
     req(!is.null(objeto))
     if (!isTRUE(objeto$cd_id_objeto_tipo == 2L)) {
       return(DT::datatable(data.frame(), options = list(dom = "t")))
@@ -2054,6 +2364,7 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
       return(DT::datatable(
         data.frame(
           ID = integer(0),
+          Status = character(0),
           Câmera = integer(0),
           Estrutura = character(0),
           ÚltimoFrame = character(0),
@@ -2066,14 +2377,21 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
       ))
     }
 
+    is_pending <- vapply(df$leaflet_id, function(lid) {
+      lid <- as.character(lid)
+      if (!nzchar(lid)) return(FALSE)
+      exists(lid, envir = dyn$pending, inherits = FALSE)
+    }, logical(1L))
+
     out <- df |>
       dplyr::mutate(
         ID = .data$rect_id,
+        Status = ifelse(is_pending, "PENDENTE", "OK"),
         Câmera = .data$cam_id,
         Estrutura = ifelse(nzchar(.data$estrutura_nome), .data$estrutura_nome, "(não definido)"),
         ÚltimoFrame = format(.data$last_ts_utc, tz = Sys.timezone(), format = "%d/%m/%y %H:%M:%S")
       ) |>
-      dplyr::select(.data$ID, .data$`Câmera`, .data$Estrutura, .data$ÚltimoFrame)
+      dplyr::select(.data$ID, .data$Status, .data$`Câmera`, .data$Estrutura, .data$ÚltimoFrame)
 
     DT::datatable(
       out,
@@ -2087,6 +2405,7 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
       )
     )
   })
+
 
   obs$add(observeEvent(input$dynrectTable_rows_selected, {
     req(!is.null(objeto), isTRUE(objeto$cd_id_objeto_tipo == 2L))

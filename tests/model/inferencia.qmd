@@ -189,12 +189,12 @@ selectAllContext <- function(con) {
 
 ```{r}
 con <- DBI::dbConnect(
-  drv = RPostgres::Postgres(),
-  dbname = "analytia_db",
-  host = "172.30.0.14",
-  port = 5434,
-  user = "analytia",
-  password = "analytia",
+  RPostgres::Postgres(),
+  host = Sys.getenv("DB_HOST", "127.0.0.1"),
+  port = as.integer(Sys.getenv("DB_PORT", "5434")),
+  dbname = Sys.getenv("DB_NAME", "analytia_db"),
+  user = Sys.getenv("DB_USER", "analytia"),
+  password = Sys.getenv("DB_PASS", "lytIA#2026!Elite@")
 )
 ```
 
@@ -202,6 +202,7 @@ con <- DBI::dbConnect(
 
 ```{r}
 # | eval: false
+8454036,8454039
 frames <- get_frames_window(con,16159573,janela = 35)
 #frames$DATE_TIME <- format(frames$DT_HR_LOCAL,"%d/%m/%y %H:%M:%S:%OS3")
 difftime(last(frames$DT_HR_LOCAL),first(frames$DT_HR_LOCAL))
@@ -219,9 +220,8 @@ x <- first(x)
 # Video
 
 ```{r}
-x$cd_id_frame
-codigo  <- 236252
-
+x$cd_id_frame 6276121,6276119
+codigo  <- 8454036
 anime   <- build_gif_from_blob(get_frames_window(con,codigo,janela = 35))
 print(anime)
 
