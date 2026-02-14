@@ -161,47 +161,47 @@ library(magick)
 # frames <- DBI::dbGetQuery(con,query) 
 # limit  <- 150L
 
-dataset <- frames |> 
-  group_by(CD_ID_OBJETO) |> 
-  nest() |> 
-  ungroup() |> 
-  mutate(data = map(data,function(x){
+# dataset <- frames |> 
+#   group_by(CD_ID_OBJETO) |> 
+#   nest() |> 
+#   ungroup() |> 
+#   mutate(data = map(data,function(x){
 
-    x |> 
-      group_by(CD_ID_IA) |> 
-      nest() |> 
-      ungroup() |> 
-      mutate(DATAS = map(data,function(y){
+#     x |> 
+#       group_by(CD_ID_IA) |> 
+#       nest() |> 
+#       ungroup() |> 
+#       mutate(DATAS = map(data,function(y){
         
-        output      <- jsonlite::fromJSON(y$OUTPUT_IA,simplifyVector = F)
-        comps       <- jsonlite::fromJSON(y$POLIGNOS_COMPONENTES)
+#         output      <- jsonlite::fromJSON(y$OUTPUT_IA,simplifyVector = F)
+#         comps       <- jsonlite::fromJSON(y$POLIGNOS_COMPONENTES)
        
-        for(z in seq_along(output)){
-           nome_comp   <- names(output[[z]])
-           index_      <- which(comps$NAME_COMPONENTE %in% nome_comp)
-           if(length(index_) == 0) next
-           output[[z]]$ID <- comps$CD_ID_COMPONENTE[index_]
-        }
+#         for(z in seq_along(output)){
+#            nome_comp   <- names(output[[z]])
+#            index_      <- which(comps$NAME_COMPONENTE %in% nome_comp)
+#            if(length(index_) == 0) next
+#            output[[z]]$ID <- comps$CD_ID_COMPONENTE[index_]
+#         }
 
-        output      <- as.character(jsonlite::toJSON(output,auto_unbox = TRUE))
-        cameras     <- stringr::str_split(y$CD_ID_CAMERAS,",")[[1]]
-        payload     <- purrr::map(cameras,function(camera){
-          componentes <- comps |> filter(CD_ID_CAMERA == camera)
-          frames_db   <- fetch_frames(con,tb = y$DT_HR_LOCAL_BEGIN,te = y$DT_HR_LOCAL_END,camera_id_vec = camera,limit = limit)
-          tibble(COMPONENTES = list(componentes),FRAMES = list(frames_db))
-        })
-        status <- map_vec(payload,~ nrow(.x$FRAMES[[1]]) > 0)
-        if(all(status)){
-          y |> mutate(OUTPUT_IA = output,PAYLOAD = list(payload),LIMIT = limit)
-        }else{
-          NULL
-        }
-      })) |> 
-      unnest(data)
+#         output      <- as.character(jsonlite::toJSON(output,auto_unbox = TRUE))
+#         cameras     <- stringr::str_split(y$CD_ID_CAMERAS,",")[[1]]
+#         payload     <- purrr::map(cameras,function(camera){
+#           componentes <- comps |> filter(CD_ID_CAMERA == camera)
+#           frames_db   <- fetch_frames(con,tb = y$DT_HR_LOCAL_BEGIN,te = y$DT_HR_LOCAL_END,camera_id_vec = camera,limit = limit)
+#           tibble(COMPONENTES = list(componentes),FRAMES = list(frames_db))
+#         })
+#         status <- map_vec(payload,~ nrow(.x$FRAMES[[1]]) > 0)
+#         if(all(status)){
+#           y |> mutate(OUTPUT_IA = output,PAYLOAD = list(payload),LIMIT = limit)
+#         }else{
+#           NULL
+#         }
+#       })) |> 
+#       unnest(data)
   
-  })) |> 
-  unnest(data) |> 
-  filter(map_vec(DATAS,~ !is.null(.x)))
+#   })) |> 
+#   unnest(data) |> 
+#   filter(map_vec(DATAS,~ !is.null(.x)))
 
 # #saveRDS(dataset,paste0("train/dataset_embalagem.rds"))
 
@@ -338,10 +338,6 @@ normalize_comps_upper <- function(comps) {
 fetch_frames <- function(conn, tb, te, camera_id_vec, limit = 1000L) {
   stopifnot(length(camera_id_vec) >= 1)
 
-  # normaliza datas para UTC
-  tb <- as.POSIXct(tb, tz = "UTC")
-  te <- as.POSIXct(te, tz = "UTC")
-
   cams <- as.integer(camera_id_vec)
   cams <- cams[!is.na(cams)]
   stopifnot(length(cams) >= 1)
@@ -375,7 +371,6 @@ fetch_frames <- function(conn, tb, te, camera_id_vec, limit = 1000L) {
 
   if (!nrow(df)) return(df)
 
-  df$dt_hr_local <- as.POSIXct(df$dt_hr_local, tz = "UTC")
   names(df) <- toupper(names(df))
   df
 }
@@ -558,4 +553,4 @@ dataset <- frames_u |>
   mutate(POLIGNOS_COMPONENTES = as.character(toupper(POLIGNOS_COMPONENTES)))
 
 
-saveRDS(dataset,paste0("train/dataset_pintura.rds"))
+saveRDS(dataset,paste0("train/dataset_pintura_2.rds"))
