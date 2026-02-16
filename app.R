@@ -30,10 +30,10 @@ Sys.setenv(
   #TVS_MAX_ASYNC = as.character(.tvs_auto_max_async()),
   #TVS_MAX_VCLIP = as.character(.tvs_auto_max_vclip()),
   DB_NAME = "analytia_db",
-  DB_HOST = "127.0.0.1",
+  DB_HOST = "localhost", #127.0.0.1
   DB_PORT = 5434,
   DB_USER = "analytia",
-  DB_PASS = "lytIA#2026!Elite@"
+  DB_PASS = "analytia" #lytIA#2026!Elite@
 )
 
 # # IMPORTANT: crie o app ANTES do with()

@@ -1,18 +1,18 @@
-# treinar.R  (Leaflet + Player + Clips + DYNAMIC tracking retângulos "estrutura")
+# treinar.R  (Leaflet + Player + Clips + DYNAMIC tracking retÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ngulos "estrutura")
 # =============================================================
-# ✅ + Player later::later (sem reentrância)
-# ✅ + Cache LRU + Prefetch por lote
-# ✅ + Múltiplos leafletOutput por câmera
-# ✅ + Handler JS 'set_frame_to' (id alvo)
-# ✅ + Timezone consistente (UTC) p/ chaves/queries
-# ✅ + Clip com duração máxima (default 5 min)
-# ✅ + Player de clip dentro do modal do clip (Preview independente)
-# ✅ + NOVO (OBJETO DINÂMICO):
-#    - Retângulos vermelhos via Leaflet Draw (group "estrutura")
-#    - Painel lateral (col-6) para selecionar estrutura + atributos do retângulo clicado
-#    - Retângulos armazenados com ID 1..n reutilizável (menor livre)
+# ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ + Player later::later (sem reentrÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ncia)
+# ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ + Cache LRU + Prefetch por lote
+# ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ + MÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Âºltiplos leafletOutput por Camera
+# ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ + Handler JS 'set_frame_to' (id alvo)
+# ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ + Timezone consistente (UTC) p/ chaves/queries
+# ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ + Clip com duraÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â£o mÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡xima (default 5 min)
+# ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ + Player de clip dentro do modal do clip (Preview independente)
+# ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ + NOVO (OBJETO DINÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡MICO):
+#    - RetÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ngulos vermelhos via Leaflet Draw (group "estrutura")
+#    - Painel lateral (col-6) para selecionar estrutura + atributos do retÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ngulo clicado
+#    - RetÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ngulos armazenados com ID 1..n reutilizÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡vel (menor livre)
 #    - Edit/Delete atualiza estado (tracking-like)
-#    - Inclui retângulos (filtrados por intervalo do clip) no output_ia no btSalvar
+#    - Inclui retÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ngulos (filtrados por intervalo do clip) no output_ia no btSalvar
 # =============================================================
 
 box::use(
@@ -56,7 +56,7 @@ box::use(
 )
 
 # ------------------------------------------------------------
-# Estado por sessão (NUNCA global)
+# Estado por sessÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â£o (NUNCA global)
 # ------------------------------------------------------------
 .get_private <- function(session, key = "setor_private") {
   stopifnot(!is.null(session))
@@ -66,7 +66,7 @@ box::use(
   session$userData[[key]]
 }
 
-# Limpa somente o estado desse módulo nessa sessão
+# Limpa somente o estado desse mÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³dulo nessa sessÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â£o
 #' @export
 dispose <- function(session, key = "setor_private") {
   e <- session$userData[[key]]
@@ -87,7 +87,7 @@ dispose <- function(session, key = "setor_private") {
   invisible(NULL)
 }
 
-# ---------- Parâmetros ----------
+# ---------- ParÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢metros ----------
 PREFETCH_AHEAD  <- local({
   x <- suppressWarnings(as.integer(Sys.getenv("TVS_PREFETCH_AHEAD", "32")))
   if (!is.finite(x) || x < 8L) x <- 32L
@@ -101,11 +101,15 @@ PREFETCH_EVERY_N <- local({
 MAX_CACHE_ITEMS <- 400L
 
 # (sync/interp) defaults
-SYNC_TOL_MS_DEFAULT <- 120L   # tolerância de sync por câmera (ms)
+SYNC_TOL_MS_DEFAULT <- 120L   # tolerÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ncia de sync por Camera (ms)
 DYN_INTERPOLATE_DEFAULT <- TRUE  # TRUE: interpola BOX entre keyframes
+DYN_RECT_COLOR_DEFAULT  <- "#FF0000"
+DYN_RECT_COLOR_SELECTED <- "#00A65A"
+DYN_RECT_FILL_DEFAULT   <- 0.08
+DYN_RECT_FILL_SELECTED  <- 0.20
 
 # ==================================================
-# Utils: MIME / Data URL / Dimensões de imagem
+# Utils: MIME / Data URL / DimensÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Âµes de imagem
 # ==================================================
 detect_mime <- function(raw) {
   if (length(raw) >= 2 && raw[1] == as.raw(0xFF) && raw[2] == as.raw(0xD8)) return("image/jpeg")
@@ -175,7 +179,7 @@ validaDateFormat <- function(text) {
 }
 
 # ==================================================
-# LRU Cache (env + funções puras)
+# LRU Cache (env + funÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Âµes puras)
 # ==================================================
 new_lru_cache <- function(max_items = MAX_CACHE_ITEMS) {
   cache <- new.env(parent = emptyenv())
@@ -207,10 +211,10 @@ new_lru_cache <- function(max_items = MAX_CACHE_ITEMS) {
 }
 
 # ==================================================
-# PlayerContext (render + prefetch), independente do módulo
+# PlayerContext (render + prefetch), independente do mÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³dulo
 # ==================================================
 # ==================================================
-# PlayerContext (render + prefetch), independente do módulo
+# PlayerContext (render + prefetch), independente do mÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³dulo
 # ==================================================
 new_player_ctx <- function(session, pool, lru_cache) {
   env <- new.env(parent = emptyenv())
@@ -218,7 +222,7 @@ new_player_ctx <- function(session, pool, lru_cache) {
   env$pool    <- pool
   env$cache   <- lru_cache
 
-  # cache interno por sequência (para nearest rápido)
+  # cache interno por sequÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Âªncia (para nearest rÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡pido)
   env$seq_sig           <- NULL
   env$times_by_cam      <- NULL
   env$frame_ids_by_cam  <- NULL
@@ -315,7 +319,7 @@ new_player_ctx <- function(session, pool, lru_cache) {
     idx
   }
 
-  # ✅ Render sincronizado multi-câmera (nearest timestamp por câmera)
+  # ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ Render sincronizado multi-Camera (nearest timestamp por Camera)
   env$render_current <- function(seq_df, i, w, h, id_map, fit_bounds = FALSE,
                                  tol_ms = SYNC_TOL_MS_DEFAULT) {
 
@@ -529,7 +533,7 @@ clip_limit_exceeded <- function(rv, max_min, now_ts = NULL) {
 }
 
 # ==================================================
-# NOVO: Helpers para retângulos dinâmicos (tracking-like)
+# NOVO: Helpers para retÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ngulos dinÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢micos (tracking-like)
 # ==================================================
 .drop_dup_last <- function(df) {
   if (is.null(df) || !nrow(df)) return(df)
@@ -584,12 +588,12 @@ dynrect_next_free_id <- function(used_ids) {
 
 dynrect_empty_df <- function() {
   tibble::tibble(
-    rect_id    = integer(0),         # 1..n (reutilizável)
+    rect_id    = integer(0),         # 1..n (reutilizÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡vel)
     leaflet_id = character(0),       # id do layer no leaflet (string)
     cam_id     = integer(0),
     created_ts_utc = as.POSIXct(character(0), tz = "UTC"),
-    last_ts_utc    = as.POSIXct(character(0), tz = "UTC"),  # último APPLY de tracking
-    last_poly      = list(),                                 # poly do último APPLY
+    last_ts_utc    = as.POSIXct(character(0), tz = "UTC"),  # ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Âºltimo APPLY de tracking
+    last_poly      = list(),                                 # poly do ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Âºltimo APPLY
     estrutura_id   = integer(0),
     estrutura_nome = character(0),
     attrs      = list()              # named list (valores)
@@ -644,11 +648,11 @@ dynrect_attrs_ui <- function(ns, attrs_df, values = NULL) {
     att_vals <- if ("value_atributo" %in% names(att)) as.character(att$value_atributo[[1]]) else ""
     cur <- NULL
     if (!is.null(values) && length(values)) {
-      # ✅ novo formato (por NOME)
+      # ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ novo formato (por NOME)
       if (!is.null(values[[att_name]])) {
         cur <- values[[att_name]]
       } else if (!is.null(values[[toupper(att_name)]])) {
-        # opcional: se você decidiu salvar com toupper()
+        # opcional: se vocÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Âª decidiu salvar com toupper()
         cur <- values[[toupper(att_name)]]
       } else if (!is.null(values[[as.character(att_id)]])) {
         # compat: formato antigo (por ID)
@@ -758,7 +762,7 @@ clip_summary_overlay <- function(ns, session, input, objeto, id_clip, ts_start, 
       dplyr::distinct(cd_id_camera, name_camera)
     camera_names <- vapply(camera_ids, function(cid) {
       nm <- cam_tbl$name_camera[cam_tbl$cd_id_camera == cid]
-      if (length(nm)) nm[[1]] else paste("Câmera", cid)
+      if (length(nm)) nm[[1]] else paste("Camera", cid)
     }, character(1))
   }
 
@@ -772,7 +776,7 @@ clip_summary_overlay <- function(ns, session, input, objeto, id_clip, ts_start, 
       column(
         width = ifelse(n > 1, 6, 12),
         panelTitle(
-          title = paste0("Preview – ", name, " (", cid, ")"),
+          title = paste0("Preview ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œ ", name, " (", cid, ")"),
           background.color.title = "white",
           title.color  = "black",
           border.color = "lightgray",
@@ -864,7 +868,7 @@ clip_summary_overlay <- function(ns, session, input, objeto, id_clip, ts_start, 
         div(
           style = "padding:10px; flex:1 1 auto; min-height:0; overflow-y:auto; overflow-x:hidden;",
           panelTitle(
-            title = "Preview do Clip (multi-câmera)",
+            title = "Preview do Clip (multi-Camera)",
             background.color.title = "white",
             title.color  = "black",
             border.color = "lightgray",
@@ -889,7 +893,7 @@ clip_summary_overlay <- function(ns, session, input, objeto, id_clip, ts_start, 
 }
 
 # ==================================================
-# UI Builders (JS handlers, Header form, Lista de câmeras, Controles)
+# UI Builders (JS handlers, Header form, Lista de Cameras, Controles)
 # ==================================================
 uiClipsPanel <- function(ns) {
   panelTitle(
@@ -993,40 +997,73 @@ ui_js_handlers <- function() {
           });
         });
 
+        function getWidgetById(mapId){
+          var el = document.getElementById(mapId);
+          if(!el) return null;
+          return HTMLWidgets.find('#' + mapId) || HTMLWidgets.find(el) || null;
+        }
+
+        function findLayerByLeafletId(map, lid){
+          if(!map) return null;
+          if(lid === null || lid === undefined) return null;
+          var sid = String(lid);
+
+          if(map._layers){
+            if(map._layers[sid]) return map._layers[sid];
+            var nid = Number(sid);
+            if(isFinite(nid) && map._layers[nid]) return map._layers[nid];
+
+            for(var k in map._layers){
+              if(!Object.prototype.hasOwnProperty.call(map._layers, k)) continue;
+              var lyr = map._layers[k];
+              if(!lyr) continue;
+              if(lyr._leaflet_id !== undefined && String(lyr._leaflet_id) === sid) return lyr;
+              if(lyr.options && lyr.options.layerId !== undefined && String(lyr.options.layerId) === sid) return lyr;
+            }
+          }
+          return null;
+        }
+
         Shiny.addCustomMessageHandler('set_draw_style', function(msg){
           try{
-            var el = document.getElementById(msg.map_id);
-            if(!el) return;
-            var widget = HTMLWidgets.find(el);
+            var widget = getWidgetById(msg.map_id);
             if(!widget || !widget.getMap) return;
             var map = widget.getMap();
             var lid = msg.leaflet_id;
             if(lid === null || lid === undefined) return;
-            var layer = map._layers[lid];
+            var layer = findLayerByLeafletId(map, lid);
             if(layer && layer.setStyle){
-              layer.setStyle({
+              var style = {
                 color: msg.color || 'red',
                 fillColor: msg.fillColor || msg.color || 'red',
                 weight: msg.weight || 3,
                 opacity: (msg.opacity === null || msg.opacity === undefined) ? 1 : msg.opacity,
                 fillOpacity: (msg.fillOpacity === null || msg.fillOpacity === undefined) ? 0.1 : msg.fillOpacity
-              });
+              };
+              layer.setStyle(style);
+              if(layer.bringToFront) layer.bringToFront();
+              if(layer.redraw) layer.redraw();
+              setTimeout(function(){
+                try{
+                  layer.setStyle(style);
+                  if(layer.bringToFront) layer.bringToFront();
+                  if(layer.redraw) layer.redraw();
+                } catch(err){}
+              }, 0);
             }
           } catch(e){}
         });
 
         Shiny.addCustomMessageHandler('set_draw_bounds', function(msg){
           try{
-            var el = document.getElementById(msg.map_id);
-            if(!el) return;
-            var widget = HTMLWidgets.find(el);
+            var widget = getWidgetById(msg.map_id);
             if(!widget || !widget.getMap) return;
             var map = widget.getMap();
             if(!map) return;
 
             var lid = msg.leaflet_id;
             if(lid === null || lid === undefined) return;
-            var layer = map._layers[lid];
+            var layer = findLayerByLeafletId(map, lid);
             if(!layer) return;
 
             var x0 = Number(msg.x_min), y0 = Number(msg.y_min), x1 = Number(msg.x_max), y1 = Number(msg.y_max);
@@ -1043,15 +1080,13 @@ ui_js_handlers <- function() {
 
         Shiny.addCustomMessageHandler('set_draw_tooltip', function(msg){
           try{
-            var el = document.getElementById(msg.map_id);
-            if(!el) return;
-            var widget = HTMLWidgets.find(el);
+            var widget = getWidgetById(msg.map_id);
             if(!widget || !widget.getMap) return;
             var map = widget.getMap();
             if(!map) return;
 
             var lid = msg.leaflet_id;
-            var layer = map._layers[lid];
+            var layer = findLayerByLeafletId(map, lid);
             if(!layer) return;
 
             var text = msg.text || '';
@@ -1090,6 +1125,68 @@ ui_js_handlers <- function() {
           } catch(e){}
         });
 
+        Shiny.addCustomMessageHandler('dynrect_select_row', function(msg){
+          try{
+            var rootId = msg.table_id;
+            var rid = String(msg.rect_id || '');
+            var rowIdx = Number(msg.row_index);
+
+            var $root = $('#' + rootId);
+            if(!$root.length) return;
+
+            var $table = $root.is('table') ? $root : $root.find('table').first();
+            if(!$table.length) return;
+            if(!$.fn.DataTable || !$.fn.DataTable.isDataTable($table[0])) return;
+
+            var dt = $table.DataTable();
+            var targetNode = null;
+
+            if(isFinite(rowIdx) && rowIdx >= 1){
+              var n = dt.row(rowIdx - 1).node();
+              if(n) targetNode = n;
+            }
+
+            if(!targetNode && rid){
+              dt.rows().every(function(){
+                if(targetNode) return;
+                var data = this.data();
+                var idCell = (data && data[0] !== undefined) ? String(data[0]) : '';
+                if(idCell === rid){
+                  targetNode = this.node();
+                }
+              });
+            }
+
+            dt.rows().nodes().to$().removeClass('selected');
+            if(!targetNode) return;
+
+            var rowApi = dt.row(targetNode);
+            var usedSelectApi = false;
+            try{
+              if(dt.rows && typeof dt.rows === 'function'){
+                var selectedApi = dt.rows({selected:true});
+                if(selectedApi && typeof selectedApi.deselect === 'function'){
+                  selectedApi.deselect();
+                }
+              }
+              if(rowApi && typeof rowApi.select === 'function'){
+                rowApi.select();
+                usedSelectApi = true;
+              }
+            } catch(err){}
+            if(!usedSelectApi){
+              $(targetNode).addClass('selected');
+            }
+
+            var idx0 = dt.row(targetNode).index();
+            if(window.Shiny && idx0 !== null && idx0 !== undefined && isFinite(idx0)){
+              Shiny.setInputValue(rootId + '_rows_selected', [idx0 + 1], {priority:'event'});
+            }
+
+            try { targetNode.scrollIntoView({block:'nearest'}); } catch(err){}
+          } catch(e){}
+        });
+
         Shiny.addCustomMessageHandler('set_clip_overlay_frame', function(msg){
           var imgEl = document.getElementById(msg.img_id);
           if(!imgEl) return;
@@ -1106,7 +1203,7 @@ uiMain <- function(ns, setores) {
     ui_js_handlers(),
     inlineCSS(paste0("#", ns("textNameTreino"), " {text-transform: uppercase;}")),
     panelTitle(
-      title = "Configuração",
+      title = "ConfiguraÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â£o",
       background.color.title = "white",
       title.color  = "black",
       border.color = "lightgray",
@@ -1126,7 +1223,7 @@ uiMain <- function(ns, setores) {
             width = "98%", placeholder = "Escolha uma data e hora"
           ),
           airDatepickerInput(
-            inputId = ns("datetimeEnd"), label = "Data e Hora Até:",
+            inputId = ns("datetimeEnd"), label = "Data e Hora AtÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â©:",
             language = "pt-BR", timepicker = TRUE, dateFormat = "dd/MM/yyyy",
             timepickerOpts = timepickerOptions(hoursStep = 1, minutesStep = 1),
             update_on  = "change",
@@ -1145,10 +1242,10 @@ uiMain <- function(ns, setores) {
   )
 }
 
-# ===== NOVO: Painel lateral para retângulos dinâmicos =====
+# ===== NOVO: Painel lateral para retÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ngulos dinÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢micos =====
 uiDynRectPanel <- function(ns) {
   panelTitle(
-    title = "Rastreamento – Estruturas (Retângulos)",
+    title = "Rastreamento - Estruturas (Retangulos)",
     background.color.title = "white",
     title.color  = "black",
     border.color = "lightgray",
@@ -1156,8 +1253,19 @@ uiDynRectPanel <- function(ns) {
       style = "padding: 10px;",
       tags$div(
         style = "margin-bottom:8px; color:#666; font-size:13px;",
-        tags$b("Como usar:"), " ative um ", tags$b("Clip"), " e desenhe retângulos vermelhos. Clique na linha da tabela para selecionar e ele ficará ", tags$b("VERDE"), ". ",
-        "Ajuste o retângulo no Leaflet e clique em ", tags$b("Aplicar"), " para salvar o tracking (posições ao longo do tempo)."
+        tags$b("Como usar:"), " ative um ", tags$b("Clip"), " e desenhe retangulos vermelhos. Clique na linha da tabela para selecionar e ele ficara na ", tags$b("cor escolhida"), ". ",
+        "Ajuste o retangulo no Leaflet e clique em ", tags$b("Aplicar"), " para salvar o tracking (posicoes ao longo do tempo)."
+      ),
+      tags$div(
+        style = "display:flex; align-items:center; gap:8px; margin-bottom:8px;",
+        tags$label(`for` = ns("dynrect_selected_color"), style = "margin:0; color:#555; font-weight:600;", "Cor da selecao:"),
+        tags$input(
+          id = ns("dynrect_selected_color"),
+          type = "color",
+          value = DYN_RECT_COLOR_SELECTED,
+          style = "width:44px; height:30px; padding:0; border:none; background:transparent; cursor:pointer;"
+        ),
+        tags$span(style = "font-size:12px; color:#777;", "aplicada em tempo real ao retangulo ativo.")
       ),
       DT::DTOutput(ns("dynrectTable")),
       br(),
@@ -1191,7 +1299,7 @@ uiCamerasComponentes <- function(ns, input, output, objeto, componentes) {
           zoomSnap  = 0, zoomDelta = 0.25
         ))
         
-        # objeto dinâmico: draw retângulo no group "estrutura" (vermelho) + edit/remove
+        # objeto dinÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢mico: draw retÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ngulo no group "estrutura" (vermelho) + edit/remove
         if (objeto$cd_id_objeto_tipo == 2L) {
           map_cam <- map_cam |>
                       addDrawToolbar(
@@ -1203,12 +1311,12 @@ uiCamerasComponentes <- function(ns, input, output, objeto, componentes) {
                         circleOptions        = FALSE,
                         rectangleOptions = drawRectangleOptions(
                           shapeOptions = drawShapeOptions(
-                            color = "#FF0000",
+                            color = DYN_RECT_COLOR_DEFAULT,
                             weight = 2,
                             opacity = 1,
                             fill = TRUE,
-                            fillColor = "#FF0000",
-                            fillOpacity = 0.20
+                            fillColor = DYN_RECT_COLOR_DEFAULT,
+                            fillOpacity = DYN_RECT_FILL_SELECTED
                           ),
                           showArea = FALSE
                         ),
@@ -1217,15 +1325,15 @@ uiCamerasComponentes <- function(ns, input, output, objeto, componentes) {
                           remove = TRUE,
                           selectedPathOptions = selectedPathOptions(
                             maintainColor = TRUE,
-                            color = "#FF0000",
-                            fillColor = "#FF0000",
-                            fillOpacity = 0.20
+                            color = DYN_RECT_COLOR_DEFAULT,
+                            fillColor = DYN_RECT_COLOR_DEFAULT,
+                            fillOpacity = DYN_RECT_FILL_SELECTED
                           )
                         )
                       )
         }
 
-        # ✅ (NOVO) Clique em retângulos desenhados (Leaflet.Draw):
+        # ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ (NOVO) Clique em retÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ngulos desenhados (Leaflet.Draw):
         # - Dispara input '<mapId>_shape_draw_click' com o leaflet_id do layer clicado.
         # - Isso permite selecionar a linha correspondente no DT (via dyn_select_by_leaflet()).
         map_cam <- map_cam |>
@@ -1270,7 +1378,7 @@ uiCamerasComponentes <- function(ns, input, output, objeto, componentes) {
                 // bind existentes
                 map.eachLayer(function(l){ bindLayer(l); });
 
-                // bind futuros (ex.: draw_new_feature / edições)
+                // bind futuros (ex.: draw_new_feature / ediÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Âµes)
                 map.on('layeradd', function(e){
                   if(e && e.layer) bindLayer(e.layer);
                 });
@@ -1278,7 +1386,7 @@ uiCamerasComponentes <- function(ns, input, output, objeto, componentes) {
             }
           ")
 
-        # componentes (NÃO editáveis)
+        # componentes (NÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢O editÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡veis)
         for (k in seq_len(nrow(comps_by_cam))) {
           comp      <- comps_by_cam[k, ]
           poligno   <- comp$poligno_componente[[1]]
@@ -1301,7 +1409,7 @@ uiCamerasComponentes <- function(ns, input, output, objeto, componentes) {
       })
 
       cameraElement <- panelTitle(
-        title = paste0("Câmera: ", cam_name),
+        title = paste0("Camera: ", cam_name),
         background.color.title = "white",
         title.color  = "black",
         border.color = "lightgray",
@@ -1315,8 +1423,8 @@ uiCamerasComponentes <- function(ns, input, output, objeto, componentes) {
   }
 
   # layout final:
-  # - estático: só câmeras
-  # - dinâmico: col-6 câmeras + col-6 painel de retângulos
+  # - estÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡tico: sÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³ Cameras
+  # - dinÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢mico: col-6 Cameras + col-6 painel de retÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ngulos
   if (objeto$cd_id_objeto_tipo == 2L) {
     ui <- tagAppendChildren(divLista, column(6L,uiDynRectPanel(ns)))
   } else {
@@ -1330,7 +1438,7 @@ uiComponenteVideo <- function(ns) {
   splitLayout(
     cellWidths = c("auto","auto","auto","auto","auto","110px","auto","120px","auto"),
     actionButton(ns("backPlay"),  label = "Reverse", icon = icon("backward"),
-      class = "btn btn-outline-secondary", title = "Reproduzir para trás"
+      class = "btn btn-outline-secondary", title = "Reproduzir para trÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡s"
     ),
     actionButton(ns("prevFrame"), label = "Prev",    icon = icon("step-backward"),
       class = "btn btn-outline-secondary", title = "Frame anterior"
@@ -1342,21 +1450,21 @@ uiComponenteVideo <- function(ns) {
       class = "btn btn-outline-secondary", title = "Pausar"
     ),
     actionButton(ns("nextFrame"), label = "Next",    icon = icon("step-forward"),
-      class = "btn btn-outline-secondary", title = "Próximo frame"
+      class = "btn btn-outline-secondary", title = "PrÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³ximo frame"
     ),
     numericInput(ns("step_ms"), "Intervalo (ms)", value = 50, min = 1, step = 1, width = "110px") |>
       tagAppendAttributes(style = ";margin-top: -25px;"),
     actionButton(ns("clipToggle"), label = "Start Clip", icon = icon("scissors"),
-      class = "btn btn-outline-primary", title = "Iniciar/encerrar clip (máx. duração)"
+      class = "btn btn-outline-primary", title = "Iniciar/encerrar clip (mÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡x. duraÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â£o)"
     ),
-    numericInput(ns("clip_max_min"), "Máx (min)", value = 1, min = 1, max = 60, step = 1, width = "120px") |>
+    numericInput(ns("clip_max_min"), "MÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡x (min)", value = 1, min = 1, max = 60, step = 1, width = "120px") |>
       tagAppendAttributes(style = ";margin-top: -25px;"),
     textOutput(ns("titleClock"))
   )
 }
 
 # ==================================================
-# Helpers públicos/compartilhados
+# Helpers pÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Âºblicos/compartilhados
 # ==================================================
 rv_get_current_ts <- function(rv) {
   isolate({
@@ -1373,7 +1481,7 @@ get_current_frame_ts <- function(rv, tz = "UTC", fmt = NULL) {
 }
 
 # ==================================================
-# Módulo principal (server)
+# MÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³dulo principal (server)
 # ==================================================
 #' @export
 uiNewTreinar <- function(ns, input, output, session, callback) {
@@ -1535,7 +1643,7 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
     })
   }
 
-  # ---------- NOVO: Estado dos retângulos dinâmicos ----------
+  # ---------- NOVO: Estado dos retÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ngulos dinÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢micos ----------
   dyn <- reactiveValues(
     rects  = dynrect_empty_df(),
     tracks = dyntrack_empty_df(),
@@ -1545,8 +1653,11 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
     highlighted_leaflet_id = NA_character_,
     deleting = FALSE,
     editing  = FALSE,
-    selecting_from_map = FALSE
+    selecting_from_map = FALSE,
+    editor_refresh = 0L
   )
+  dyn_editor_last_rect <- NA_integer_
+  dyn_editor_last_touch <- NA_integer_
 
   dyn_track_cache <- new.env(parent = emptyenv())
   dyn_track_cache$rev       <- 0L
@@ -1675,6 +1786,85 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
     df[idx[1], , drop = FALSE]
   }
 
+  dyn_tracks_by_rect <- function(rect_id) {
+    tr <- dyn$tracks
+    if (is.null(tr) || !nrow(tr)) return(NULL)
+    out <- tr |>
+      dplyr::filter(as.integer(.data$rect_id) == as.integer(.env$rect_id)) |>
+      dplyr::arrange(as.POSIXct(.data$ts_utc, tz = "UTC"))
+    if (!nrow(out)) return(NULL)
+    out
+  }
+
+  dyn_first_kf <- function(rect_id) {
+    tr <- dyn_tracks_by_rect(rect_id)
+    if (is.null(tr) || !nrow(tr)) return(NULL)
+    tr[1, , drop = FALSE]
+  }
+
+  dyn_last_kf <- function(rect_id) {
+    tr <- dyn_tracks_by_rect(rect_id)
+    if (is.null(tr) || !nrow(tr)) return(NULL)
+    tr[nrow(tr), , drop = FALSE]
+  }
+
+  dyn_has_keyframe <- function(rect_id) {
+    tr <- dyn_tracks_by_rect(rect_id)
+    !is.null(tr) && nrow(tr) > 0
+  }
+
+  dyn_sync_rect_from_keyframes <- function(rect_id) {
+    df <- dyn$rects
+    if (is.null(df) || !nrow(df)) return(invisible(FALSE))
+    idx <- which(as.integer(df$rect_id) == as.integer(rect_id))
+    if (!length(idx)) return(invisible(FALSE))
+    i <- idx[1]
+
+    first_kf <- dyn_first_kf(rect_id)
+    last_kf  <- dyn_last_kf(rect_id)
+    changed <- FALSE
+
+    # Estrutura fixa do 1o keyframe.
+    if (!is.null(first_kf) && nrow(first_kf)) {
+      sid <- suppressWarnings(as.integer(first_kf$estrutura_id[[1]]))
+      snm <- as.character(first_kf$estrutura_nome[[1]])
+      if (is.finite(sid) && !identical(suppressWarnings(as.integer(df$estrutura_id[[i]])), sid)) {
+        df$estrutura_id[[i]] <- sid
+        changed <- TRUE
+      }
+      if (nzchar(snm) && !identical(as.character(df$estrutura_nome[[i]]), snm)) {
+        df$estrutura_nome[[i]] <- snm
+        changed <- TRUE
+      }
+    }
+
+    # Atributos e posiÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â£o para continuar ediÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â£o vÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Âªm do ÃƒÆ’Ã†â€™Ãƒâ€¦Ã‚Â¡LTIMO keyframe.
+    if (!is.null(last_kf) && nrow(last_kf)) {
+      last_attrs <- last_kf$attrs[[1]]
+      if (is.null(last_attrs) || !is.list(last_attrs)) last_attrs <- list()
+      if (!identical(df$attrs[[i]], last_attrs)) {
+        df$attrs[[i]] <- last_attrs
+        changed <- TRUE
+      }
+
+      last_ts <- as.POSIXct(last_kf$ts_utc[[1]], tz = "UTC")
+      if (!is.na(last_ts) && !identical(as.POSIXct(df$last_ts_utc[[i]], tz = "UTC"), last_ts)) {
+        df$last_ts_utc[[i]] <- last_ts
+        changed <- TRUE
+      }
+
+      last_poly <- NULL
+      if ("poly" %in% names(last_kf)) last_poly <- last_kf$poly[[1]]
+      if (!is.null(last_poly) && !identical(df$last_poly[[i]], last_poly)) {
+        df$last_poly[[i]] <- last_poly
+        changed <- TRUE
+      }
+    }
+
+    if (isTRUE(changed)) dyn$rects <- df
+    TRUE
+  }
+
   dyn_reset_pending <- function() {
     dyn$pending <- new.env(parent = emptyenv())
   }
@@ -1690,43 +1880,95 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
     dyn$deleting <- FALSE
     dyn$editing  <- FALSE
     dyn$selecting_from_map <- FALSE
+    dyn$editor_refresh <- 0L
+    dyn_editor_last_rect <<- NA_integer_
+    dyn_editor_last_touch <<- NA_integer_
+  }
+
+  dyn_touch_editor <- function() {
+    v <- suppressWarnings(as.integer(dyn$editor_refresh))
+    if (!is.finite(v)) v <- 0L
+    dyn$editor_refresh <- v + 1L
+    TRUE
   }
 
     dyn_dt_proxy <- function() {
-      # ✅ em módulo: passe o ID sem ns() (session já sabe o namespace)
+      # ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ em mÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³dulo: passe o ID sem ns() (session jÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ sabe o namespace)
       DT::dataTableProxy("dynrectTable", session = session)
     }
 
-   dyn_dt_select_by_leaflet <- function(leaflet_id) {
-  df <- dyn$rects
-  if (is.null(df) || !nrow(df)) return(invisible(FALSE))
-  idx <- which(as.character(df$leaflet_id) == as.character(leaflet_id))
-  if (!length(idx)) return(invisible(FALSE))
+  dyn_dt_select_by_leaflet <- function(leaflet_id) {
+    df <- dyn$rects
+    if (is.null(df) || !nrow(df)) return(invisible(FALSE))
+    idx <- which(as.character(df$leaflet_id) == as.character(leaflet_id))
+    if (!length(idx)) {
+      dyn$selecting_from_map <- FALSE
+      return(invisible(FALSE))
+    }
 
-  dyn$selecting_from_map <- TRUE
-  proxy <- dyn_dt_proxy()
+    dyn$selecting_from_map <- TRUE
+    idx_row <- as.integer(idx[1])
+    rid <- suppressWarnings(as.integer(df$rect_id[idx_row]))
+    proxy <- dyn_dt_proxy()
 
-  # força seleção mesmo se já estava selecionado
-  DT::selectRows(proxy, NULL)
-  DT::selectRows(proxy, idx[1])
+    # forca selecao mesmo se ja estava selecionado (server-side)
+    DT::selectRows(proxy, NULL)
+    DT::selectRows(proxy, idx_row)
 
-  TRUE
-} 
+    # reforco client-side para cenarios em que o Select do DT nao sincroniza no 1o clique
+    session$sendCustomMessage("dynrect_select_row", list(
+      table_id = ns("dynrectTable"),
+      rect_id = if (is.finite(rid)) rid else NA_integer_,
+      row_index = idx_row
+    ))
 
-  dyn_send_style <- function(cam_id, leaflet_id, color = "red") {
+    # reforca selecao apos flush (quando DT terminou de renderizar/atualizar)
+    session$onFlushed(function() {
+      try({
+        proxy2 <- dyn_dt_proxy()
+        DT::selectRows(proxy2, NULL)
+        DT::selectRows(proxy2, idx_row)
+        session$sendCustomMessage("dynrect_select_row", list(
+          table_id = ns("dynrectTable"),
+          rect_id = if (is.finite(rid)) rid else NA_integer_,
+          row_index = idx_row
+        ))
+      }, silent = TRUE)
+      dyn$selecting_from_map <- FALSE
+    }, once = TRUE)
+
+    TRUE
+  }
+  
+  dyn_send_style <- function(cam_id, leaflet_id,
+    color = DYN_RECT_COLOR_DEFAULT,
+    fill_opacity = DYN_RECT_FILL_DEFAULT,
+    weight = 3
+  ) {
     if (is.null(cam_id) || !is.finite(cam_id) || is.null(leaflet_id) || !nzchar(leaflet_id)) return(invisible(FALSE))
+    fill_opacity <- suppressWarnings(as.numeric(fill_opacity))
+    if (!is.finite(fill_opacity)) fill_opacity <- DYN_RECT_FILL_DEFAULT
+    weight <- suppressWarnings(as.numeric(weight))
+    if (!is.finite(weight)) weight <- 3
     session$sendCustomMessage("set_draw_style", list(
       map_id = ns(paste0("map_", as.integer(cam_id))),
       leaflet_id = as.character(leaflet_id),
       color = color,
       fillColor = color,
-      weight = 3,
-      fillOpacity = 0.08
+      weight = weight,
+      fillOpacity = fill_opacity
     ))
     TRUE
   }
 
-  # ===== NOVO: aplicar BOX no layer do Leaflet (retângulo) =====
+  dyn_get_selected_color <- function() {
+    col <- tryCatch(as.character(input[["dynrect_selected_color"]]), error = function(e) NA_character_)
+    if (length(col) != 1L || is.na(col) || !nzchar(col)) return(DYN_RECT_COLOR_SELECTED)
+    if (!grepl("^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})$", col)) return(DYN_RECT_COLOR_SELECTED)
+    toupper(col)
+  }
+
+  # ===== NOVO: aplicar BOX no layer do Leaflet (retÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ngulo) =====
   dyn_send_bounds <- function(cam_id, leaflet_id, box) {
     if (is.null(cam_id) || !is.finite(cam_id) || is.null(leaflet_id) || !nzchar(leaflet_id)) return(invisible(FALSE))
     if (is.null(box)) return(invisible(FALSE))
@@ -1846,7 +2088,12 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
     if (!is.null(prev) && nzchar(prev) && !identical(prev, cur)) {
       prev_row <- dyn_get_by_leaflet(prev)
       if (!is.null(prev_row) && nrow(prev_row)) {
-        dyn_send_style(prev_row$cam_id[[1]], prev, color = "red")
+        dyn_send_style(
+          prev_row$cam_id[[1]], prev,
+          color = DYN_RECT_COLOR_DEFAULT,
+          fill_opacity = DYN_RECT_FILL_DEFAULT,
+          weight = 3
+        )
       }
     }
 
@@ -1854,8 +2101,16 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
 
     row <- dyn_get_by_leaflet(cur)
     if (!is.null(row) && nrow(row)) {
-      dyn_send_style(row$cam_id[[1]], cur, color = "green")
+      selected_color <- dyn_get_selected_color()
+      dyn_send_style(
+        row$cam_id[[1]], cur,
+        color = selected_color,
+        fill_opacity = DYN_RECT_FILL_SELECTED,
+        weight = 4
+      )
       dyn$highlighted_leaflet_id <- cur
+    } else {
+      dyn$highlighted_leaflet_id <- NA_character_
     }
     TRUE
   }
@@ -1866,10 +2121,13 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
     if (is.null(df) || !nrow(df)) return(invisible(FALSE))
     idx <- which(as.character(df$leaflet_id) == as.character(leaflet_id))
     if (!length(idx)) return(invisible(FALSE))
+    rid <- as.integer(df$rect_id[idx[1]])
+    if (is.finite(rid)) dyn_sync_rect_from_keyframes(rid)
     dyn$selected_leaflet_id <- as.character(df$leaflet_id[idx[1]])
-    dyn$selected_rect_id    <- as.integer(df$rect_id[idx[1]])
+    dyn$selected_rect_id    <- rid
+    dyn_touch_editor()
     dyn_dt_select_by_leaflet(leaflet_id)
-    dyn_highlight_selected()
+    dyn_highlight_selected(force = TRUE)
     TRUE
   }
   
@@ -1879,9 +2137,12 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
     if (is.null(df) || !nrow(df)) return(invisible(FALSE))
     idx <- which(as.integer(df$rect_id) == as.integer(rect_id))
     if (!length(idx)) return(invisible(FALSE))
+    rid <- as.integer(df$rect_id[idx[1]])
+    if (is.finite(rid)) dyn_sync_rect_from_keyframes(rid)
     dyn$selected_leaflet_id <- as.character(df$leaflet_id[idx[1]])
-    dyn$selected_rect_id    <- as.integer(df$rect_id[idx[1]])
-    dyn_highlight_selected()
+    dyn$selected_rect_id    <- rid
+    dyn_touch_editor()
+    dyn_highlight_selected(force = TRUE)
     TRUE
   }
   
@@ -1914,8 +2175,22 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
       }
       
       tr <- dyn$tracks
+
+      # Regra de negÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³cio: estrutura ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â© definida no 1ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âº keyframe e nÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â£o muda mais.
+      if (!is.null(tr) && nrow(tr)) {
+        idx_rect <- which(as.integer(tr$rect_id) == as.integer(rect_id))
+        if (length(idx_rect)) {
+          ord <- idx_rect[order(as.POSIXct(tr$ts_utc[idx_rect], tz = "UTC"))]
+          lock_id <- suppressWarnings(as.integer(tr$estrutura_id[ord[1]]))
+          lock_nm <- as.character(tr$estrutura_nome[ord[1]])
+          if (is.finite(lock_id) && nzchar(lock_nm)) {
+            estrutura_id <- lock_id
+            estrutura_nome <- lock_nm
+          }
+        }
+      }
       
-      # compat: sessões antigas
+      # compat: sessÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Âµes antigas
       if (!is.null(tr) && nrow(tr)) {
         if (!"attrs" %in% names(tr)) tr$attrs <- replicate(nrow(tr), list(list()))
         if (!"box" %in% names(tr)) tr$box <- replicate(nrow(tr), list(NULL))
@@ -2012,25 +2287,25 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
 
   dyn$rects <- dplyr::bind_rows(dyn$rects, new_row)
 
-  # ✅ este é o retângulo ativo
+  # ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ este ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â© o retÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ngulo ativo
   dyn$selected_leaflet_id <- as.character(leaflet_id)
   dyn$selected_rect_id    <- as.integer(new_id)
 
-  # ✅ após criar, marcamos como PENDING para o 1º APPLY gerar o 1º keyframe
+  # ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ apÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³s criar, marcamos como PENDING para o 1ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âº APPLY gerar o 1ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âº keyframe
   dyn_set_pending_poly(leaflet_id, ts_utc, poly)
 
   dyn_highlight_selected()
-  # ✅ tooltip no hover: Retângulo #ID
+  # ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ tooltip no hover: RetÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ngulo #ID
   session$sendCustomMessage("set_draw_tooltip", list(
     map_id     = ns(paste0("map_", as.integer(cam_id))),
     leaflet_id = as.character(leaflet_id),
-    text       = paste0("Retângulo #", as.integer(new_id))
+    text       = paste0("RetÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ngulo #", as.integer(new_id))
   ))
 
 
-  # ✅ MUITO IMPORTANTE:
+  # ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ MUITO IMPORTANTE:
   # o DT re-renderiza depois que dyn$rects muda.
-  # então selecionamos a linha após o flush, para não voltar pro retângulo #1.
+  # entÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â£o selecionamos a linha apÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³s o flush, para nÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â£o voltar pro retÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ngulo #1.
   session$onFlushed(function() {
     try(dyn_dt_select_by_leaflet(as.character(leaflet_id)), silent = TRUE)
   }, once = TRUE)
@@ -2038,9 +2313,9 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
   new_id
 }
   
-  # compat: edição do retângulo atualiza PENDING (só salva no APPLY)
+  # compat: ediÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â£o do retÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ngulo atualiza PENDING (sÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³ salva no APPLY)
   dyn_update_poly <- function(leaflet_id, ts_utc, poly) {
-    if (!isTRUE(rv$clip_active)) return(invisible(FALSE))  # ✅ só registra edição com Clip ativo
+    if (!isTRUE(rv$clip_active)) return(invisible(FALSE))  # ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ sÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³ registra ediÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â£o com Clip ativo
     df <- dyn$rects
     if (is.null(df) || !nrow(df)) return(invisible(FALSE))
     idx <- which(as.character(df$leaflet_id) == as.character(leaflet_id))
@@ -2086,7 +2361,7 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
     
     box <- poly_to_box(poly)
     if (is.null(box)) {
-      showNotification("Não foi possível calcular o BOX.", type = "error")
+      showNotification("NÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â£o foi possÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­vel calcular o BOX.", type = "error")
       return(invisible(FALSE))
     }
     
@@ -2094,7 +2369,7 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
     idx <- which(as.integer(df$rect_id) == as.integer(rid))
     if (!length(idx)) return(invisible(FALSE))
     
-    # ✅ valida meta e attrs (NUNCA salvar keyframe com null/vazio)
+    # ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ valida meta e attrs (NUNCA salvar keyframe com null/vazio)
     estr_id   <- suppressWarnings(as.integer(df$estrutura_id[idx[1]]))
     estr_nome <- as.character(df$estrutura_nome[idx[1]])
     attrs_snapshot <- df$attrs[[idx[1]]]
@@ -2113,7 +2388,7 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
     df$last_poly[[idx[1]]] <- poly
     dyn$rects <- df
     
-    # ✅ salva keyframe completo
+    # ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ salva keyframe completo
     dyn_track_upsert(
       rid, lid, df$cam_id[idx[1]], ts_final,
       poly,
@@ -2148,11 +2423,15 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
       dyn$selected_leaflet_id    <- NA_character_
       dyn$selected_rect_id       <- NA_integer_
       dyn$highlighted_leaflet_id <- NA_character_
+      dyn_editor_last_rect <<- NA_integer_
+      dyn_editor_last_touch <<- NA_integer_
     } else {
       if (dyn$selected_leaflet_id %in% as.character(leaflet_ids)) {
         dyn$selected_leaflet_id    <- NA_character_
         dyn$selected_rect_id       <- NA_integer_
         dyn$highlighted_leaflet_id <- NA_character_
+        dyn_editor_last_rect <<- NA_integer_
+        dyn_editor_last_touch <<- NA_integer_
       }
     }
     dyn_cache_invalidate_tracks()
@@ -2167,16 +2446,41 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
     idx <- which(as.integer(df$rect_id) == as.integer(rid))
     if (!length(idx)) return(invisible(FALSE))
     
-    estr_id <- suppressWarnings(as.integer(input[["dynrect_structure"]]))
-    if (!is.finite(estr_id)) {
-      showNotification("Selecione uma estrutura.", type = "error")
-      return(invisible(FALSE))
+    first_kf <- dyn_first_kf(rid)
+    locked_estr_id <- NA_integer_
+    locked_estr_nome <- ""
+    if (!is.null(first_kf) && nrow(first_kf)) {
+      locked_estr_id <- suppressWarnings(as.integer(first_kf$estrutura_id[[1]]))
+      locked_estr_nome <- as.character(first_kf$estrutura_nome[[1]])
     }
-    
-    estr_row <- struct_df |> dplyr::filter(.data$cd_id_estrutura == estr_id)
-    estr_nome <- if (nrow(estr_row)) as.character(estr_row$name_estrutura[[1]]) else ""
-    if (!nzchar(estr_nome)) {
-      showNotification("Estrutura sem nome (inválida).", type = "error")
+
+    input_estr_id <- suppressWarnings(as.integer(input[["dynrect_structure"]]))
+    has_locked_structure <- is.finite(locked_estr_id)
+
+    if (isTRUE(has_locked_structure)) {
+      estr_id <- as.integer(locked_estr_id)
+      estr_nome <- as.character(locked_estr_nome)
+      if (!nzchar(estr_nome)) {
+        estr_row_tmp <- struct_df |> dplyr::filter(.data$cd_id_estrutura == estr_id)
+        if (nrow(estr_row_tmp)) estr_nome <- as.character(estr_row_tmp$name_estrutura[[1]])
+      }
+      if (is.finite(input_estr_id) && as.integer(input_estr_id) != as.integer(estr_id)) {
+        showNotification("Estrutura bloqueada pelo primeiro keyframe. Apenas atributos podem ser alterados.", type = "warning")
+      }
+      try(updateSelectInput(session, "dynrect_structure", selected = as.character(estr_id)), silent = TRUE)
+    } else {
+      estr_id <- input_estr_id
+      if (!is.finite(estr_id)) {
+        showNotification("Selecione uma estrutura.", type = "error")
+        return(invisible(FALSE))
+      }
+      estr_row_tmp <- struct_df |> dplyr::filter(.data$cd_id_estrutura == estr_id)
+      estr_nome <- if (nrow(estr_row_tmp)) as.character(estr_row_tmp$name_estrutura[[1]]) else ""
+    }
+
+    estr_row <- struct_df |> dplyr::filter(.data$cd_id_estrutura == as.integer(estr_id))
+    if (!nrow(estr_row) || !nzchar(estr_nome)) {
+      showNotification("Estrutura sem nome (invÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡lida).", type = "error")
       return(invisible(FALSE))
     }
     
@@ -2198,7 +2502,7 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
         
         key <- trimws(att_name)
         if (!nzchar(key)) key <- as.character(att_id)
-        if (!is.null(vals[[key]])) key <- paste0(key, "__", att_id)  # evita colisão
+        if (!is.null(vals[[key]])) key <- paste0(key, "__", att_id)  # evita colisÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â£o
         
         ok <- TRUE
         if (identical(att_type, "QUALITATIVE")) {
@@ -2275,12 +2579,12 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
     }
   }, ignoreNULL = TRUE))
 
-  # ---------- Botão Buscar ----------
+  # ---------- BotÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â£o Buscar ----------
   obs$add(observeEvent(input$btBuscar, {
 
     objeto <<- objetos |> dplyr::filter(name_objeto == isolate(input$comboObjeto))
     if (!nrow(objeto)) {
-      showNotification("Selecione um objeto válido.", type = "warning")
+      showNotification("Selecione um objeto vÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡lido.", type = "warning")
       return(invisible())
     }
 
@@ -2288,10 +2592,10 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
     time_end   <- isolate(input$datetimeEnd)
 
     if (is.null(time_begin)) {
-      showNotification("'Data e Hora De' está com campo vazio!", type = "warning")
+      showNotification("'Data e Hora De' estÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ com campo vazio!", type = "warning")
       return(invisible())
     } else if (is.null(time_end)) {
-      showNotification("'Data e Hora Até' está com campo vazio!", type = "warning")
+      showNotification("'Data e Hora AtÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â©' estÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ com campo vazio!", type = "warning")
       return(invisible())
     }
 
@@ -2308,11 +2612,11 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
     )
     if (!nrow(frames_idx)) {
       removeProgressLoader()
-      showNotification("Nenhum frame no intervalo/câmeras selecionados.", type = "warning")
+      showNotification("Nenhum frame no intervalo/Cameras selecionados.", type = "warning")
       return(invisible())
     }
 
-    # monta UI das câmeras + (se dinâmico) painel lateral
+    # monta UI das Cameras + (se dinÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢mico) painel lateral
     res_cam <- uiCamerasComponentes(ns, input, output, objeto, componentes)
     rv$id_by_cam <- res_cam$id_by_cam
     dyn_reset()
@@ -2368,7 +2672,7 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
       })
     }, once = TRUE)
 
-    # -------- NOVO: registra observers do Leaflet Draw/Click para retângulos (se dinâmico) --------
+    # -------- NOVO: registra observers do Leaflet Draw/Click para retÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ngulos (se dinÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢mico) --------
     if (isTRUE(objeto$cd_id_objeto_tipo == 2L)) {
 
       # evita duplicar observers ao clicar "Buscar" repetidas vezes no mesmo conjunto
@@ -2398,9 +2702,9 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
           leaflet_id <- as.character(leaflet_id)
 
 
-          # ✅ regra: não pode existir retângulo sem Clip
+          # ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ regra: nÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â£o pode existir retÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ngulo sem Clip
           if (!isTRUE(rv$clip_active)) {
-            showNotification("Ative um Clip antes de desenhar retângulos (tracking é sempre dentro do clip).", type = "warning")
+            showNotification("Ative um Clip antes de desenhar retÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ngulos (tracking ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â© sempre dentro do clip).", type = "warning")
             try(leaflet::leafletProxy(map_dom_id) |> leaflet::removeShape(layerId = leaflet_id), silent = TRUE)
             return()
           }
@@ -2409,14 +2713,14 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
           if (is.null(ts)) ts <- as.POSIXct(Sys.time(), tz = "UTC")
           
           new_id <- dyn_add_rect(leaflet_id = leaflet_id, cam_id = cid, ts_utc = ts, poly = poly)
-          showNotification(paste0("Retângulo #", new_id, " criado. Clique e aplique Estrutura/Atributos."), type = "message")
+          showNotification(paste0("RetÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ngulo #", new_id, " criado. Clique e aplique Estrutura/Atributos."), type = "message")
         }, ignoreInit = TRUE))
         
         # ---- draw edited ----
         obs$add(observeEvent(input[[paste0(map_out_id, "_draw_edited_features")]], {
           req(isTRUE(objeto$cd_id_objeto_tipo == 2L))
 
-          # ✅ só permite editar/memorizar pending quando Clip está ativo
+          # ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ sÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³ permite editar/memorizar pending quando Clip estÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ ativo
           if (!isTRUE(rv$clip_active)) return()
           feats <- input[[paste0(map_out_id, "_draw_edited_features")]]
           
@@ -2431,7 +2735,7 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
             if (!is.null(feat$properties$layerId)) leaflet_id <- feat$properties$layerId
             leaflet_id <- as.character(leaflet_id)
             
-            # atualiza poly do retângulo existente
+            # atualiza poly do retÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ngulo existente
             dyn_update_poly(leaflet_id = leaflet_id, ts_utc = ts, poly = poly)
           }
         }, ignoreInit = TRUE))
@@ -2479,7 +2783,7 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
           
           lid <- as.character(ev$id)
           
-          # ✅ só retângulos vermelhos (os que você registrou no dyn)
+          # ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ sÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³ retÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ngulos vermelhos (os que vocÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Âª registrou no dyn)
           if (!dyn_has_leaflet_id(lid)) return()
           
           dyn_select_by_leaflet(lid)
@@ -2497,10 +2801,11 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
           
           lid <- as.character(ev$id)
           
-          # ✅ só retângulos vermelhos (os que você registrou no dyn)
+          # ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ sÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³ retÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ngulos vermelhos (os que vocÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Âª registrou no dyn)
           if (!dyn_has_leaflet_id(lid)) return()
           
           dyn_select_by_leaflet(lid)
+        }, ignoreInit = TRUE, ignoreNULL = TRUE))
 
         obs$add(observeEvent(input[[paste0(map_out_id, "_shape_draw_out")]], {
           req(isTRUE(objeto$cd_id_objeto_tipo == 2L))
@@ -2516,9 +2821,7 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
           ))
         }, ignoreInit = TRUE, ignoreNULL = TRUE))
 
-        }, ignoreInit = TRUE, ignoreNULL = TRUE))
-
-        # ---- hover no retângulo -> destaca linha na tabela (sem selecionar) ----
+        # ---- hover no retÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ngulo -> destaca linha na tabela (sem selecionar) ----
         obs$add(observeEvent(input[[paste0(map_out_id, "_shape_draw_hover")]], {
           req(isTRUE(objeto$cd_id_objeto_tipo == 2L))
           if (isTRUE(dyn$deleting) || isTRUE(dyn$editing)) return()
@@ -2545,7 +2848,7 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
 
   }, ignoreInit = TRUE))
 
-  # ---------- Navegação frame a frame (player principal) ----------
+  # ---------- NavegaÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â£o frame a frame (player principal) ----------
   step_frame <- function(delta) {
     req(rv$seq, nrow(rv$seq) > 0)
     new_i <- max(1L, min(nrow(rv$seq), rv$i + delta))
@@ -2589,7 +2892,7 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
         if (isTRUE(st$ok)) { rv$w <- st$w; rv$h <- st$h }
         dyn_update_view_on_ts(rv_get_current_ts(rv))
         
-        # ✅ prefetch não precisa rodar TODO frame (ver item 3 abaixo)
+        # ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ prefetch nÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â£o precisa rodar TODO frame (ver item 3 abaixo)
         if ((rv$i %% PREFETCH_EVERY_N) == 0L) {
           ctx$prefetch_request(rv$seq, rv$i, PREFETCH_AHEAD)
         }
@@ -2609,14 +2912,14 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
         if (!is.finite(target) || target <= 0) target <- 0.05
         
         elapsed <- proc.time()[3] - t0
-        delay <- max(0.001, target - elapsed)   # ✅ não “pune” com delay extra
+        delay <- max(0.001, target - elapsed)   # ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ nÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â£o ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã¢â‚¬Å“puneÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â com delay extra
         
         later::later(function() { play_step() }, delay)
       })
     })
   }
 
-  # ---------- Botões play/pause/reverse PRINCIPAL ----------
+  # ---------- BotÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Âµes play/pause/reverse PRINCIPAL ----------
   obs$add(observeEvent(input$play, {
     play_dir(+1L); playing(TRUE); if (!loop_on) { loop_on <<- TRUE; play_step() }
   }, ignoreInit = TRUE))
@@ -2646,7 +2949,7 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
   }, ignoreInit = TRUE))
 
   # ==========================================================
-  # NOVO: Render/Editor do painel de retângulos dinâmicos
+  # NOVO: Render/Editor do painel de retÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ngulos dinÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢micos
   # ==========================================================
     output$dynrectTable <- DT::renderDT({
     req(!is.null(objeto))
@@ -2654,19 +2957,20 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
       return(DT::datatable(data.frame(), options = list(dom = "t")))
     }
     df <- dyn$rects
+    rid_sel <- suppressWarnings(as.integer(dyn$selected_rect_id))
     if (is.null(df) || !nrow(df)) {
       return(DT::datatable(
         data.frame(
           ID = integer(0),
           Status = character(0),
-          Câmera = integer(0),
+          Camera = integer(0),
           Estrutura = character(0),
-          ÚltimoFrame = character(0),
+          UltimoFrame = character(0),
           stringsAsFactors = FALSE
         ),
         selection = "single",
         options = list(dom = "t", paging = FALSE, ordering = FALSE,
-          language = list(emptyTable = "Nenhum retângulo criado ainda.")
+          language = list(emptyTable = "Nenhum retangulo criado ainda.")
         )
       ))
     }
@@ -2677,20 +2981,26 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
       exists(lid, envir = dyn$pending, inherits = FALSE)
     }, logical(1L))
 
+    selected_row <- integer(0)
+    if (is.finite(rid_sel)) {
+      idx_sel <- which(as.integer(df$rect_id) == as.integer(rid_sel))
+      if (length(idx_sel)) selected_row <- as.integer(idx_sel[1])
+    }
+
     out <- df |>
       dplyr::mutate(
         ID = .data$rect_id,
         Status = ifelse(is_pending, "PENDENTE", "OK"),
-        Câmera = .data$cam_id,
-        Estrutura = ifelse(nzchar(.data$estrutura_nome), .data$estrutura_nome, "(não definido)"),
-        ÚltimoFrame = format(.data$last_ts_utc, tz = Sys.timezone(), format = "%d/%m/%y %H:%M:%S")
+        Camera = .data$cam_id,
+        Estrutura = ifelse(nzchar(.data$estrutura_nome), .data$estrutura_nome, "(nao definido)"),
+        UltimoFrame = format(.data$last_ts_utc, tz = Sys.timezone(), format = "%d/%m/%y %H:%M:%S")
       ) |>
-      dplyr::select(.data$ID, .data$Status, .data$`Câmera`, .data$Estrutura, .data$ÚltimoFrame)
+      dplyr::select(.data$ID, .data$Status, .data$`Camera`, .data$Estrutura, .data$UltimoFrame)
 
     DT::datatable(
       out,
       rownames = FALSE,
-      selection = "single",
+      selection = list(mode = "single", selected = selected_row),
       escape = TRUE,
       options = list(
         dom = "t",
@@ -2704,9 +3014,13 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
   obs$add(observeEvent(input$dynrectTable_rows_selected, {
     req(!is.null(objeto), isTRUE(objeto$cd_id_objeto_tipo == 2L))
 
-    # seleção programática (vinda do clique no retângulo / criação)
+    # seleÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â£o programÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡tica (vinda do clique no retÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ngulo / criaÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â£o)
     if (isTRUE(dyn$selecting_from_map)) {
       dyn$selecting_from_map <- FALSE
+      rid_cur <- suppressWarnings(as.integer(dyn$selected_rect_id))
+      if (is.finite(rid_cur)) dyn_sync_rect_from_keyframes(rid_cur)
+      dyn_touch_editor()
+      dyn_highlight_selected(force = TRUE)
       return(invisible())
     }
 
@@ -2719,30 +3033,40 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
     rid <- suppressWarnings(as.integer(df$rect_id[sel[1]]))
     if (!is.finite(rid)) return(invisible())
 
-    # ✅ não sobrescreve se já é o mesmo
+    # ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ nÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â£o sobrescreve se jÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â© o mesmo
     if (isTRUE(!is.null(dyn$selected_rect_id)) && isTRUE(as.integer(dyn$selected_rect_id) == rid)) {
+      dyn_sync_rect_from_keyframes(rid)
+      dyn_touch_editor()
+      dyn_highlight_selected(force = TRUE)
       return(invisible())
     }
 
     dyn_select_by_rect(rid)
   }, ignoreInit = TRUE))
 
+  obs$add(observeEvent(input$dynrect_selected_color, {
+    req(!is.null(objeto), isTRUE(objeto$cd_id_objeto_tipo == 2L))
+    dyn_highlight_selected(force = TRUE)
+  }, ignoreInit = TRUE))
+
   output$dynrectEditor <- renderUI({
   req(!is.null(objeto))
   if (!isTRUE(objeto$cd_id_objeto_tipo == 2L)) return(NULL)
+  editor_touch <- suppressWarnings(as.integer(dyn$editor_refresh))
+  if (!is.finite(editor_touch)) editor_touch <- 0L
 
   df <- dyn$rects
   if (is.null(df) || !nrow(df)) {
-    return(div(tags$em("Crie um retângulo vermelho em qualquer câmera para começar.")))
+    return(div(tags$em("Crie um retÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ngulo vermelho em qualquer Camera para comeÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â§ar.")))
   }
 
   rid <- dyn$selected_rect_id
   if (is.null(rid) || !isTRUE(is.finite(as.numeric(rid)))) {
-    return(div(tags$em("Clique em um retângulo vermelho para editar Estrutura e Atributos.")))
+    return(div(tags$em("Clique em um retÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ngulo vermelho para editar Estrutura e Atributos.")))
   }
 
   idx <- which(as.integer(df$rect_id) == as.integer(rid))
-  if (!length(idx)) return(div(tags$em("Clique em um retângulo vermelho para editar.")))
+  if (!length(idx)) return(div(tags$em("Clique em um retÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ngulo vermelho para editar.")))
   row <- df[idx[1], , drop = FALSE]
 
   struct_df <- dynrect_structures_df(objeto)
@@ -2758,49 +3082,87 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
     isTRUE(is.finite(x)) && !is.na(x)
   }
 
-  # estrutura salva (fallback)
-  cur_estr_saved <- suppressWarnings(as.integer(row$estrutura_id[[1]]))
+  first_kf <- dyn_first_kf(rid)
+  last_kf  <- dyn_last_kf(rid)
+  prev_editor_rect <- suppressWarnings(as.integer(dyn_editor_last_rect))
+  rect_changed <- !is_ok_int(prev_editor_rect) || as.integer(prev_editor_rect) != as.integer(rid)
+  dyn_editor_last_rect <<- as.integer(rid)
+  prev_touch <- suppressWarnings(as.integer(dyn_editor_last_touch))
+  touch_changed <- !is_ok_int(prev_touch) || as.integer(prev_touch) != as.integer(editor_touch)
+  dyn_editor_last_touch <<- as.integer(editor_touch)
+
+  locked_estr_id <- suppressWarnings(as.integer(NA))
+  if (!is.null(first_kf) && nrow(first_kf)) {
+    locked_estr_id <- suppressWarnings(as.integer(first_kf$estrutura_id[[1]]))
+  }
+  structure_locked <- is_ok_int(locked_estr_id)
+
+  # Estrutura base: 1o keyframe (quando bloqueada) ou estado atual do retangulo.
+  cur_estr_saved <- if (isTRUE(structure_locked)) locked_estr_id else suppressWarnings(as.integer(row$estrutura_id[[1]]))
+  if (!is_ok_int(cur_estr_saved)) cur_estr_saved <- suppressWarnings(as.integer(row$estrutura_id[[1]]))
   if (!is_ok_int(cur_estr_saved)) cur_estr_saved <- suppressWarnings(as.integer(struct_df$cd_id_estrutura[[1]]))
 
-  # ✅ estrutura do UI (depende do input -> força re-render quando muda o select)
+  # Se mudou selecao (linha/desenho), recupera valores; se bloqueada, ignora tentativa do usuario.
   cur_estr_ui <- suppressWarnings(as.integer(input$dynrect_structure))
-  if (!is_ok_int(cur_estr_ui)) cur_estr_ui <- cur_estr_saved
-  cur_estr <- cur_estr_ui
+  force_restore <- isTRUE(rect_changed) || isTRUE(touch_changed)
+  if (isTRUE(structure_locked)) {
+    cur_estr <- cur_estr_saved
+  } else if (isTRUE(force_restore)) {
+    cur_estr <- cur_estr_saved
+  } else {
+    if (!is_ok_int(cur_estr_ui)) cur_estr_ui <- cur_estr_saved
+    cur_estr <- cur_estr_ui
+  }
 
-  # attrs da estrutura do UI (sem if com NA)
+  if (isTRUE(structure_locked) || (isTRUE(force_restore) && is_ok_int(cur_estr_saved))) {
+    session$onFlushed(function() {
+      try(updateSelectInput(session, "dynrect_structure", selected = as.character(cur_estr_saved)), silent = TRUE)
+    }, once = TRUE)
+  }
+
   attrs_df <- NULL
   if (nrow(struct_df) > 0 && is_ok_int(cur_estr)) {
     sr <- struct_df |> dplyr::filter(.data$cd_id_estrutura == cur_estr)
     if (nrow(sr) > 0 && "atributos" %in% names(sr)) attrs_df <- sr$atributos[[1]]
   }
 
+  # Sempre continua ediÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â£o a partir do ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Âºltimo keyframe salvo.
   cur_vals <- row$attrs[[1]]
+  if (!is.null(last_kf) && nrow(last_kf) && "attrs" %in% names(last_kf)) {
+    cur_vals <- last_kf$attrs[[1]]
+  }
   if (is.null(cur_vals) || !is.list(cur_vals)) cur_vals <- list()
 
   div(
     panelTitle(
-      title = paste0("Retângulo #", row$rect_id, " (câmera ", row$cam_id, ")"),
+      title = paste0("RetÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ngulo #", row$rect_id, " (Camera ", row$cam_id, ")"),
       background.color.title = "white",
       title.color  = "black",
       border.color = "lightgray",
       children = div(
         style = "padding:10px;",
-        selectInput(
-          ns("dynrect_structure"),
-          label = "Estrutura",
-          choices = choices,
-          selected = cur_estr,         # ✅ mantém a escolha atual do usuário
-          width = "100%"
+        tagAppendAttributes(
+          selectInput(
+            ns("dynrect_structure"),
+            label = "Estrutura",
+            choices = choices,
+            selected = cur_estr,
+            width = "100%"
+          ),
+          disabled = if (isTRUE(structure_locked)) "disabled" else NULL
         ),
+        if (isTRUE(structure_locked)) {
+          tags$div(
+            style = "margin-top:-8px; margin-bottom:8px; color:#777; font-size:12px;",
+            "Estrutura bloqueada pelo 1ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âº keyframe. Apenas atributos podem ser alterados."
+          )
+        },
         br(),
         dynrect_attrs_ui(ns, attrs_df, values = cur_vals),
         br(),
-        tagAppendAttributes(
-          actionButton(ns("dynrect_apply"), "Aplicar", class = "btn btn-primary btn-sm"),
-          disabled = if (!isTRUE(rv$clip_active)) "disabled" else NULL
-        ),
+        actionButton(ns("dynrect_apply"), "Aplicar", class = "btn btn-primary btn-sm"),
         tags$hr(style = "margin:12px 0;"),
-        tags$h5(style = "margin:0 0 8px 0;", paste0("Keyframes do Retângulo #", as.integer(rid))),
+        tags$h5(style = "margin:0 0 8px 0;", paste0("Keyframes do RetÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ngulo #", as.integer(rid))),
         DT::DTOutput(ns("dynrectKfTable")),
         div(
           style = "display:flex; gap:8px; margin-top:8px; flex-wrap:wrap;",
@@ -2817,7 +3179,7 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
 })
 
   # ==========================================================
-  # NOVO: Tabela de keyframes do retângulo selecionado (por estrutura)
+  # NOVO: Tabela de keyframes do retÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ngulo selecionado (por estrutura)
   # - excluir keyframe(s)
   # - limpar todos
   # ==========================================================
@@ -2835,7 +3197,7 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
     tr <- dyn$tracks
     if (is.null(tr) || !nrow(tr)) {
       return(DT::datatable(
-        data.frame(`Tempo (UTC)` = character(0), `Câmera` = integer(0)),
+        data.frame(`Tempo (UTC)` = character(0), `Camera` = integer(0)),
         rownames = FALSE,
         options = list(dom = "t")
       ))
@@ -2847,7 +3209,7 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
 
     if (!nrow(kf)) {
       return(DT::datatable(
-        data.frame(`Tempo (UTC)` = character(0), `Câmera` = integer(0)),
+        data.frame(`Tempo (UTC)` = character(0), `Camera` = integer(0)),
         rownames = FALSE,
         options = list(dom = "t")
       ))
@@ -2857,12 +3219,12 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
       dplyr::mutate(
         ts_raw = fmt_ts_utc_iso(as.POSIXct(ts_utc, tz = "UTC"), digits = 3L),
         `Tempo (UTC)` = fmt_ts_utc_br(as.POSIXct(ts_utc, tz = "UTC"), digits = 3L),
-        `Câmera` = as.integer(cam_id),
+        `Camera` = as.integer(cam_id),
         `Atributos` = if ("attrs" %in% names(kf)) vapply(attrs, function(a) {
           jsonlite::toJSON(if (is.null(a)) list() else a, auto_unbox = TRUE, null = "null")
         }, character(1)) else ""
       ) |>
-      dplyr::select(ts_raw, `Tempo (UTC)`, `Câmera`, `Atributos`)
+      dplyr::select(ts_raw, `Tempo (UTC)`, `Camera`, `Atributos`)
 
     DT::datatable(
       df,
@@ -2914,7 +3276,7 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
     dyn_cache_invalidate_tracks()
 
     showNotification(
-      paste0("Excluído(s) ", length(ts_del), " keyframe(s) do Retângulo #", as.integer(rid), "."),
+      paste0("ExcluÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­do(s) ", length(ts_del), " keyframe(s) do RetÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ngulo #", as.integer(rid), "."),
       type = "message"
     )
   }, ignoreInit = TRUE))
@@ -2933,7 +3295,7 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
     dyn_cache_invalidate_tracks()
 
     showNotification(
-      paste0("Todos os keyframes do Retângulo #", as.integer(rid), " foram removidos."),
+      paste0("Todos os keyframes do RetÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ngulo #", as.integer(rid), " foram removidos."),
       type = "message"
     )
   }, ignoreInit = TRUE))
@@ -2946,16 +3308,16 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
 
     ok_meta <- dyn_apply_meta(struct_df)
     if (!isTRUE(ok_meta)) {
-      # ✅ se não aplicou meta, nem tenta salvar keyframe
+      # ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ se nÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â£o aplicou meta, nem tenta salvar keyframe
       return(invisible())
     }
 
     ok_trk <- dyn_apply_tracking(rv)
 
     if (isTRUE(ok_trk)) {
-      showNotification("Tracking aplicado e salvo (posição + atributos).", type = "message")
+      showNotification("Tracking aplicado e salvo (posiÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â£o + atributos).", type = "message")
     } else {
-      showNotification("Tracking não foi salvo — verifique Clip ativo / retângulo selecionado.", type = "warning")
+      showNotification("Tracking nÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â£o foi salvo ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â verifique Clip ativo / retÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ngulo selecionado.", type = "warning")
     }
   }, ignoreInit = TRUE))
 
@@ -2969,7 +3331,7 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
       return(DT::datatable(
         data.frame(
           Linha  = integer(0),
-          Título = character(0),
+          Titulo = character(0),
           Tipo   = character(0),
           De = character(0),
           Ate = character(0),
@@ -2980,7 +3342,7 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
         options = list(
           dom = "t", paging = FALSE, ordering = FALSE,
           language = list(
-            emptyTable   = "Nenhum clip disponível na tabela",
+            emptyTable   = "Nenhum clip disponÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­vel na tabela",
             zeroRecords  = "Nenhum registro encontrado",
             infoEmpty    = "",
             info         = ""
@@ -3064,7 +3426,7 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
 
     out <- data.frame(
       Linha          = rownum,
-      Título         = titulo,
+      Titulo         = titulo,
       Tipo           = tipo_cb,
       De             = t0_txt,
       Ate            = t1_txt,
@@ -3172,7 +3534,7 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
     }
   }, ignoreInit = TRUE))
 
-  # ---------- Rodapé ----------
+  # ---------- RodapÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â© ----------
   obs$add(observeEvent(input$btSair, {
     obs$destroy()
     output$uiCamerasFrames <- NULL
@@ -3196,7 +3558,7 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
 
     df <- isolate(clips())
     if (!nrow(df)) {
-      showNotification("Não foi possivel salvar o pacote de treino, nenhum clip foi encontrado!", type = "error")
+      showNotification("NÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â£o foi possivel salvar o pacote de treino, nenhum clip foi encontrado!", type = "error")
       return(invisible())
     }
 
@@ -3266,7 +3628,7 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
       }, ignoreInit = TRUE, once = TRUE)
 
     })) {
-      showNotification("Não foi possivel salvar o pacote de treino, durante o processo houve falha!", type = "error")
+      showNotification("NÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â£o foi possivel salvar o pacote de treino, durante o processo houve falha!", type = "error")
     }
 
   }, ignoreInit = TRUE))
@@ -3373,7 +3735,7 @@ collect_clip_attributes <- function(input, objeto, id_clip, t0, t1) {
 }
 
 # ==================================================
-# NOVO: Serialização dos retângulos dinâmicos para o output_ia
+# NOVO: SerializaÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â£o dos retÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ngulos dinÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢micos para o output_ia
 # ==================================================
 dynrects_to_json <- function(dyn_rects, dyn_tracks, t0, t1) {
   if (is.null(dyn_rects) || !nrow(dyn_rects)) return(NULL)
@@ -3454,7 +3816,7 @@ dynrects_to_json <- function(dyn_rects, dyn_tracks, t0, t1) {
       if ("box" %in% names(r)) b <- r$box[[1]]
       b <- sanitize_box(b)
 
-      # fallback: se não tiver box salvo, calcula do poly
+      # fallback: se nÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â£o tiver box salvo, calcula do poly
       if (is.null(b)) {
         poly <- NULL
         if ("poly" %in% names(r)) poly <- r$poly[[1]]
@@ -3502,7 +3864,7 @@ build_objeto_descricao <- function(input, df, objeto, tiposPacotes, dyn_rects = 
 
     if (!validaDateFormat(t0) || !validaDateFormat(t1)) {
       status  <- FALSE
-      message <- "❌ formato inválido na tabela clips (use dd/mm/aa HH:MM:SS)!"
+      message <- "ÃƒÆ’Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒâ€¦Ã¢â‚¬â„¢ formato invÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡lido na tabela clips (use dd/mm/aa HH:MM:SS)!"
       break
     }
 
@@ -3538,7 +3900,7 @@ build_objeto_descricao <- function(input, df, objeto, tiposPacotes, dyn_rects = 
       
     }
    
-    # ✅ NOVO: adiciona retângulos dinâmicos no intervalo do clip (se objeto dinâmico)
+    # ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ NOVO: adiciona retÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ngulos dinÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢micos no intervalo do clip (se objeto dinÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢mico)
     if (isTRUE(objeto$cd_id_objeto_tipo == 2L) && is.list(dyn_rects) &&
         !is.null(dyn_rects$rects) && !is.null(dyn_rects$tracks)) {
       dyn_json <- dynrects_to_json(dyn_rects$rects, dyn_rects$tracks, df_tmp$t0, df_tmp$t1)
