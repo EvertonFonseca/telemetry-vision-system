@@ -3,13 +3,13 @@
         {
             "ssh": "Disabled",
             "previewLimit": 50,
-            "server": "localhost",
+            "server": "127.0.0.1",
             "port": 5434,
             "driver": "PostgreSQL",
             "name": "analytia_db",
             "database": "analytia_db",
             "username": "analytia",
-            "password": "analytia"
+            "password": "lytIA#2026!Elite@"
         }
     ]
 }

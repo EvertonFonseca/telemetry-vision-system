@@ -39,7 +39,8 @@ box::use(
       play_sound,
       debugLocal,
       console,
-      messageAlerta
+      messageAlerta,
+      actionWebUser
     ],
   .. / model / swiper[...],
   DT,
@@ -131,7 +132,8 @@ dispose <- function(session, key = "setor_private") {
     nomeSetor <- isolate(toupper(input$textNameSetor))
 
     #open database
-    db$tryTransaction(function(conn){
+    actionWebUser({
+      db$tryTransaction(function(conn){
 
       if(stringi$stri_isempty(stringr$str_trim(nomeSetor))){
         showNotification("O nome do Setor não foi preenchido!", type = "warning")
@@ -181,7 +183,8 @@ dispose <- function(session, key = "setor_private") {
         
       },ignoreInit = TRUE,once = TRUE)
 
-    })
+      })
+    }, delay = 0, lock_id = "setor_create_save")
 
     },ignoreInit = T,ignoreNULL = T))
    
@@ -394,8 +397,9 @@ uiEditSetor <- function(ns,input,output,session,callback){
     obs$add(observeEvent(input$btActionUpdate,{
       
       req(setor())
-      
-      db$tryTransaction(function(conn){
+
+      actionWebUser({
+        db$tryTransaction(function(conn){
 
         id        <- isolate(setor()$cd_id_setor)
         nomeSetor <- isolate(toupper(input$textNameSetor))
@@ -429,7 +433,8 @@ uiEditSetor <- function(ns,input,output,session,callback){
         sliderPosition(isolate(sliderPosition()) - 1L)
         showNotification("setor atualizado com sucesso!", type = "warning")
 
-      })
+        })
+      }, delay = 0, lock_id = "setor_update_save")
 
     },ignoreInit = T))
 

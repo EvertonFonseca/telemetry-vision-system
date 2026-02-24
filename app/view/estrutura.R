@@ -266,8 +266,9 @@ uiNewEstrutura <- function(ns,input,output,session,callback){
                   return()
                 }
    
-                # try insert or roolback
-                if(!db$tryTransaction(function(conn){
+                actionWebUser({
+                  # try insert or roolback
+                  if(!db$tryTransaction(function(conn){
              
                   #check if it has already data of Câmera
                   obj <- list()
@@ -321,6 +322,7 @@ uiNewEstrutura <- function(ns,input,output,session,callback){
                     showNotification("Não foi possivel salvar a Estrutura, durante o processo houve falha!", type = "error")
                   }
                
+                }, delay = 0, lock_id = "estrutura_create_save")
             },ignoreInit = T,ignoreNULL = T))          
    
  }
@@ -695,7 +697,8 @@ uiEditEstrutura <- function(ns,input,output,session,callback){
               return()
             }
             
-            db$tryTransaction(function(conn){
+            actionWebUser({
+              db$tryTransaction(function(conn){
               
               #check if it has already data of Câmera
               obj <- list()
@@ -728,7 +731,8 @@ uiEditEstrutura <- function(ns,input,output,session,callback){
               swiperSlidePrevious(idSwiper)
               sliderPosition(isolate(sliderPosition()) - 1L)
               showNotification("Estrutura atualizado com sucesso!", type = "warning")
-            })
+              })
+            }, delay = 0, lock_id = "estrutura_update_save")
             
           },ignoreInit = T))
 }

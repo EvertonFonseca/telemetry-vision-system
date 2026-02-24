@@ -39,7 +39,8 @@ box::use(
       play_sound,
       debugLocal,
       console,
-      messageAlerta
+      messageAlerta,
+      actionWebUser
     ],
   .. / model / swiper[...],
   DT,
@@ -130,8 +131,9 @@ dispose <- function(session, key = "setor_private") {
 
    ## Salvar Camera
    obs$add(observeEvent(input$btSalvar,{
- 
-   db$tryTransaction(function(conn){
+
+   actionWebUser({
+     db$tryTransaction(function(conn){
      
       nomeCamera <- isolate(toupper(input$textNameCamera))
       urlCamera  <- isolate(input$textUrlCamera)
@@ -186,7 +188,8 @@ dispose <- function(session, key = "setor_private") {
         
       },ignoreInit = TRUE,once = TRUE)
 
-   })
+     })
+   }, delay = 0, lock_id = "camera_create_save")
 
    },ignoreInit = T,ignoreNULL = T))
    
@@ -396,8 +399,9 @@ uiEditCamera <- function(ns,input,output,session,callback = NULL){
   obs$add(observeEvent(input$btActionUpdate,{
     
     req(camera())
-    
-    db$tryTransaction(function(conn){
+
+    actionWebUser({
+      db$tryTransaction(function(conn){
       
       id         <- isolate(camera()$cd_id_camera)
       nomeCamera <- isolate(toupper(input$textNameCamera))
@@ -433,7 +437,8 @@ uiEditCamera <- function(ns,input,output,session,callback = NULL){
       swiperSlidePrevious(idSwiper)
       sliderPosition(isolate(sliderPosition()) - 1L)
       showNotification("câmera atualizado com sucesso!", type = "warning")
-    })
+      })
+    }, delay = 0, lock_id = "camera_update_save")
     
   },ignoreInit = T))
   

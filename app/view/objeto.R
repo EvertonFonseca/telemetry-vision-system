@@ -568,7 +568,8 @@ initMap <- FALSE
             return()
           }
           
-          if(!db$tryTransaction(function(conn){
+          actionWebUser({
+            if(!db$tryTransaction(function(conn){
             
             if(any(stringi$stri_isempty(componentes$name_componente))){
               showNotification("Existe componente com nomes vazios!", type = "warning")
@@ -654,6 +655,7 @@ initMap <- FALSE
             })){
               showNotification("Não foi possivel salvar o objeto, durante o processo houve falha!", type = "error")
             }
+          }, delay = 0, lock_id = "objeto_create_save")
           }
           
         },ignoreInit = T,ignoreNULL = T))
@@ -1275,7 +1277,8 @@ uiEditObjeto <- function(ns,input,output,session,callback){
             return()
           }
           
-          if(!db$tryTransaction(function(conn){
+          actionWebUser({
+            if(!db$tryTransaction(function(conn){
 
             #check if it has already data of Câmera
             nomeObjeto     <- isolate(toupper(input$textNameObjeto))
@@ -1328,6 +1331,7 @@ uiEditObjeto <- function(ns,input,output,session,callback){
           })){
             showNotification("Não foi possivel salvar o objeto, durante o processo houve falha!", type = "error")
           }
+          }, delay = 0, lock_id = "objeto_update_save")
         }
       },ignoreInit = T))
 }

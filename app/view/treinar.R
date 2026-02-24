@@ -2845,7 +2845,6 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
 
       } # for cams
     }
-
   }, ignoreInit = TRUE))
 
   # ---------- NavegaÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â£o frame a frame (player principal) ----------
@@ -3564,7 +3563,8 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
 
     dyn_rects_snapshot <- isolate(list(rects = dyn$rects, tracks = dyn$tracks))
 
-    if (!db$tryTransaction(function(conn) {
+    actionWebUser({
+      if (!db$tryTransaction(function(conn) {
 
       info <- build_objeto_descricao(input, df, objeto, tiposPacotes, dyn_rects = dyn_rects_snapshot)
  
@@ -3631,6 +3631,7 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
       showNotification("NÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â£o foi possivel salvar o pacote de treino, durante o processo houve falha!", type = "error")
     }
 
+    }, delay = 0, lock_id = "treinar_pacote_save")
   }, ignoreInit = TRUE))
 
   obs$add(observeEvent(input$clipCloseVideo, {
