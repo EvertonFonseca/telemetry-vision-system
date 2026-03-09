@@ -3,8 +3,6 @@ box::use(
   DBI,
   dplyr[pull, mutate],
   purrr[...],
-  ./camera_dao[selectCameraByComponente],
-  ./estrutura_dao[selectAllEstruturaByIdComponente],
   jsonlite
 )
 
@@ -23,7 +21,291 @@ box::use(
 }
 
 # fg_ativo IN (...) com placeholders
-.in_placeholders <- function(n, start = 1L) paste0("$", start:(start + n - 1L), collapse = ",")
+.in_placeholders <- function(n, start = 1L) {
+  if (n <= 0L) return("null")
+  paste0("$", start:(start + n - 1L), collapse = ",")
+}
+
+.ids_unique <- function(x) {
+  x <- suppressWarnings(as.integer(x))
+  x <- x[is.finite(x)]
+  unique(x)
+}
+
+.safe_from_json <- function(x) {
+  if (is.null(x) || !length(x)) return(NULL)
+  x <- as.character(x[[1]])
+  if (is.na(x) || !nzchar(x)) return(NULL)
+  tryCatch(jsonlite::fromJSON(x), error = function(e) NULL)
+}
+
+.load_cameras_lookup <- function(con, camera_ids) {
+  camera_ids <- .ids_unique(camera_ids)
+  if (!length(camera_ids)) {
+    return(list(by_id = list(), empty = data.frame()))
+  }
+
+  ph <- .in_placeholders(length(camera_ids))
+  cameras <- DBI::dbGetQuery(
+    con,
+    sprintf(
+      "select * from camera_view where cd_id_camera in (%s) order by cd_id_camera",
+      ph
+    ),
+    params = as.list(camera_ids)
+  )
+  cameras <- .df_names_lower(cameras)
+
+  list(
+    by_id = if (nrow(cameras)) split(cameras, as.character(cameras$cd_id_camera)) else list(),
+    empty = cameras[0, , drop = FALSE]
+  )
+}
+
+.load_estruturas_lookup <- function(con, estrutura_ids) {
+  estrutura_ids <- .ids_unique(estrutura_ids)
+  if (!length(estrutura_ids)) {
+    empty <- data.frame()
+    empty$configs <- vector("list", 0L)
+    return(list(by_id = list(), empty = empty))
+  }
+
+  ph <- .in_placeholders(length(estrutura_ids))
+  estruturas <- DBI::dbGetQuery(
+    con,
+    sprintf(
+      "select *
+         from estrutura
+        where cd_id_estrutura in (%s)
+        order by cd_id_estrutura",
+      ph
+    ),
+    params = as.list(estrutura_ids)
+  )
+  estruturas <- .df_names_lower(estruturas)
+
+  empty_estrutura <- estruturas[0, , drop = FALSE]
+  empty_estrutura$configs <- vector("list", nrow(empty_estrutura))
+
+  if (!nrow(estruturas)) {
+    return(list(by_id = list(), empty = empty_estrutura))
+  }
+
+  estrutura_configs <- DBI::dbGetQuery(
+    con,
+    sprintf(
+      "
+      select y.*
+        from (
+          select
+            ec.*,
+            row_number() over (
+              partition by ec.cd_id_estrutura
+              order by ec.dt_hr_local desc, ec.cd_id_estrutura_config desc
+            ) as rn
+          from estrutura_config ec
+          where ec.cd_id_estrutura in (%s)
+        ) y
+       where y.rn = 1
+       order by y.cd_id_estrutura, y.dt_hr_local desc, y.cd_id_estrutura_config desc
+      ",
+      ph
+    ),
+    params = as.list(estrutura_ids)
+  )
+  estrutura_configs <- .df_names_lower(estrutura_configs)
+  if ("rn" %in% names(estrutura_configs)) estrutura_configs$rn <- NULL
+
+  if (nrow(estrutura_configs)) {
+    cfg_ids <- .ids_unique(estrutura_configs$cd_id_estrutura_config)
+    ph_cfg <- .in_placeholders(length(cfg_ids))
+
+    atributos <- DBI::dbGetQuery(
+      con,
+      sprintf(
+        "
+        select
+          a.cd_id_atributo,
+          a.cd_id_estrutura_config,
+          a.name_atributo,
+          a.value_atributo,
+          a.fg_ativo,
+          a.cd_id_data,
+          td.name_data,
+          td.r_data
+        from atributo a
+        left join tipo_data td
+          on td.cd_id_data = a.cd_id_data
+        where a.cd_id_estrutura_config in (%s)
+        order by a.cd_id_estrutura_config, a.cd_id_atributo
+        ",
+        ph_cfg
+      ),
+      params = as.list(cfg_ids)
+    )
+    atributos <- .df_names_lower(atributos)
+
+    attrs_by_cfg <- if (nrow(atributos)) {
+      split(atributos, as.character(atributos$cd_id_estrutura_config))
+    } else {
+      list()
+    }
+    empty_attrs <- atributos[0, , drop = FALSE]
+
+    estrutura_configs$atributos <- purrr::map(
+      estrutura_configs$cd_id_estrutura_config,
+      function(id) {
+        out <- attrs_by_cfg[[as.character(id)]]
+        if (is.null(out)) empty_attrs else out
+      }
+    )
+  } else {
+    estrutura_configs$atributos <- vector("list", 0L)
+  }
+
+  cfg_by_estrutura <- if (nrow(estrutura_configs)) {
+    split(estrutura_configs, as.character(estrutura_configs$cd_id_estrutura))
+  } else {
+    list()
+  }
+  empty_cfg <- estrutura_configs[0, , drop = FALSE]
+
+  estrutura_by_id <- list()
+  for (i in seq_len(nrow(estruturas))) {
+    est <- estruturas[i, , drop = FALSE]
+    key <- as.character(est$cd_id_estrutura[[1]])
+
+    cfg <- cfg_by_estrutura[[key]]
+    if (is.null(cfg)) cfg <- empty_cfg
+
+    est$configs <- list(cfg)
+    estrutura_by_id[[key]] <- est
+  }
+
+  list(by_id = estrutura_by_id, empty = empty_estrutura)
+}
+
+.load_componentes_by_config_ids <- function(con, config_ids) {
+  config_ids <- .ids_unique(config_ids)
+  if (!length(config_ids)) return(data.frame())
+
+  ph <- .in_placeholders(length(config_ids))
+  componentes <- DBI::dbGetQuery(
+    con,
+    sprintf(
+      "
+      select *
+        from componente
+       where cd_id_obj_conf in (%s)
+       order by cd_id_obj_conf, cd_id_componente
+      ",
+      ph
+    ),
+    params = as.list(config_ids)
+  )
+  componentes <- .df_names_lower(componentes)
+
+  if (!nrow(componentes)) {
+    componentes$poligno_componente <- list()
+    componentes$estrutura <- list()
+    componentes$cameras <- list()
+    componentes$camera <- list()
+    return(componentes)
+  }
+
+  componentes <- dplyr::mutate(
+    componentes,
+    poligno_componente = purrr::map(poligno_componente, .safe_from_json)
+  )
+
+  cam_lookup <- if ("cd_id_camera" %in% names(componentes)) {
+    .load_cameras_lookup(con, componentes$cd_id_camera)
+  } else {
+    list(by_id = list(), empty = data.frame())
+  }
+
+  est_lookup <- if ("cd_id_estrutura" %in% names(componentes)) {
+    .load_estruturas_lookup(con, componentes$cd_id_estrutura)
+  } else {
+    empty <- data.frame()
+    empty$configs <- vector("list", 0L)
+    list(by_id = list(), empty = empty)
+  }
+
+  componentes$estrutura <- purrr::map(
+    if ("cd_id_estrutura" %in% names(componentes)) componentes$cd_id_estrutura else rep(NA_integer_, nrow(componentes)),
+    function(id) {
+      out <- est_lookup$by_id[[as.character(id)]]
+      if (is.null(out)) est_lookup$empty else out
+    }
+  )
+
+  componentes$cameras <- purrr::map(
+    if ("cd_id_camera" %in% names(componentes)) componentes$cd_id_camera else rep(NA_integer_, nrow(componentes)),
+    function(id) {
+      out <- cam_lookup$by_id[[as.character(id)]]
+      if (is.null(out)) cam_lookup$empty else out
+    }
+  )
+
+  # compatibilidade: alguns pontos usam $camera, outros $cameras
+  componentes$camera <- componentes$cameras
+  componentes
+}
+
+.load_latest_objeto_configs <- function(con, objeto_ids) {
+  objeto_ids <- .ids_unique(objeto_ids)
+  if (!length(objeto_ids)) return(data.frame())
+
+  ph <- .in_placeholders(length(objeto_ids))
+  configs <- DBI::dbGetQuery(
+    con,
+    sprintf(
+      "
+      select y.*
+        from (
+          select
+            oc.*,
+            row_number() over (
+              partition by oc.cd_id_objeto
+              order by oc.dt_hr_local desc, oc.cd_id_obj_conf desc
+            ) as rn
+          from objeto_config oc
+          where oc.cd_id_objeto in (%s)
+        ) y
+       where y.rn = 1
+       order by y.cd_id_objeto, y.dt_hr_local desc, y.cd_id_obj_conf desc
+      ",
+      ph
+    ),
+    params = as.list(objeto_ids)
+  )
+  configs <- .df_names_lower(configs)
+  if ("rn" %in% names(configs)) configs$rn <- NULL
+
+  if (!nrow(configs)) {
+    configs$componentes <- vector("list", 0L)
+    return(configs)
+  }
+
+  componentes <- .load_componentes_by_config_ids(con, configs$cd_id_obj_conf)
+  comp_by_cfg <- if (nrow(componentes)) {
+    split(componentes, as.character(componentes$cd_id_obj_conf))
+  } else {
+    list()
+  }
+  empty_comp <- componentes[0, , drop = FALSE]
+
+  configs$componentes <- purrr::map(
+    configs$cd_id_obj_conf,
+    function(id) {
+      out <- comp_by_cfg[[as.character(id)]]
+      if (is.null(out)) empty_comp else out
+    }
+  )
+
+  configs
+}
 
 #' @export
 checkifExistNameObjeto <- function(con, name_objeto) {
@@ -203,11 +485,38 @@ updateObjeto <- function(con, obj) {
 }
 
 #' @export
-selectAllObjetos <- function(con, fg_ativo = c(TRUE, FALSE)) {
-  fg_ativo <- as.logical(fg_ativo)
-  ph <- .in_placeholders(length(fg_ativo), start = 1L)
+selectAllObjetos <- function(con, fg_ativo = c(TRUE, FALSE), ...) {
+  dots <- list(...)
+  if (!is.null(dots$fg.ativo)) fg_ativo <- dots$fg.ativo
 
-  sql <- sprintf("
+  fg_ativo <- unique(as.logical(fg_ativo))
+  fg_ativo <- fg_ativo[!is.na(fg_ativo)]
+
+  if (!length(fg_ativo)) {
+    objetos <- DBI::dbGetQuery(
+      con,
+      "
+      select
+        o.*,
+        s.name_setor,
+        op.name_objeto_tipo
+      from objeto o
+      left join setor s
+        on s.cd_id_setor = o.cd_id_setor
+      left join objeto_tipo op
+        on op.cd_id_objeto_tipo = o.cd_id_objeto_tipo
+      where 1 = 0
+      order by o.cd_id_objeto
+      "
+    )
+    objetos <- .df_names_lower(objetos)
+    objetos$config <- vector("list", 0L)
+    return(objetos)
+  }
+
+  ph <- .in_placeholders(length(fg_ativo), start = 1L)
+  sql <- sprintf(
+    "
     select
       o.*,
       s.name_setor,
@@ -219,14 +528,33 @@ selectAllObjetos <- function(con, fg_ativo = c(TRUE, FALSE)) {
       on op.cd_id_objeto_tipo = o.cd_id_objeto_tipo
     where o.fg_ativo in (%s)
     order by o.cd_id_objeto
-  ", ph)
+    ",
+    ph
+  )
 
-  objetos <- DBI$dbGetQuery(con, sql, params = as.list(as.integer(fg_ativo)))
+  objetos <- DBI::dbGetQuery(con, sql, params = as.list(as.integer(fg_ativo)))
   objetos <- .df_names_lower(objetos)
 
-  objetos$config <- purrr::map(seq_len(nrow(objetos)), function(i) {
-    selectObjetoConfig(con, objetos[i, , drop = FALSE])
-  })
+  if (!nrow(objetos)) {
+    objetos$config <- vector("list", 0L)
+    return(objetos)
+  }
+
+  configs <- .load_latest_objeto_configs(con, objetos$cd_id_objeto)
+  cfg_by_obj <- if (nrow(configs)) {
+    split(configs, as.character(configs$cd_id_objeto))
+  } else {
+    list()
+  }
+  empty_cfg <- configs[0, , drop = FALSE]
+
+  objetos$config <- purrr::map(
+    objetos$cd_id_objeto,
+    function(id) {
+      out <- cfg_by_obj[[as.character(id)]]
+      if (is.null(out)) empty_cfg else out
+    }
+  )
 
   objetos
 }
@@ -235,60 +563,22 @@ selectAllObjetos <- function(con, fg_ativo = c(TRUE, FALSE)) {
 selectObjetoConfig <- function(con, obj) {
   obj <- .df_names_lower(obj)
   stopifnot(!is.null(obj$cd_id_objeto))
+  configs <- .load_latest_objeto_configs(con, obj$cd_id_objeto)
+  if (!nrow(configs)) return(configs)
 
-  configs <- DBI$dbGetQuery(
-    con,
-    "select *
-       from objeto_config
-      where cd_id_objeto = $1
-      order by dt_hr_local desc
-      limit 1",
-    params = list(as.integer(obj$cd_id_objeto))
-  )
-  configs <- .df_names_lower(configs)
-
-  configs$componentes <- purrr::map(seq_len(nrow(configs)), function(i) {
-    selectAllComponentesByObjeto(con, configs[i, , drop = FALSE])
-  })
-
-  configs
+  out <- split(configs, as.character(configs$cd_id_objeto))[[as.character(as.integer(obj$cd_id_objeto[[1]]))]]
+  if (is.null(out)) configs[0, , drop = FALSE] else out
 }
 
 # (interno)
 selectAllComponentesByObjeto <- function(con, config) {
   config <- .df_names_lower(config)
   stopifnot(!is.null(config$cd_id_obj_conf))
+  componentes <- .load_componentes_by_config_ids(con, config$cd_id_obj_conf)
+  if (!nrow(componentes)) return(componentes)
 
-  componentes <- DBI$dbGetQuery(
-    con,
-    "select *
-       from componente
-      where cd_id_obj_conf = $1
-      order by cd_id_componente",
-    params = list(as.integer(config$cd_id_obj_conf))
-  )
-  componentes <- .df_names_lower(componentes)
-
-  # poligno_componente: vem texto/json -> vira lista
-  if (nrow(componentes)) {
-    componentes <- dplyr::mutate(
-      componentes,
-      poligno_componente = purrr::map(poligno_componente, ~ jsonlite::fromJSON(.x))
-    )
-  } else {
-    componentes$poligno_componente <- list()
-  }
-
-  # estrutura e cameras
-  componentes$estrutura <- purrr::map(seq_len(nrow(componentes)), function(i) {
-    selectAllEstruturaByIdComponente(con, componentes$cd_id_estrutura[i])
-  })
-
-  componentes$cameras <- purrr::map(seq_len(nrow(componentes)), function(i) {
-    selectCameraByComponente(con, componentes[i, , drop = FALSE])
-  })
-
-  componentes
+  out <- split(componentes, as.character(componentes$cd_id_obj_conf))[[as.character(as.integer(config$cd_id_obj_conf[[1]]))]]
+  if (is.null(out)) componentes[0, , drop = FALSE] else out
 }
 
 #' @export

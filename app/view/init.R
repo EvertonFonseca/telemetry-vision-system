@@ -26,11 +26,6 @@ box::use(
 )
 
 # ===============================================================
-# DB pool: inicializa 1x por processo
-# ===============================================================
-dbp$init()
-
-# ===============================================================
 # UI
 # ===============================================================
 #' @export
@@ -208,13 +203,12 @@ server <- function(id) {
     renderMainbody <- reactiveVal(NULL)
     .init_reports_path()
     ns <- NS(id)
-    dbp$session_register(session)
-    
     output$mainbody <- shiny::renderUI({
       renderMainbody()
     })
     
     login$uiLogin(ns,session,input,output,function(user){
+      dbp$session_register(session)
       
       #newProgressLoader(session)
       #renderMainbody(dash$ui(ns))

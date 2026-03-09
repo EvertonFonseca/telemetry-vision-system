@@ -26,15 +26,7 @@
 #   if (cores <= 4L) 1L else 2L
 # }
 
-Sys.setenv(
-  #TVS_MAX_ASYNC = as.character(.tvs_auto_max_async()),
-  #TVS_MAX_VCLIP = as.character(.tvs_auto_max_vclip()),
-  DB_NAME = "analytia_db",
-  DB_HOST = "127.0.0.1", #127.0.0.1
-  DB_PORT = 5434,
-  DB_USER = "analytia",
-  DB_PASS = "lytIA#2026!Elite@" #lytIA#2026!Elite@
-)
+# DB_* agora eh definido no modal de login (app/view/login.R).
 
 # # IMPORTANT: crie o app ANTES do with()
 app <- rhino::app()  # (segue a recomendação da doc do mirai) :contentReference[oaicite:3]{index=3}
@@ -89,4 +81,3 @@ app <- rhino::app()  # (segue a recomendação da doc do mirai) :contentReferenc
 # })
 
 shiny::runApp(app, host = "127.0.0.1", port = 5000)
-

@@ -394,7 +394,10 @@ con <- DBI::dbConnect(
 # ============================================================
 query <- "
 WITH oc_latest AS (
-  SELECT cd_id_obj_conf, cd_id_objeto
+  SELECT
+    x.cd_id_obj_conf,
+    x.cd_id_objeto,
+    o.name_objeto
   FROM (
     SELECT
       oc.*,
@@ -404,11 +407,14 @@ WITH oc_latest AS (
       ) AS rn
     FROM objeto_config oc
   ) x
-  WHERE rn = 1
+  LEFT JOIN objeto o
+    ON o.cd_id_objeto = x.cd_id_objeto
+  WHERE x.rn = 1
 ),
 comps_base AS (
   SELECT
     ol.cd_id_objeto,
+    ol.name_objeto,
     c.cd_id_camera,
     c.cd_id_componente,
     c.name_componente,
@@ -423,8 +429,8 @@ comps_base AS (
 cams AS (
   SELECT
     cb.cd_id_objeto,
+    MAX(cb.name_objeto) AS name_objeto,
 
-    -- ✅ csv de cameras: DISTINCT + ORDER BY (via subselect)
     COALESCE((
       SELECT string_agg(d.cd_id_camera::text, ',' ORDER BY d.cd_id_camera)
       FROM (
@@ -435,7 +441,6 @@ cams AS (
       ) d
     ), '') AS cd_id_cameras,
 
-    -- ✅ json array de componentes
     COALESCE(
       jsonb_agg(
         jsonb_build_object(
@@ -455,6 +460,7 @@ cams AS (
 
 SELECT
   p.*,
+  cams.name_objeto,
   COALESCE(cams.cd_id_cameras, '') AS cd_id_cameras,
   COALESCE(cams.polignos_componentes, '[]'::jsonb) AS polignos_componentes
 FROM pacote_ia p
@@ -553,4 +559,17 @@ dataset <- frames_u |>
   mutate(POLIGNOS_COMPONENTES = as.character(toupper(POLIGNOS_COMPONENTES)))
 
 
-saveRDS(dataset,paste0("train/dataset_pintura_2.rds"))
+grupos <- dataset |> 
+  group_by(CD_ID_OBJETO) |> 
+  nest() |> 
+  ungroup()
+
+for(i in seq_along(grupos$CD_ID_OBJETO)){
+  pacote            <- grupos[i,]
+  datas             <- pacote |> unnest(data)
+  nome              <- tolower(str_replace_all(unique(datas$NAME_OBJETO)," ","_"))
+  datas$NAME_OBJETO <- NULL
+  saveRDS(datas,paste0("train/dataset_",nome,".rds"))
+}
+
+

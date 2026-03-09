@@ -83,6 +83,8 @@ dispose <- function(session, key = "setor_private") {
 }
 
 initMap <- FALSE
+MAP_GROUP_COMPONENT_POLYGON <- "poligonos_componentes"
+MAP_GROUP_COMPONENT_NAMES   <- "componentes_nomes"
 
 #' @export
  uiNewObjeto <- function(ns,input,output,session,callback){
@@ -107,6 +109,7 @@ initMap <- FALSE
   componenteReactive <- reactiveVal(NULL)
   estruturas         <- selectAllEstrutura(dbp$get_pool())
   updateObjDynamic   <- reactiveVal(FALSE)
+  visiveisPrevPorCamera <- reactiveVal(list())
    
    if(nrow(cameras) == 0){
     obs$destroy()
@@ -214,6 +217,42 @@ initMap <- FALSE
        
         obs2$clear()
         
+        update_visible_componentes <- function() {
+          if (tipoObjeto$cd_id_objeto_tipo == 2L) return(invisible(NULL))
+          
+          if (is.null(frame_data$componente) || is.null(frame_data$componente[[1]])) {
+            updateCheckboxGroupInput(session, "checkComponentesVisiveis", choices = character(0), selected = character(0))
+            return(invisible(NULL))
+          }
+          
+          camera <- cameras |> filter(name_camera == input$comboCameras)
+          if (nrow(camera) != 1L) return(invisible(NULL))
+          camera_key <- as.character(camera$cd_id_camera)
+          
+          info_choices <- .component_visibility_choices(frame_data$componente[[1]], camera$cd_id_camera)
+          prev_map <- isolate(visiveisPrevPorCamera())
+          prev_ids <- prev_map[[camera_key]]
+          if (is.null(prev_ids)) prev_ids <- character(0)
+          selected_ids <- isolate(input$checkComponentesVisiveis)
+          if (is.null(selected_ids)) {
+            selected_ids <- info_choices$ids
+          } else {
+            selected_ids <- intersect(as.character(selected_ids), info_choices$ids)
+            ids_novos <- setdiff(info_choices$ids, prev_ids)
+            selected_ids <- unique(c(selected_ids, ids_novos))
+          }
+          
+          updateCheckboxGroupInput(
+            session,
+            "checkComponentesVisiveis",
+            choices = info_choices$choices,
+            selected = selected_ids
+          )
+          
+          prev_map[[camera_key]] <- info_choices$ids
+          visiveisPrevPorCamera(prev_map)
+        }
+        
         # -------------------------------------------------------------------
         # BLOQUEAR / LIBERAR CLIQUES durante DELETE e EDIT
         # -------------------------------------------------------------------
@@ -256,33 +295,39 @@ initMap <- FALSE
           lat    <- vapply(coords, function(x) x[[2]], numeric(1))
           poly   <- .drop_dup_last(tibble::tibble(x = lng, y = lat))
           
-          if (is.null(frame_data$componente)) {
-            frame_data$componente[[1]] <<- tibble::tibble(
-              cd_id_componente    = feat$properties$`_leaflet_id`,
-              name_componente     = "",
-              cd_id_camera        = cameraTarget$cd_id_camera,
-              poligno_componente  = list(poly),
-              estrutura           = list(NULL)
-            )
-          } else {
-            frame_data$componente[[1]] <<- bind_rows(
-              frame_data$componente[[1]],
-              tibble::tibble(
-                cd_id_componente    = feat$properties$`_leaflet_id`,
-                name_componente     = "",
-                cd_id_camera        = cameraTarget$cd_id_camera,
-                poligno_componente  = list(poly),
-                estrutura           = list(NULL)
-              )
-            )
+          componentes_atual <- NULL
+          if (!is.null(frame_data$componente)) {
+            componentes_atual <- frame_data$componente[[1]]
           }
+          componentes_atual <- .ensure_component_colors(componentes_atual)
+          used_colors <- if (is.null(componentes_atual)) character(0) else componentes_atual$color_componente
+
+          row_new <- tibble::tibble(
+            cd_id_componente    = feat$properties$`_leaflet_id`,
+            name_componente     = "",
+            cd_id_camera        = cameraTarget$cd_id_camera,
+            poligno_componente  = list(poly),
+            estrutura           = list(NULL),
+            color_componente    = .next_component_color(used_colors)
+          )
+
+          if (is.null(componentes_atual) || nrow(componentes_atual) == 0L) {
+            frame_data$componente[[1]] <<- row_new
+          } else {
+            frame_data$componente[[1]] <<- bind_rows(componentes_atual, row_new)
+          }
+          update_visible_componentes()
         
           #objetos dinamicos apenas 1 compomentes
           if(tipoObjeto$cd_id_objeto_tipo == 2L && nrow(frame_data$componente[[1]]) == 1L){
             camera          <- cameras |> filter(name_camera == input$comboCameras)
             componentes     <- frame_data$componente[[1]]   
             updateObjDynamic(TRUE)
-            output$mapFrame <- renderLeaflet({uiMapa(ns,camera,cameras,frame_data,componentes = componentes,is_dynamic = TRUE)})
+            output$mapFrame <- renderLeaflet({uiMapa(ns,camera,cameras,frame_data,componentes = componentes,componentes_visiveis = isolate(input$checkComponentesVisiveis),is_dynamic = TRUE)})
+          }else{
+            camera          <- cameras |> filter(name_camera == input$comboCameras)
+            componentes     <- frame_data$componente[[1]]
+            output$mapFrame <- renderLeaflet({uiMapa(ns,camera,cameras,frame_data,componentes = componentes,componentes_visiveis = isolate(input$checkComponentesVisiveis),is_dynamic = FALSE)})
           }
         }, ignoreInit = TRUE))
         
@@ -318,7 +363,14 @@ initMap <- FALSE
             df$poligno_componente[[idx]] <- poly
           }
           
+          df <- .ensure_component_colors(df)
           frame_data$componente[[1]] <<- df
+          update_visible_componentes()
+
+          camera          <- cameras |> filter(name_camera == input$comboCameras)
+          componentes     <- frame_data$componente[[1]]
+          is_dynamic      <- updateObjDynamic()
+          output$mapFrame <- renderLeaflet({uiMapa(ns,camera,cameras,frame_data,componentes = componentes,componentes_visiveis = isolate(input$checkComponentesVisiveis),is_dynamic = is_dynamic)})
         }, ignoreInit = TRUE))
         
         # -------------------------------------------------------------------
@@ -341,14 +393,20 @@ initMap <- FALSE
             df <- filter(df, .data$cd_id_componente != id_)
           }
           
-          frame_data$componente[[1]] <<- df
+          frame_data$componente[[1]] <<- .ensure_component_colors(df)
+          update_visible_componentes()
+
+          camera          <- cameras |> filter(name_camera == input$comboCameras)
+          componentes     <- frame_data$componente[[1]]
+          is_dynamic      <- updateObjDynamic()
+          output$mapFrame <- renderLeaflet({uiMapa(ns,camera,cameras,frame_data,componentes = componentes,componentes_visiveis = isolate(input$checkComponentesVisiveis),is_dynamic = is_dynamic)})
           
           if(nrow(df) == 0){
             if(isolate(updateObjDynamic())){
               camera          <- cameras |> filter(name_camera == input$comboCameras)
               componentes     <- frame_data$componente[[1]]   
               updateObjDynamic(FALSE)
-              output$mapFrame <- renderLeaflet({uiMapa(ns,camera,cameras,frame_data,componentes = componentes,is_dynamic = FALSE)})
+              output$mapFrame <- renderLeaflet({uiMapa(ns,camera,cameras,frame_data,componentes = componentes,componentes_visiveis = isolate(input$checkComponentesVisiveis),is_dynamic = FALSE)})
             }
           }
 
@@ -357,9 +415,9 @@ initMap <- FALSE
         # -------------------------------------------------------------------
         # CLICKS EM SHAPES (somente se NÃO estiver editando nem deletando)
         # -------------------------------------------------------------------
-        obs2$add(observeEvent(input$mapFrame_shape_draw_click, {
+        obs2$add(observeEvent(input$mapFrame_shape_poligonos_componentes_click, {
           req(sliderPosition() == 2L, !isTRUE(deleting()), !isTRUE(editing()))
-          ev <- input$mapFrame_shape_draw_click
+          ev <- input$mapFrame_shape_poligonos_componentes_click
           if (is.null(frame_data$componente) || is.null(frame_data$componente[[1]])) return()
           
           if(isolate(updateObjDynamic())) return()
@@ -388,13 +446,25 @@ initMap <- FALSE
         }, ignoreNULL = TRUE, ignoreInit = TRUE))
 
         obs2$add(observeEvent(input$comboCameras,{
+          update_visible_componentes()
           camera          <- cameras |> filter(name_camera == input$comboCameras)
           componentes     <- frame_data$componente[[1]]   
           is_dynamic      <- updateObjDynamic()
-          output$mapFrame <- renderLeaflet({uiMapa(ns,camera,cameras,frame_data,componentes = componentes,is_dynamic = is_dynamic)})
+          output$mapFrame <- renderLeaflet({uiMapa(ns,camera,cameras,frame_data,componentes = componentes,componentes_visiveis = isolate(input$checkComponentesVisiveis),is_dynamic = is_dynamic)})
         },ignoreNULL = TRUE))
+        
+        obs2$add(observeEvent(input$checkComponentesVisiveis,{
+          req(sliderPosition() == 2L)
+          if(tipoObjeto$cd_id_objeto_tipo == 2L) return()
+          camera <- cameras |> filter(name_camera == input$comboCameras)
+          if (nrow(camera) != 1L) return()
+          componentes <- frame_data$componente[[1]]
+          is_dynamic  <- updateObjDynamic()
+          output$mapFrame <- renderLeaflet({uiMapa(ns,camera,cameras,frame_data,componentes = componentes,componentes_visiveis = isolate(input$checkComponentesVisiveis),is_dynamic = is_dynamic)})
+        },ignoreNULL = FALSE, ignoreInit = TRUE))
 
         estruturas_dinamicos <- NULL
+        visibilidade_estaticos <- NULL
         if(tipoObjeto$cd_id_objeto_tipo == 2L){
 
           changetextPlaceHolder()
@@ -416,6 +486,13 @@ initMap <- FALSE
               choiceNames  = estruturas$name_estrutura,
               choiceValues = estruturas$name_estrutura
             ) |> tagAppendAttributes(style = ';height: auto; width: 100%;'))
+        }else{
+          visibilidade_estaticos <- checkboxGroupInput(
+            ns("checkComponentesVisiveis"),
+            label = "Mostrar/Ocultar poligonos por componente",
+            choices = NULL,
+            selected = NULL
+          )
         }
         
         tagList(
@@ -425,6 +502,7 @@ initMap <- FALSE
             closeAfterSelect = TRUE
           )),
           leafletOutput(ns("mapFrame"), height = "512px", width = "100%"),
+          visibilidade_estaticos,
           estruturas_dinamicos,
           br()
         )
@@ -488,10 +566,20 @@ initMap <- FALSE
             
             camera      <- cameras |> filter(name_camera == isolate(input$comboCameras))
             componentes <- frame_data$componente[[1]] 
+            if(!isTRUE(isolate(updateObjDynamic())) && nrow(camera) == 1L){
+              info_choices <- .component_visibility_choices(componentes, camera$cd_id_camera)
+              selected_ids <- isolate(input$checkComponentesVisiveis)
+              if (is.null(selected_ids)) {
+                selected_ids <- info_choices$ids
+              } else {
+                selected_ids <- intersect(as.character(selected_ids), info_choices$ids)
+              }
+              updateCheckboxGroupInput(session, "checkComponentesVisiveis", choices = info_choices$choices, selected = selected_ids)
+            }
             #update mapa
             #proxy_update_componentes(map_id = ns("mapFrame"),ns = ns, camera = camera,componentes = componentes)  
             #proxy_update_componentes(session,ns,ns("mapFrame"),camera, componentes)           
-            output$mapFrame <- renderLeaflet({uiMapa(ns,camera,cameras,frame_data,componentes = componentes)})
+            output$mapFrame <- renderLeaflet({uiMapa(ns,camera,cameras,frame_data,componentes = componentes,componentes_visiveis = isolate(input$checkComponentesVisiveis))})
             componenteReactive(NULL)
           }else{
             if(!is.null(frame_data)) unlink(frame_data$img_path)
@@ -591,7 +679,7 @@ initMap <- FALSE
             obj$fg_ativo      <- as.integer(ativoObjeto)
             obj$cd_id_setor   <- setor$cd_id_setor
             obj$cd_id_objeto_tipo <- tipoObjeto$cd_id_objeto_tipo
-            obj$timeline_context_sec <- isolate(input$sliderTimeContexto)
+            obj$timeline_context_sec <- 5L #isolate(input$sliderTimeContexto)
             id_obj             <- db$nextSequenciaID(conn, "objeto", id_col = "cd_id_objeto", schema = "public")
             obj$cd_id_objeto   <- insertNewObjeto(conn,id_obj,obj)
             
@@ -687,6 +775,7 @@ uiEditObjeto <- function(ns,input,output,session,callback){
   componenteReactive <- reactiveVal(NULL)
   estruturas         <- selectAllEstrutura(dbp$get_pool())  
   updateObjDynamic   <- reactiveVal(FALSE)
+  visiveisPrevPorCamera <- reactiveVal(list())
   
   if(nrow(cameras) == 0){
     obs$destroy()
@@ -901,6 +990,42 @@ uiEditObjeto <- function(ns,input,output,session,callback){
       
       obs2$clear()
       
+      update_visible_componentes <- function() {
+        if (tipoObjeto$cd_id_objeto_tipo == 2L) return(invisible(NULL))
+        
+        if (is.null(frame_data$componente) || is.null(frame_data$componente[[1]])) {
+          updateCheckboxGroupInput(session, "checkComponentesVisiveis", choices = character(0), selected = character(0))
+          return(invisible(NULL))
+        }
+        
+        camera <- cameras |> filter(name_camera == input$comboCameras)
+        if (nrow(camera) != 1L) return(invisible(NULL))
+        camera_key <- as.character(camera$cd_id_camera)
+        
+        info_choices <- .component_visibility_choices(frame_data$componente[[1]], camera$cd_id_camera)
+        prev_map <- isolate(visiveisPrevPorCamera())
+        prev_ids <- prev_map[[camera_key]]
+        if (is.null(prev_ids)) prev_ids <- character(0)
+        selected_ids <- isolate(input$checkComponentesVisiveis)
+        if (is.null(selected_ids)) {
+          selected_ids <- info_choices$ids
+        } else {
+          selected_ids <- intersect(as.character(selected_ids), info_choices$ids)
+          ids_novos <- setdiff(info_choices$ids, prev_ids)
+          selected_ids <- unique(c(selected_ids, ids_novos))
+        }
+        
+        updateCheckboxGroupInput(
+          session,
+          "checkComponentesVisiveis",
+          choices = info_choices$choices,
+          selected = selected_ids
+        )
+        
+        prev_map[[camera_key]] <- info_choices$ids
+        visiveisPrevPorCamera(prev_map)
+      }
+      
       # --- novo polígono ---
       obs2$add(observeEvent(input$mapFrame_draw_new_feature, {
         feat <- input$mapFrame_draw_new_feature
@@ -914,25 +1039,38 @@ uiEditObjeto <- function(ns,input,output,session,callback){
         lat    <- vapply(coords, function(x) x[[2]], numeric(1))
         poly   <- .drop_dup_last(tibble::tibble(x = lng, y = lat))  # CHANGE: helper
         
+        componentes_atual <- NULL
+        if (!is.null(frame_data$componente)) {
+          componentes_atual <- frame_data$componente[[1]]
+        }
+        componentes_atual <- .ensure_component_colors(componentes_atual)
+        used_colors <- if (is.null(componentes_atual)) character(0) else componentes_atual$color_componente
+
         row_new <- tibble::tibble(
           cd_id_componente    = feat$properties$`_leaflet_id`,
           name_componente     = "",
           cd_id_camera        = cameraTarget$cd_id_camera,
           poligno_componente  = list(poly),
-          estrutura           = list(NULL)
+          estrutura           = list(NULL),
+          color_componente    = .next_component_color(used_colors)
         )
         
-        if (is.null(frame_data$componente)) {
+        if (is.null(componentes_atual) || nrow(componentes_atual) == 0L) {
           frame_data$componente[[1]] <<- row_new
         } else {
-          frame_data$componente[[1]] <<- bind_rows(frame_data$componente[[1]], row_new)  # CHANGE: bind_rows()
+          frame_data$componente[[1]] <<- bind_rows(componentes_atual, row_new)
         }
+        update_visible_componentes()
         #objetos dinamicos apenas 1 compomentes
         if(tipoObjeto$cd_id_objeto_tipo == 2L && nrow(frame_data$componente[[1]]) == 1L){
           camera          <- cameras |> filter(name_camera == input$comboCameras)
           componentes     <- frame_data$componente[[1]]   
           updateObjDynamic(TRUE)
-          output$mapFrame <- renderLeaflet({uiMapa(ns,camera,cameras,frame_data,componentes = componentes,is_dynamic = TRUE)})
+          output$mapFrame <- renderLeaflet({uiMapa(ns,camera,cameras,frame_data,componentes = componentes,componentes_visiveis = isolate(input$checkComponentesVisiveis),is_dynamic = TRUE)})
+        }else{
+          camera          <- cameras |> filter(name_camera == input$comboCameras)
+          componentes     <- frame_data$componente[[1]]
+          output$mapFrame <- renderLeaflet({uiMapa(ns,camera,cameras,frame_data,componentes = componentes,componentes_visiveis = isolate(input$checkComponentesVisiveis),is_dynamic = FALSE)})
         }
 
       }, ignoreInit = TRUE))
@@ -962,7 +1100,14 @@ uiEditObjeto <- function(ns,input,output,session,callback){
           } # se não achar, ignora silenciosamente
         }
         
+        df <- .ensure_component_colors(df)
         frame_data$componente[[1]] <<- df
+        update_visible_componentes()
+
+        camera          <- cameras |> filter(name_camera == input$comboCameras)
+        componentes     <- frame_data$componente[[1]]
+        is_dynamic      <- updateObjDynamic()
+        output$mapFrame <- renderLeaflet({uiMapa(ns,camera,cameras,frame_data,componentes = componentes,componentes_visiveis = isolate(input$checkComponentesVisiveis),is_dynamic = is_dynamic)})
       }, ignoreInit = TRUE))
       
       # --- deleções ---
@@ -980,22 +1125,28 @@ uiEditObjeto <- function(ns,input,output,session,callback){
           # CHANGE: filtro seguro (evita [-which()] quando não encontra)
           df <- filter(df, .data$cd_id_componente != id_)
         }
-        frame_data$componente[[1]] <<- df
+        frame_data$componente[[1]] <<- .ensure_component_colors(df)
+        update_visible_componentes()
+
+        camera          <- cameras |> filter(name_camera == input$comboCameras)
+        componentes     <- frame_data$componente[[1]]
+        is_dynamic      <- updateObjDynamic()
+        output$mapFrame <- renderLeaflet({uiMapa(ns,camera,cameras,frame_data,componentes = componentes,componentes_visiveis = isolate(input$checkComponentesVisiveis),is_dynamic = is_dynamic)})
         
         if(nrow(df) == 0){
           if(isolate(updateObjDynamic())){
             camera          <- cameras |> filter(name_camera == input$comboCameras)
             componentes     <- frame_data$componente[[1]]   
             updateObjDynamic(FALSE)
-            output$mapFrame <- renderLeaflet({uiMapa(ns,camera,cameras,frame_data,componentes = componentes,is_dynamic = FALSE)})
+            output$mapFrame <- renderLeaflet({uiMapa(ns,camera,cameras,frame_data,componentes = componentes,componentes_visiveis = isolate(input$checkComponentesVisiveis),is_dynamic = FALSE)})
           }
         }
       }, ignoreInit = TRUE))
       
       # --- clique nos shapes (mantidos exatamente seus inputs) ---
-      obs2$add(observeEvent(input$mapFrame_shape_draw_click, {
+      obs2$add(observeEvent(input$mapFrame_shape_poligonos_componentes_click, {
         req(!deleting())  # mantido
-        ev <- input$mapFrame_shape_draw_click
+        ev <- input$mapFrame_shape_poligonos_componentes_click
 
         if(isolate(updateObjDynamic())) return()
         
@@ -1038,13 +1189,25 @@ uiEditObjeto <- function(ns,input,output,session,callback){
       }, ignoreInit = TRUE))
       
       obs2$add(observeEvent(input$comboCameras,{
+        update_visible_componentes()
         camera          <- cameras |> filter(name_camera == input$comboCameras)
         componentes     <- frame_data$componente[[1]]   
         is_dynamic      <- updateObjDynamic()
-        output$mapFrame <- renderLeaflet({uiMapa(ns,camera,cameras,frame_data,componentes = componentes,is_dynamic = is_dynamic)})
+        output$mapFrame <- renderLeaflet({uiMapa(ns,camera,cameras,frame_data,componentes = componentes,componentes_visiveis = isolate(input$checkComponentesVisiveis),is_dynamic = is_dynamic)})
       },ignoreNULL = TRUE))
       
+      obs2$add(observeEvent(input$checkComponentesVisiveis,{
+        req(sliderPosition() == 3L)
+        if(tipoObjeto$cd_id_objeto_tipo == 2L) return()
+        camera <- cameras |> filter(name_camera == input$comboCameras)
+        if (nrow(camera) != 1L) return()
+        componentes <- frame_data$componente[[1]]
+        is_dynamic  <- updateObjDynamic()
+        output$mapFrame <- renderLeaflet({uiMapa(ns,camera,cameras,frame_data,componentes = componentes,componentes_visiveis = isolate(input$checkComponentesVisiveis),is_dynamic = is_dynamic)})
+      },ignoreNULL = FALSE, ignoreInit = TRUE))
+      
       estruturas_dinamicos <- NULL
+      visibilidade_estaticos <- NULL
       if(tipoObjeto$cd_id_objeto_tipo == 2L){
 
         componente     <- objetoSelect$config[[1]]$componentes[[1]]
@@ -1070,6 +1233,13 @@ uiEditObjeto <- function(ns,input,output,session,callback){
             choiceNames  = estruturas$name_estrutura,
             choiceValues = estruturas$name_estrutura
           ) |> tagAppendAttributes(style = ';height: auto; width: 100%;'))
+        }else{
+          visibilidade_estaticos <- checkboxGroupInput(
+            ns("checkComponentesVisiveis"),
+            label = "Mostrar/Ocultar poligonos por componente",
+            choices = NULL,
+            selected = NULL
+          )
         }
         
         tagList(
@@ -1079,6 +1249,7 @@ uiEditObjeto <- function(ns,input,output,session,callback){
             closeAfterSelect = TRUE
           )),
           leafletOutput(ns("mapFrame"), height = "512px", width = "100%"),
+          visibilidade_estaticos,
           estruturas_dinamicos,
           br()
         )
@@ -1189,10 +1360,20 @@ uiEditObjeto <- function(ns,input,output,session,callback){
             
             camera      <- cameras |> filter(name_camera == isolate(input$comboCameras))
             componentes <- frame_data$componente[[1]] 
+            if(!isTRUE(isolate(updateObjDynamic())) && nrow(camera) == 1L){
+              info_choices <- .component_visibility_choices(componentes, camera$cd_id_camera)
+              selected_ids <- isolate(input$checkComponentesVisiveis)
+              if (is.null(selected_ids)) {
+                selected_ids <- info_choices$ids
+              } else {
+                selected_ids <- intersect(as.character(selected_ids), info_choices$ids)
+              }
+              updateCheckboxGroupInput(session, "checkComponentesVisiveis", choices = info_choices$choices, selected = selected_ids)
+            }
             #update mapa
             #proxy_update_componentes(map_id = ns("mapFrame"),ns = ns, camera = camera,componentes = componentes)  
             #proxy_update_componentes(session,ns,ns("mapFrame"),camera, componentes)           
-            output$mapFrame <- renderLeaflet({uiMapa(ns,camera,cameras,frame_data,componentes = componentes)})
+            output$mapFrame <- renderLeaflet({uiMapa(ns,camera,cameras,frame_data,componentes = componentes,componentes_visiveis = isolate(input$checkComponentesVisiveis))})
             componenteReactive(NULL)
           }else{
             sliderPosition(isolate(sliderPosition()) - 1L)
@@ -1290,7 +1471,7 @@ uiEditObjeto <- function(ns,input,output,session,callback){
             obj$name_objeto          <- nomeObjeto
             obj$fg_ativo             <- as.integer(ativoObjeto)
             obj$cd_id_setor          <- setor$cd_id_setor
-            obj$timeline_context_sec <- isolate(input$sliderTimeContexto)
+            obj$timeline_context_sec <- 5L #isolate(input$sliderTimeContexto)
         
             db$updateTable(conn,"OBJETO",obj,"cd_id_objeto",objetoSelect$cd_id_objeto)
      
@@ -1355,8 +1536,8 @@ uiMain <- function(ns,
       div(
           inlineCSS(paste0("#",ns("textNameObjeto")," {text-transform: uppercase;}")),
           fluidRow(
-           column(6,selectizeInput(ns('comboSetor'),label = 'Setor',choices = setores$name_setor,selected = valueComboSetor)),
-           column(6,sliderInput(ns('sliderTimeContexto'),label = 'Tempo Contexto Segundo',min = 1,step = 1,max = 10,round = TRUE,value = valueTempoContexto))
+           column(12,selectizeInput(ns('comboSetor'),label = 'Setor',choices = setores$name_setor,selected = valueComboSetor))
+           #column(6,sliderInput(ns('sliderTimeContexto'),label = 'Tempo Contexto Segundo',min = 1,step = 1,max = 10,round = TRUE,value = valueTempoContexto))
           ),
           splitLayout(
             cellWidths = c("10%", "60%","30%"),
@@ -1393,7 +1574,108 @@ uiMain <- function(ns,
 }
 
 
-uiMapa <-function(ns,camera,cameras,frame_data,componentes = NULL,is_dynamic = FALSE){
+.component_name_for_map <- function(name_componente, component_id) {
+  nm <- as.character(name_componente)[1]
+  if (length(nm) == 0 || is.na(nm) || stringi::stri_isempty(stringr::str_trim(nm))) {
+    return(paste0("COMP-", component_id))
+  }
+  nm
+}
+
+.next_component_color <- function(used_colors = character(0)) {
+  used <- unique(used_colors[!is.na(used_colors) & nzchar(used_colors)])
+  idx <- length(used) + 1L
+
+  repeat {
+    hue <- ((idx - 1L) * 137.508) %% 360
+    sat <- 0.78 - (((idx - 1L) %/% 360L) %% 3L) * 0.08
+    val <- 0.92 - (((idx - 1L) %/% (360L * 3L)) %% 3L) * 0.08
+    candidate <- grDevices::hsv(
+      h = hue / 360,
+      s = max(min(sat, 1), 0.55),
+      v = max(min(val, 1), 0.55)
+    )
+
+    if (!(candidate %in% used)) return(candidate)
+    idx <- idx + 1L
+  }
+}
+
+.ensure_component_colors <- function(componentes) {
+  if (is.null(componentes) || !is.data.frame(componentes)) return(componentes)
+  has_color_col <- "color_componente" %in% names(componentes)
+
+  if (nrow(componentes) == 0L) {
+    if (!has_color_col) {
+      componentes[["color_componente"]] <- character(0)
+    }
+    return(componentes)
+  }
+
+  if (!has_color_col) {
+    componentes[["color_componente"]] <- rep(NA_character_, nrow(componentes))
+  } else {
+    componentes[["color_componente"]] <- as.character(componentes[["color_componente"]])
+  }
+
+  used <- unique(componentes[["color_componente"]][!is.na(componentes[["color_componente"]]) & nzchar(componentes[["color_componente"]])])
+
+  for (i in seq_len(nrow(componentes))) {
+    cor <- componentes[["color_componente"]][[i]]
+    if (is.na(cor) || !nzchar(cor)) {
+      cor <- .next_component_color(used)
+      componentes[["color_componente"]][[i]] <- cor
+      used <- c(used, cor)
+    }
+  }
+
+  componentes
+}
+
+.polygon_center <- function(poly) {
+  if (is.null(poly) || nrow(poly) == 0L) return(NULL)
+  list(
+    lng = mean(poly$x, na.rm = TRUE),
+    lat = mean(poly$y, na.rm = TRUE)
+  )
+}
+
+.component_visibility_choices <- function(componentes, camera_id) {
+  if (is.null(componentes) || !is.data.frame(componentes) || nrow(componentes) == 0L) {
+    return(list(choices = character(0), ids = character(0)))
+  }
+
+  comps <- componentes |> filter(.data$cd_id_camera == camera_id)
+  if (nrow(comps) == 0L) {
+    return(list(choices = character(0), ids = character(0)))
+  }
+
+  ids <- as.character(comps$cd_id_componente)
+  labels <- vapply(
+    seq_len(nrow(comps)),
+    function(i) .component_name_for_map(comps$name_componente[[i]], comps$cd_id_componente[[i]]),
+    character(1)
+  )
+
+  list(
+    choices = stats::setNames(ids, labels),
+    ids = ids
+  )
+}
+
+.filter_componentes_visible <- function(componentes, camera_id, visible_ids = NULL) {
+  if (is.null(componentes) || !is.data.frame(componentes) || nrow(componentes) == 0L) return(componentes)
+  if (is.null(visible_ids)) return(componentes)
+
+  camera_chr <- as.character(camera_id)
+  ids_visiveis <- as.character(visible_ids)
+  keep <- as.character(componentes$cd_id_camera) != camera_chr |
+    as.character(componentes$cd_id_componente) %in% ids_visiveis
+
+  componentes[keep, , drop = FALSE]
+}
+
+uiMapa <-function(ns,camera,cameras,frame_data,componentes = NULL,is_dynamic = FALSE,componentes_visiveis = NULL){
 
   data     <- frame_data |> filter(id == camera$cd_id_camera)
   data_uri <- base64enc$dataURI(file = data$img_path, mime = "image/png")
@@ -1404,7 +1686,7 @@ uiMapa <-function(ns,camera,cameras,frame_data,componentes = NULL,is_dynamic = F
           zoomDelta = 0.25      # passo de zoom ao usar scroll
         )) |>
         addDrawToolbar(
-          targetGroup = "draw",
+          targetGroup = MAP_GROUP_COMPONENT_POLYGON,
           polylineOptions      = FALSE,
           circleMarkerOptions  = FALSE,
           markerOptions        = FALSE,
@@ -1476,6 +1758,8 @@ uiMapa <-function(ns,camera,cameras,frame_data,componentes = NULL,is_dynamic = F
         )
    
   if(!is.null(componentes)){
+    componentes <- .filter_componentes_visible(componentes, camera$cd_id_camera, componentes_visiveis)
+    componentes <- .ensure_component_colors(componentes)
 
     for(i in seq_len(nrow(componentes))){
 
@@ -1485,53 +1769,120 @@ uiMapa <-function(ns,camera,cameras,frame_data,componentes = NULL,is_dynamic = F
 
       poligno   <- comp$poligno_componente[[1]]
       estrutura <- comp$estrutura[[1]]
-      label     <- NULL
+      comp_nome <- .component_name_for_map(comp$name_componente, comp$cd_id_componente)
+      comp_cor  <- comp$color_componente
 
-      if(!stringi$stri_isempty(comp$name_componente)){
-         label <-  HTML(paste0("<strong>COMPONENTE:</strong> ", comp$name_componente, "<br><strong>estrutura:</strong> ", estrutura$name_estrutura))
+      estrutura_nome <- ""
+      if (!is.null(estrutura) && nrow(estrutura) > 0 && !is.null(estrutura$name_estrutura)) {
+        estrutura_nome <- paste(unique(estrutura$name_estrutura), collapse = ", ")
       }
 
+      label <- HTML(
+        paste0(
+          "<strong>COMPONENTE:</strong> ", comp_nome,
+          "<br><strong>estrutura:</strong> ", estrutura_nome
+        )
+      )
+
       mapa <- mapa |> addPolygons(
-                           group   = "draw",
-                           lng = poligno$x,
-                           lat = poligno$y,
-                           layerId = comp$cd_id_componente,
-                           weight  = 2,
-                           fillOpacity = 0.2,
-                           label = label
-                          )
+        group       = MAP_GROUP_COMPONENT_POLYGON,
+        lng         = poligno$x,
+        lat         = poligno$y,
+        layerId     = comp$cd_id_componente,
+        weight      = 2,
+        color       = comp_cor,
+        fillColor   = comp_cor,
+        fillOpacity = 0.2,
+        label       = label
+      )
+
+      centro <- .polygon_center(poligno)
+      if (!is.null(centro)) {
+        mapa <- mapa |>
+          addLabelOnlyMarkers(
+            lng = centro$lng,
+            lat = centro$lat,
+            label = comp_nome,
+            group = MAP_GROUP_COMPONENT_NAMES,
+            labelOptions = labelOptions(
+              noHide = TRUE,
+              direction = "center",
+              textOnly = TRUE,
+              style = list(
+                "font-size" = "12px",
+                "font-weight" = "700",
+                "color" = comp_cor,
+                "text-shadow" = "0 0 3px #FFFFFF, 0 0 6px #FFFFFF"
+              )
+            )
+          )
+      }
     }
   }
+  mapa <- mapa |>
+    addLayersControl(
+      overlayGroups = c(MAP_GROUP_COMPONENT_POLYGON, MAP_GROUP_COMPONENT_NAMES),
+      options = layersControlOptions(collapsed = FALSE),
+      position = "topright"
+    )
    mapa
 }
 
 # 2) Atualiza os componentes via PROXY (chame sempre que 'componentes' mudar)
 proxy_update_componentes <- function(session,ns,map_id,camera, componentes){
-  # Filtra só os componentes da câmera atual
   comps <- componentes |> filter(.data$cd_id_camera == camera$cd_id_camera)
-  if (nrow(comps) == 0) return(invisible())
+  comps <- .ensure_component_colors(comps)
 
-  # IDs (como string) para ficarem estáveis
-  ids <- as.character(comps$cd_id_componente)
+  prx <- leafletProxy(mapId = map_id,session = session) |>
+    clearGroup(MAP_GROUP_COMPONENT_POLYGON) |>
+    clearGroup(MAP_GROUP_COMPONENT_NAMES)
 
-  # Remove shapes antigos com os mesmos IDs (evita duplicar)
-  prx <- leafletProxy(mapId = map_id,session = session)
+  if (nrow(comps) == 0) return(invisible(TRUE))
 
-  # # Adiciona cada polígono
   for(i in seq_len(nrow(comps))){
     comp <- comps[i,]
-    poly <- jsonlite::fromJSON(comp$poligno_componente)  # data.frame com x,y
+    poly <- comp$poligno_componente[[1]]
+    if (is.character(poly)) {
+      poly <- jsonlite::fromJSON(poly)
+    }
+
+    comp_nome <- .component_name_for_map(comp$name_componente, comp$cd_id_componente)
+    comp_cor  <- comp$color_componente
+    centro    <- .polygon_center(poly)
 
     prx <- prx |>
       addPolygons(
-        lng      = poly$x,
-        lat      = poly$y,
-        group    = "draw",                             # permite editar com Draw
-        layerId  = as.character(comp$cd_id_componente),# id estável
-        weight   = 2,
+        lng         = poly$x,
+        lat         = poly$y,
+        group       = MAP_GROUP_COMPONENT_POLYGON,
+        layerId     = as.character(comp$cd_id_componente),
+        weight      = 2,
+        color       = comp_cor,
+        fillColor   = comp_cor,
         fillOpacity = 0.2,
-        label    = comp$name_componente
+        label       = comp_nome
       )
+
+    if (!is.null(centro)) {
+      prx <- prx |>
+        addLabelOnlyMarkers(
+          lng = centro$lng,
+          lat = centro$lat,
+          label = comp_nome,
+          group = MAP_GROUP_COMPONENT_NAMES,
+          labelOptions = labelOptions(
+            noHide = TRUE,
+            direction = "center",
+            textOnly = TRUE,
+            style = list(
+              "font-size" = "12px",
+              "font-weight" = "700",
+              "color" = comp_cor,
+              "text-shadow" = "0 0 3px #FFFFFF, 0 0 6px #FFFFFF"
+            )
+          )
+        )
+    }
   }
 
   invisible(TRUE)
@@ -1575,6 +1926,7 @@ searchFramesByCamerasSelected <- function(conn,camerasTargets,cameras,objeto = N
                )
     })
   df$componente[[1]] <- map_df(df$componente,~ .x)
+  df$componente[[1]] <- .ensure_component_colors(df$componente[[1]])
   df
 }
 
@@ -1607,3 +1959,5 @@ uiEstrutura <- function(ns,nameComp,estruturas,estrutura){
     poly[-nrow(poly), ]
   } else poly
 }
+
+

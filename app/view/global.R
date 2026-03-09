@@ -492,8 +492,8 @@ moveScrollToUp <- function(){
 
     dir.create(reports_dir, recursive = TRUE, showWarnings = FALSE)
 
-    # Evita erro se já existir um path "reports"
-    try(shiny::removeResourcePath("reports"), silent = TRUE)
+    # Evita warning/erro se ainda nao existir um path "reports"
+    suppressWarnings(try(shiny::removeResourcePath("reports"), silent = TRUE))
     shiny::addResourcePath("reports", reports_dir)
 
     options(.reports_dir = reports_dir)  # guardamos pra reuso

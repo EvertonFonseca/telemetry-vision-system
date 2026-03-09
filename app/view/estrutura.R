@@ -36,7 +36,7 @@ box::use(
 )
 
 # ------------------------------------------------------------
-# Estado por sessão (NUNCA global)
+# Estado por sessÃ£o (NUNCA global)
 # ------------------------------------------------------------
 .get_private <- function(session, key = "setor_private") {
   stopifnot(!is.null(session))
@@ -46,7 +46,7 @@ box::use(
   session$userData[[key]]
 }
 
-# Limpa somente o estado desse módulo nessa sessão
+# Limpa somente o estado desse mÃ³dulo nessa sessÃ£o
 #' @export
 dispose <- function(session, key = "setor_private") {
   e <- session$userData[[key]]
@@ -57,9 +57,9 @@ dispose <- function(session, key = "setor_private") {
   invisible(gc())
 }
 
-# (Opcional) registra limpeza automática quando o usuário fechar a aba/navegador
+# (Opcional) registra limpeza automÃ¡tica quando o usuÃ¡rio fechar a aba/navegador
 .register_auto_dispose <- function(session, key = "setor_private") {
-  # evita registrar múltiplas vezes
+  # evita registrar mÃºltiplas vezes
   flag <- paste0(key, "_onend_registered")
   if (isTRUE(session$userData[[flag]])) return(invisible(NULL))
   session$userData[[flag]] <- TRUE
@@ -109,7 +109,7 @@ uiNewEstrutura <- function(ns,input,output,session,callback){
           
         })
         
-        # ---- (Re)CONSTRUÇÃO DE UI + OBSERVERS DINÂMICOS ----
+        # ---- (Re)CONSTRUÃ‡ÃƒO DE UI + OBSERVERS DINÃ‚MICOS ----
         obs$add(observeEvent(attributoReactive(), {
           
           req(attributoReactive())
@@ -144,7 +144,7 @@ uiNewEstrutura <- function(ns,input,output,session,callback){
                       elemento  <- sprintf("textoClasse_%d", ii)
                       if(visible){
                         set_readonly_js(elemento,FALSE,session)
-                        updateTextAreaInput(session,elemento,placeholder = "Digite as classes separadas por vírgula.")
+                        updateTextAreaInput(session,elemento,placeholder = "Digite as classes separadas por vÃ­rgula.")
                       }else{
                         set_readonly_js(elemento,TRUE,session)
                         updateTextAreaInput(session,elemento,value = "",placeholder = "")
@@ -171,7 +171,7 @@ uiNewEstrutura <- function(ns,input,output,session,callback){
                           prettyToggle(
                             inputId   = ns(sprintf("checkboxAtributoAtivo_%d", i)), 
                             label_on  = "Sim",
-                            label_off = "Não",
+                            label_off = "NÃ£o",
                             outline   = TRUE, plain = TRUE, value = attAtivo,
                             icon_on   = icon("thumbs-up"),
                             icon_off  = icon("thumbs-down"),
@@ -206,7 +206,7 @@ uiNewEstrutura <- function(ns,input,output,session,callback){
                       label = "Classes",
                       value = attClasses,
                       resize = "none",
-                      placeholder = "Digite as classes separadas por vírgula.",
+                      placeholder = "Digite as classes separadas por vÃ­rgula.",
                       width = '98%')
                     )
                   )
@@ -217,7 +217,7 @@ uiNewEstrutura <- function(ns,input,output,session,callback){
               
             },ignoreInit = FALSE))
             
-            # Observer do botão "Clear"
+            # Observer do botÃ£o "Clear"
             obs$add(
               observeEvent(input$atributoClearAll, ignoreInit = TRUE, {
                 actionWebUser({
@@ -226,7 +226,7 @@ uiNewEstrutura <- function(ns,input,output,session,callback){
               })
             )
             
-            # Observer do botão "Adicionar"
+            # Observer do botÃ£o "Adicionar"
             obs$add(
               observeEvent(input$atributoAdd, ignoreInit = TRUE, {
                 actionWebUser({
@@ -251,12 +251,16 @@ uiNewEstrutura <- function(ns,input,output,session,callback){
                 nomeEstrutura <- isolate(toupper(input$textNameEstrutura))
                 
                 if(stringi$stri_isempty(stringr$str_trim(nomeEstrutura))){
-                  showNotification("O nome do Estrutura não foi preenchido!", type = "warning")
+                  showNotification("O nome do Estrutura nÃ£o foi preenchido!", type = "warning")
                   return()
                 }
                 
+                if(!checkNomeEstruturaVersao(nomeEstrutura)){
+                  showNotification("Informe a versao no nome da estrutura. Ex.: PRENSA 1.0", type = "warning")
+                  return()
+                }
                 if(checkifExistNameEstrutura(dbp$get_pool(),name = nomeEstrutura)){
-                  showNotification("O nome da Estrutura já possui nos registros!", type = "warning")
+                  showNotification("O nome da Estrutura jÃ¡ possui nos registros!", type = "warning")
                   return()
                 }
                 
@@ -270,7 +274,7 @@ uiNewEstrutura <- function(ns,input,output,session,callback){
                   # try insert or roolback
                   if(!db$tryTransaction(function(conn){
              
-                  #check if it has already data of Câmera
+                  #check if it has already data of CÃ¢mera
                   obj <- list()
                   obj$name_estrutura   <- nomeEstrutura
                   obj$cd_id_estrutura  <- db$nextSequenciaID(conn, "estrutura", id_col = "cd_id_estrutura", schema = "public")
@@ -319,7 +323,7 @@ uiNewEstrutura <- function(ns,input,output,session,callback){
                     },ignoreInit = TRUE,once = TRUE)
                     
                   })){
-                    showNotification("Não foi possivel salvar a Estrutura, durante o processo houve falha!", type = "error")
+                    showNotification("NÃ£o foi possivel salvar a Estrutura, durante o processo houve falha!", type = "error")
                   }
                
                 }, delay = 0, lock_id = "estrutura_create_save")
@@ -391,9 +395,9 @@ uiEditEstrutura <- function(ns,input,output,session,callback){
       output$titleTexto <- renderText({
         
         if(sliderPosition() == 1L){
-          'Registros Câmeras'
+          'Registros CÃ¢meras'
         }else{
-          'Edição da câmera'
+          'EdiÃ§Ã£o da cÃ¢mera'
         }
         
       })
@@ -478,7 +482,7 @@ uiEditEstrutura <- function(ns,input,output,session,callback){
       
       obs2$clear()  # limpa observers antigos
       
-      # ---- (Re)CONSTRUÇÃO DE UI + OBSERVERS DINÂMICOS ----
+      # ---- (Re)CONSTRUÃ‡ÃƒO DE UI + OBSERVERS DINÃ‚MICOS ----
       obs2$add(observeEvent(attributoReactive(),{
         
         req(attributoReactive())
@@ -515,7 +519,7 @@ uiEditEstrutura <- function(ns,input,output,session,callback){
                     elemento  <- sprintf("textoClasse_%d", ii)
                     if(visible){
                       set_readonly_js(elemento,FALSE,session)
-                      updateTextAreaInput(session,elemento,placeholder = "Digite as classes separadas por vírgula.")
+                      updateTextAreaInput(session,elemento,placeholder = "Digite as classes separadas por vÃ­rgula.")
                     }else{
                       set_readonly_js(elemento,TRUE,session)
                       updateTextAreaInput(session,elemento,value = "",placeholder = "")
@@ -542,7 +546,7 @@ uiEditEstrutura <- function(ns,input,output,session,callback){
                         prettyToggle(
                           inputId   = ns(sprintf("checkboxAtributoAtivo_%d", i)), 
                           label_on  = "Sim",
-                          label_off = "Não",
+                          label_off = "NÃ£o",
                           outline   = TRUE, plain = TRUE, value = attAtivo,
                           icon_on   = icon("thumbs-up"),
                           icon_off  = icon("thumbs-down"),
@@ -577,7 +581,7 @@ uiEditEstrutura <- function(ns,input,output,session,callback){
                     label = "Classes",
                     value = attClasses,
                     resize = "none",
-                    placeholder = "Digite as classes separadas por vírgula.",
+                    placeholder = "Digite as classes separadas por vÃ­rgula.",
                     width = '98%')
                   )
                 )
@@ -588,7 +592,7 @@ uiEditEstrutura <- function(ns,input,output,session,callback){
             
           },ignoreInit = FALSE))
           
-          # Observer do botão "Clear"
+          # Observer do botÃ£o "Clear"
           obs2$add(
             observeEvent(input$atributoClearAll, ignoreInit = TRUE, {
               actionWebUser({
@@ -597,7 +601,7 @@ uiEditEstrutura <- function(ns,input,output,session,callback){
             })
           )
           
-          # Observer do botão "Adicionar"
+          # Observer do botÃ£o "Adicionar"
           obs2$add(
             observeEvent(input$atributoAdd, ignoreInit = TRUE, {
               actionWebUser({
@@ -626,7 +630,7 @@ uiEditEstrutura <- function(ns,input,output,session,callback){
           messageAlerta(
             input,
             ns,
-            title   = paste0('Todos os objetos ligado a essa estrutura será excluido'),
+            title   = paste0('Todos os objetos ligado a essa estrutura serÃ¡ excluido'),
             message = paste0('Deseja realmente excluir a estrutura ',estrutura$name_estrutura,"?"),
             callback.no = function(){
               
@@ -682,12 +686,16 @@ uiEditEstrutura <- function(ns,input,output,session,callback){
             nomeEstrutura   <- isolate(toupper(input$textNameEstrutura))
             
             if(stringi$stri_isempty(stringr$str_trim(nomeEstrutura))){
-              showNotification("O nome do Estrutura não foi preenchido!", type = "warning")
+              showNotification("O nome do Estrutura nÃ£o foi preenchido!", type = "warning")
               return()
             }
             
+            if(!checkNomeEstruturaVersao(nomeEstrutura)){
+              showNotification("Informe a versao no nome da estrutura. Ex.: PRENSA 1.0", type = "warning")
+              return()
+            }
             if(checkifExistNameEstruturaEdit(dbp$get_pool(),estruturaSelect$cd_id_estrutura,name = nomeEstrutura)){
-              showNotification("O nome da Estrutura já possui nos registros!", type = "warning")
+              showNotification("O nome da Estrutura jÃ¡ possui nos registros!", type = "warning")
               return()
             }
             
@@ -700,7 +708,7 @@ uiEditEstrutura <- function(ns,input,output,session,callback){
             actionWebUser({
               db$tryTransaction(function(conn){
               
-              #check if it has already data of Câmera
+              #check if it has already data of CÃ¢mera
               obj <- list()
               obj$name_estrutura   <- nomeEstrutura
               db$updateTable(conn,"ESTRUTURA",obj, where_cols = "cd_id_estrutura", where_vals = estruturaSelect$cd_id_estrutura)
@@ -744,11 +752,11 @@ uiEditEstrutura <- function(ns,input,output,session,callback){
     splitLayout(
       cellWidths = c("80%", "auto","auto"),
       textInput(ns("textNameEstrutura"), label = "Nome",
-      placeholder = "Digite o nome para a Estrutura",width = "100%",value = valueTextoNameEstrutura ),
+      placeholder = "Digite o nome para a Estrutura (ex.: PRENSA 1.0)",width = "100%",value = valueTextoNameEstrutura ),
       actionButton(ns("atributoClearAll"), label = "", icon = icon("eraser"),style = "margin-top: 25px;"),
       actionButton(ns("atributoAdd"), label = "", icon = icon("plus"),style = "margin-top: 25px;")
     ),
-    uiOutput(ns("containerAtributo"))   # <- conteúdo dinâmico entra aqui
+    uiOutput(ns("containerAtributo"))   # <- conteÃºdo dinÃ¢mico entra aqui
   )
 }
 
@@ -797,10 +805,10 @@ checkAtributoValidadao <- function(atributos){
   for(i in 1:nrow(atributos)){
     att <- atributos[i,]
     if(any(stringi$stri_isempty(att$name_atributo))){
-      showNotification("Alguns atributos não esta com nome preenchido!", type = "warning")
+      showNotification("Alguns atributos nÃ£o esta com nome preenchido!", type = "warning")
       return(FALSE)
     }else if(any(duplicated(att$name_atributo))){
-      showNotification("Alguns nomes de atributo possui duplicação!", type = "warning")
+      showNotification("Alguns nomes de atributo possui duplicaÃ§Ã£o!", type = "warning")
       return(FALSE)
     }else if(!any(att$fg_ativo)){
       showNotification("Pelo menos deve possuir algum atributo ativo!", type = "warning")
@@ -815,7 +823,7 @@ checkAtributoValidadao <- function(atributos){
 }
 
 clearPanel <- function(session,attributoReactive){
-  # Limpar os campos APÓS o flush/render — garante que os inputs existam no DOM
+  # Limpar os campos APÃ“S o flush/render â€” garante que os inputs existam no DOM
   session$onFlushed(function() {
     updateTextInput(session,'textNameEstrutura', value = '')
     updateTextInput(session,sprintf("atributo_%d",1L), value = '')
@@ -829,3 +837,10 @@ ajusteTextoClasses <- function(texto){
   texto <- stringr$str_trim(stringr$str_split(texto,",")[[1]])
   paste(texto, collapse = ",")
 }
+
+checkNomeEstruturaVersao <- function(nomeEstrutura){
+  nome <- stringr$str_squish(as.character(nomeEstrutura)[1])
+  if (is.na(nome) || stringi$stri_isempty(nome)) return(FALSE)
+  stringr$str_detect(nome, "^.+\\s+[0-9]+\\.[0-9]+$")
+}
+

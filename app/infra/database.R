@@ -175,24 +175,42 @@ deleteTable <- function(conn = get_pool(), table, where_cols = character(), wher
 
 # --------- TRANSAÇÃO SEGURA ---------
 tryTransaction <- function(expr, debug = FALSE) {
-  with_conn(function(conn) {
-    DBI::dbBegin(conn)
-    ok <- FALSE
+  err_msg <- NULL
 
-    if (debug) debug(expr)
-    tryCatch({
-      expr(conn)
-      DBI::dbCommit(conn)
-      ok <- TRUE
-    }, error = function(e) {
-      DBI::dbRollback(conn)
-      warning(e)
-    }, finally = {
-      if (debug) undebug(expr)
-    })
+  ok <- tryCatch(
+    with_conn(function(conn) {
+      tx_started <- FALSE
+      ok_local <- FALSE
 
-    ok
-  })
+      if (debug) debug(expr)
+      tryCatch({
+        DBI::dbBegin(conn)
+        tx_started <- TRUE
+
+        expr(conn)
+
+        DBI::dbCommit(conn)
+        ok_local <- TRUE
+      }, error = function(e) {
+        err_msg <<- conditionMessage(e)
+        if (isTRUE(tx_started)) {
+          try(DBI::dbRollback(conn), silent = TRUE)
+        }
+        warning(err_msg, call. = FALSE)
+      }, finally = {
+        if (debug) undebug(expr)
+      })
+
+      ok_local
+    }),
+    error = function(e) {
+      err_msg <<- conditionMessage(e)
+      warning(err_msg, call. = FALSE)
+      FALSE
+    }
+  )
+
+  structure(isTRUE(ok), error_message = err_msg)
 }
 
 # --------- FORMATOS ---------

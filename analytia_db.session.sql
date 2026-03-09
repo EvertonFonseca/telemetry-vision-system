@@ -1,0 +1,1 @@
+UPDATE camera_view SET fg_ativo = true;
