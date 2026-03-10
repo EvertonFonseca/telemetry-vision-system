@@ -966,7 +966,7 @@ ui <- function(ns) {
 #' @export
 server <- function(ns, input, output, session) {
 
-  pool <- dbp$get_pool()
+  pool <- function() dbp$get_pool()
 
   rv_async <- shiny::reactiveValues(
     dados   = NULL,      # mantém último dado BOM
@@ -1024,7 +1024,7 @@ server <- function(ns, input, output, session) {
   .load_choices <- function() {
     if (!.is_alive()) return(invisible(NULL))
     tryCatch({
-      ch <- get_choices_shared(pool)
+      ch <- get_choices_shared(pool())
       shiny::updateSelectizeInput(session, "f_setor",   choices = ch$setores,  selected = character(0), server = TRUE)
       shiny::updateSelectizeInput(session, "f_maquina", choices = ch$maquinas, selected = character(0), server = TRUE)
     }, error = function(e) {
@@ -1121,7 +1121,7 @@ server <- function(ns, input, output, session) {
       err <- NULL
 
       tryCatch({
-        df_raw <- run_query(pool, dt_de_utc, dt_ate_utc, f$setor, f$maquina)
+        df_raw <- run_query(pool(), dt_de_utc, dt_ate_utc, f$setor, f$maquina)
         out <- if (is.null(df_raw)) NULL else process_df_raw(df_raw, dt_de_local, dt_ate_local, tzL)
         rm(df_raw); gc(FALSE)
       }, error = function(e) {
@@ -1288,7 +1288,7 @@ server <- function(ns, input, output, session) {
 
     objeto_row <- NULL
     tryCatch({
-      objeto_row <- get_objetos_shared(pool) |>
+      objeto_row <- get_objetos_shared(pool()) |>
         dplyr::filter(NAME_OBJETO == objeto & NAME_SETOR == setor)
     }, error = function(e) NULL)
 
@@ -1320,7 +1320,7 @@ server <- function(ns, input, output, session) {
     tryCatch({
       video_clip_open(
         ns, input, output, session,
-        pool       = pool,
+        pool       = pool(),
         title      = title_,
         time_begin = tb_,
         time_end   = te_,
@@ -1356,7 +1356,7 @@ server <- function(ns, input, output, session) {
 
     # árvore respeita filtros atuais
     get_tree = function() {
-      objs <- get_objetos_shared(pool)
+      objs <- get_objetos_shared(pool())
 
       f <- .st$filters
       if (!is.null(f$setor) && length(f$setor)) {

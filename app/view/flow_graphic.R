@@ -375,7 +375,11 @@ server <- function(ns,
                    on_clip = NULL,
                    window_hours = 24) {
 
-  if (is.null(pool)) pool <- dbp$get_pool()
+  .resolve_pool <- function() {
+    if (is.function(pool)) return(pool())
+    if (is.null(pool)) return(dbp$get_pool())
+    pool
+  }
   tzL <- tz_local()
 
   # janela de tempo
@@ -398,7 +402,7 @@ server <- function(ns,
       req(is.list(x), !is.null(x$sectors), !is.null(x$machines))
       return(x)
     }
-    .default_tree_from_db(pool)
+    .default_tree_from_db(.resolve_pool())
   })
 
   # episodes source

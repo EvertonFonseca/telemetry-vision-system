@@ -213,10 +213,10 @@ new_lru_cache <- function(max_items = MAX_CACHE_ITEMS) {
 # ==================================================
 # PlayerContext (render + prefetch), independente do módulo
 # ==================================================
-new_player_ctx <- function(session, pool, lru_cache) {
+new_player_ctx <- function(session, pool_getter, lru_cache) {
   env <- new.env(parent = emptyenv())
   env$session <- session
-  env$pool    <- pool
+  env$get_pool <- if (is.function(pool_getter)) pool_getter else function() pool_getter
   env$cache   <- lru_cache
 
   # cache interno por sequência (para nearest rápido)
@@ -240,7 +240,7 @@ new_player_ctx <- function(session, pool, lru_cache) {
       return(hit)
     }
 
-    res <- db_fetch_frame_by_id(env$pool, frame_id)
+    res <- db_fetch_frame_by_id(env$get_pool(), frame_id)
     if (!nrow(res) || is.null(res$data_frame[[1]])) return(NULL)
 
     uri <- to_data_url(res$data_frame[[1]])
@@ -259,7 +259,7 @@ new_player_ctx <- function(session, pool, lru_cache) {
     hit <- env$cache$get(k)
     if (!is.null(hit)) return(hit)
 
-    res <- db_fetch_frame_raw(env$pool, cam, ts_utc)
+    res <- db_fetch_frame_raw(env$get_pool(), cam, ts_utc)
     if (!nrow(res) || is.null(res$data_frame[[1]])) return(NULL)
 
     uri <- to_data_url(res$data_frame[[1]])
@@ -377,7 +377,7 @@ new_player_ctx <- function(session, pool, lru_cache) {
     ]
 
     if (length(miss_ids)) {
-      blobs <- tryCatch(db_fetch_many_frames_by_id(env$pool, miss_ids), error = function(e) NULL)
+      blobs <- tryCatch(db_fetch_many_frames_by_id(env$get_pool(), miss_ids), error = function(e) NULL)
       if (!is.null(blobs) && nrow(blobs)) {
         for (j in seq_len(nrow(blobs))) {
           fid <- suppressWarnings(as.integer(blobs$cd_id_frame[[j]]))
@@ -425,7 +425,7 @@ new_player_ctx <- function(session, pool, lru_cache) {
     ]
     if (!length(miss)) return(invisible(TRUE))
 
-    blobs <- tryCatch(db_fetch_many_frames_by_id(env$pool, miss), error = function(e) NULL)
+    blobs <- tryCatch(db_fetch_many_frames_by_id(env$get_pool(), miss), error = function(e) NULL)
     if (!is.null(blobs) && nrow(blobs)) {
       for (j in seq_len(nrow(blobs))) {
         fid <- suppressWarnings(as.integer(blobs$cd_id_frame[[j]]))
@@ -1548,7 +1548,7 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
   }
 
   if (is.null(session$userData$lru_cache))  session$userData$lru_cache  <- new_lru_cache(MAX_CACHE_ITEMS)
-  if (is.null(session$userData$player_ctx)) session$userData$player_ctx <- new_player_ctx(session, dbp$get_pool(), session$userData$lru_cache)
+  if (is.null(session$userData$player_ctx)) session$userData$player_ctx <- new_player_ctx(session, dbp$get_pool, session$userData$lru_cache)
   ctx <- session$userData$player_ctx
 
   clipOverlayPlayer <- reactiveValues(

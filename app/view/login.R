@@ -69,6 +69,19 @@ enterLogin <- function(input, session) {
   cfg <- .collect_connection_config(input)
   if (!isTRUE(cfg$ok)) return(cfg)
 
+  if (!isTRUE(dbp$can_activate_config(
+    dbname = cfg$db$dbname,
+    host = cfg$db$host,
+    port = cfg$db$port,
+    user = cfg$db$user,
+    password = cfg$db$password
+  ))) {
+    return(list(
+      ok = FALSE,
+      msg = "Ja existe outra sessao usando uma conexao diferente. Feche as outras sessoes antes de trocar o banco."
+    ))
+  }
+
   dbp$apply_db_env(
     dbname = cfg$db$dbname,
     host = cfg$db$host,
@@ -79,8 +92,7 @@ enterLogin <- function(input, session) {
 
   db_err <- NULL
   db_ok <- tryCatch({
-    dbp$close_pool()
-    pool <- dbp$init(force = TRUE)
+    pool <- dbp$init()
     DBI::dbGetQuery(pool, "select 1 as ok")
     TRUE
   }, error = function(e) {

@@ -2,13 +2,44 @@
 box::use(
   pool[dbPool, poolClose, poolCheckout, poolReturn],
   RPostgres[...],
-  DBI,
-  shiny[onStop]
+  DBI
 )
 
 .state <- new.env(parent = emptyenv())
 
 `%||%` <- function(x, y) if (is.null(x)) y else x
+
+.normalize_cfg <- function(cfg) {
+  list(
+    dbname = as.character(cfg$dbname %||% ""),
+    host = as.character(cfg$host %||% ""),
+    port = suppressWarnings(as.integer(cfg$port %||% NA_integer_)),
+    user = as.character(cfg$user %||% ""),
+    password = as.character(cfg$password %||% "")
+  )
+}
+
+.current_cfg <- function() {
+  .normalize_cfg(list(
+    dbname = Sys.getenv("DB_NAME", "system"),
+    host = Sys.getenv("DB_HOST", "127.0.0.1"),
+    port = Sys.getenv("DB_PORT", "3306"),
+    user = Sys.getenv("DB_USER", "root"),
+    password = Sys.getenv("DB_PASS", "ssbwarcq")
+  ))
+}
+
+.same_cfg <- function(x, y) identical(.normalize_cfg(x), .normalize_cfg(y))
+
+.pool_is_ready <- function(pool) {
+  if (is.null(pool)) return(FALSE)
+
+  conn <- try(poolCheckout(pool), silent = TRUE)
+  if (inherits(conn, "try-error")) return(FALSE)
+
+  on.exit(try(poolReturn(conn), silent = TRUE), add = TRUE)
+  isTRUE(tryCatch(DBI::dbIsValid(conn), error = function(e) FALSE))
+}
 
 apply_db_env <- function(dbname, host, port, user, password) {
   Sys.setenv(
@@ -30,27 +61,28 @@ close_pool <- function() {
 }
 
 init <- function(force = FALSE) {
+  cfg <- .current_cfg()
+
+  if (!is.null(.state$pool) && !isTRUE(force)) {
+    if (.same_cfg(.state$cfg, cfg) && .pool_is_ready(.state$pool)) {
+      return(invisible(.state$pool))
+    }
+  }
+
   if (!is.null(.state$pool)) {
-    if (!isTRUE(force)) return(invisible(.state$pool))
     close_pool()
   }
 
   .state$pool <- dbPool(
     drv      = RPostgres::Postgres(),
-    dbname   = Sys.getenv("DB_NAME", "system"),
-    host     = Sys.getenv("DB_HOST", "127.0.0.1"),
-    port     = as.integer(Sys.getenv("DB_PORT", "3306")),
-    user     = Sys.getenv("DB_USER", "root"),
-    password = Sys.getenv("DB_PASS", "ssbwarcq"),
+    dbname   = cfg$dbname,
+    host     = cfg$host,
+    port     = cfg$port,
+    user     = cfg$user,
+    password = cfg$password,
     idleTimeout = as.integer(Sys.getenv("DB_IDLE_TIMEOUT", "120"))
   )
-
-  if (!isTRUE(.state$on_stop_registered)) {
-    onStop(function() {
-      close_pool()
-    })
-    .state$on_stop_registered <- TRUE
-  }
+  .state$cfg <- cfg
 
   invisible(.state$pool)
 }
@@ -58,6 +90,25 @@ init <- function(force = FALSE) {
 get_pool <- function() {
   if (is.null(.state$pool)) init()
   .state$pool
+}
+
+active_sessions <- function() {
+  as.integer(.state$active_sessions %||% 0L)
+}
+
+can_activate_config <- function(dbname, host, port, user, password) {
+  if (is.null(.state$pool) || is.null(.state$cfg)) return(TRUE)
+  if (.same_cfg(.state$cfg, list(
+    dbname = dbname,
+    host = host,
+    port = port,
+    user = user,
+    password = password
+  ))) {
+    return(TRUE)
+  }
+
+  active_sessions() == 0L
 }
 
 # Executa varias operacoes na MESMA conexao (transacao opcional)

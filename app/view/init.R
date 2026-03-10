@@ -278,9 +278,10 @@ server <- function(id) {
             setor$uiEditSetor(ns, input, output, session, function() {
               setor$dispose(session)
             })
-          } else if (identical(sel, "setorAgenda")) {
-            setor_agenda$uiSetorAgenda(ns, input, output, session, callback = function() {})
           }
+          #  else if (identical(sel, "setorAgenda")) {
+          #   setor_agenda$uiSetorAgenda(ns, input, output, session, callback = function() {})
+          # }
           
           if (!is.null(sel) && sel %in% c("setorNew", "setorTable")) {
             updateTabItems(session, inputId = "setor", selected = "noop")
@@ -451,7 +452,7 @@ renderMenuSideBarMain <- function(ns) {
         menuItem("Setor", icon = icon("industry"),
           menuSubItem("Novo",   tabName = "setorNew"),
           menuSubItem("Lista",  tabName = "setorTable"),
-          menuSubItem("Agenda", tabName = "setorAgenda"),
+          #menuSubItem("Agenda", tabName = "setorAgenda"),
           menuSubItem(text = htmltools::HTML("&nbsp;"), tabName = "noop", selected = TRUE)
         )
       ),
