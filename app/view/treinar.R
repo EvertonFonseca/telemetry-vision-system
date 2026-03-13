@@ -38,6 +38,7 @@ box::use(
   dplyr[...],
   tidyr[...],
   DT,
+  shinyFiles[shinyDirButton, shinyDirChoose, parseDirPath],
   shinyWidgets[airDatepickerInput, timepickerOptions],
   shinycssloaders,
   .. / logic/objeto_dao[...],
@@ -148,6 +149,20 @@ img_dims <- function(raw) {
   if (identical(mime, "image/png"))  return(png_dims(raw))
   if (identical(mime, "image/jpeg")) return(jpeg_dims(raw))
   c(NA_integer_, NA_integer_)
+}
+
+clip_static_values_complete <- function(input_source, objeto, id_clip, t0, t1) {
+  if (is.null(objeto) || !nrow(objeto) || !isTRUE(objeto$cd_id_objeto_tipo == 1L)) {
+    return(TRUE)
+  }
+
+  atributos <- collect_clip_attributes(input_source, objeto, id_clip, t0, t1)
+  if (is.null(atributos) || !nrow(atributos)) {
+    return(TRUE)
+  }
+
+  values <- as.character(atributos$VALUE)
+  !any(is.na(values) | !nzchar(trimws(values)))
 }
 
 # ==================================================
@@ -1543,12 +1558,17 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
       t1 = as.POSIXct(character(0), tz = "UTC"),
       i0 = integer(0),
       i1 = integer(0),
+      estrutura_ok = logical(0),
       stringsAsFactors = FALSE
     )
   )
   next_clip_id <- reactiveVal(1L)
+  current_clip_view_id <- reactiveVal(NA_integer_)
 
   updateClipsTable <- function(df) {
+    if (!"estrutura_ok" %in% names(df)) {
+      df$estrutura_ok <- FALSE
+    }
     n <- nrow(df)
     if (!n) return(df)
     for (i in 1:nrow(df)) {
@@ -1558,6 +1578,29 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
       df          <- clips_update_date_time_t1(df, id, isolate(input[[paste0("clip_t1_", id)]]))
     }
     df
+  }
+
+  update_clip_structure_status <- function(id_clip, input_source = input) {
+    if (!isTRUE(!is.null(objeto) && objeto$cd_id_objeto_tipo == 1L)) return(invisible(FALSE))
+
+    df <- updateClipsTable(clips())
+    idx <- which(df$id == as.integer(id_clip))
+    if (!length(idx)) return(invisible(FALSE))
+
+    if (!"estrutura_ok" %in% names(df)) {
+      df$estrutura_ok <- FALSE
+    }
+
+    df$estrutura_ok[idx[1]] <- clip_static_values_complete(
+      input_source = input_source,
+      objeto = objeto,
+      id_clip = df$id[idx[1]],
+      t0 = df$t0[idx[1]],
+      t1 = df$t1[idx[1]]
+    )
+
+    clips(df)
+    invisible(TRUE)
   }
 
   clips_add <- function(t0, t1, i0, i1, title = "") {
@@ -1570,6 +1613,11 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
       t1 = as.POSIXct(t1, tz = "UTC"),
       i0 = as.integer(i0),
       i1 = as.integer(i1),
+      estrutura_ok = if (isTRUE(!is.null(objeto) && objeto$cd_id_objeto_tipo == 1L)) {
+        clip_static_values_complete(input, objeto, id, as.POSIXct(t0, tz = "UTC"), as.POSIXct(t1, tz = "UTC"))
+      } else {
+        TRUE
+      },
       stringsAsFactors = FALSE
     )
     clips(rbind(df, row))
@@ -3517,6 +3565,9 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
   output$clipsTable <- DT::renderDT({
 
     df <- clips()
+    if (!"estrutura_ok" %in% names(df)) {
+      df$estrutura_ok <- FALSE
+    }
     show_clip_view <- !is.null(objeto) && !isTRUE(objeto$cd_id_objeto_tipo == 2L)
     if (!nrow(df)) {
       empty_df <- data.frame(
@@ -3530,7 +3581,8 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
       )
       if (isTRUE(show_clip_view)) {
         empty_df$Visualizar <- character(0)
-        empty_df <- empty_df[, c("Linha", "Titulo", "Tipo", "De", "Ate", "Visualizar", "Excluir")]
+        empty_df$Status <- character(0)
+        empty_df <- empty_df[, c("Linha", "Titulo", "Tipo", "De", "Ate", "Visualizar", "Status", "Excluir")]
       }
       return(DT::datatable(
         empty_df,
@@ -3605,6 +3657,7 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
     }, character(1))
 
     btn_view <- NULL
+    clip_status <- NULL
     if (isTRUE(show_clip_view)) {
       btn_view <- vapply(df$id, function(id) {
         sprintf(
@@ -3612,6 +3665,15 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
            <i class='fa fa-eye'></i>
          </button>", ns("clip_action"), id
         )
+      }, character(1))
+
+      clip_status <- vapply(seq_len(nrow(df)), function(i) {
+        ok <- isTRUE(df$estrutura_ok[i])
+        if (isTRUE(ok)) {
+          "<span title='Valores da estrutura definidos' style='color:#1f8b4c; font-size:18px;'><i class='fa-solid fa-circle-check'></i></span>"
+        } else {
+          "<span title='Valores da estrutura pendentes' style='color:#d97706; font-size:18px;'><i class='fa-solid fa-triangle-exclamation'></i></span>"
+        }
       }, character(1))
     }
 
@@ -3634,7 +3696,8 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
     )
     if (isTRUE(show_clip_view)) {
       out$Visualizar <- btn_view
-      out <- out[, c("Linha", "Titulo", "Tipo", "De", "Ate", "Visualizar", "Excluir")]
+      out$Status <- clip_status
+      out <- out[, c("Linha", "Titulo", "Tipo", "De", "Ate", "Visualizar", "Status", "Excluir")]
     }
 
     DT::datatable(
@@ -3652,7 +3715,7 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
         columnDefs = list(
           list(visible = FALSE, targets = 0),
           list(className = "dt-center", targets = "_all"),
-          list(width = "75px", targets = if (isTRUE(show_clip_view)) c(1, 6, 7) else c(1, 6))
+          list(width = "75px", targets = if (isTRUE(show_clip_view)) c(1, 5, 6, 7) else c(1, 6))
         )
       ),
       callback = DT::JS(
@@ -3688,6 +3751,7 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
         ts_start = row$t0, ts_end = row$t1,
         n_frames = n_frames
       )
+      current_clip_view_id(id_sel)
 
       clipOverlayPlayer$seq     <- sub_seq
       clipOverlayPlayer$i       <- 1L
@@ -3700,6 +3764,9 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
 
     } else if (act == "del") {
       clips_remove(id_sel)
+      if (isTRUE(identical(as.integer(isolate(current_clip_view_id())), as.integer(id_sel)))) {
+        current_clip_view_id(NA_integer_)
+      }
       try(removeUI(selector = paste0("#", ns("clip_summary_overlay")), immediate = TRUE), silent = TRUE)
       clipOverlayPlayer$playing <- FALSE
       clipOverlayPlayer$seq     <- NULL
@@ -3751,6 +3818,7 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
 
     clipOverlayPlayer$playing <- FALSE
     clipOverlayPlayer$seq     <- NULL
+    current_clip_view_id(NA_integer_)
 
     removeModal(session); callback()
   }, ignoreInit = TRUE, ignoreNULL = TRUE))
@@ -3765,6 +3833,21 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
 
     input_snapshot <- isolate(shiny::reactiveValuesToList(input))
     dyn_rects_snapshot <- isolate(list(rects = dyn$rects, tracks = dyn$tracks))
+
+    if (isTRUE(!is.null(objeto) && objeto$cd_id_objeto_tipo == 1L)) {
+      df_status <- updateClipsTable(df)
+      df_status$estrutura_ok <- vapply(seq_len(nrow(df_status)), function(i) {
+        clip_static_values_complete(
+          input_source = input_snapshot,
+          objeto = objeto,
+          id_clip = df_status$id[i],
+          t0 = df_status$t0[i],
+          t1 = df_status$t1[i]
+        )
+      }, logical(1))
+      clips(df_status)
+      df <- df_status
+    }
 
     actionWebUser({
       info <- tryCatch(
@@ -3857,9 +3940,11 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
           t1 = as.POSIXct(character(0), tz = "UTC"),
           i0 = integer(0),
           i1 = integer(0),
+          estrutura_ok = logical(0),
           stringsAsFactors = FALSE
         ))
         next_clip_id(1L)
+        current_clip_view_id(NA_integer_)
 
         clipOverlayPlayer$playing <- FALSE
         clipOverlayPlayer$seq     <- NULL
@@ -3875,6 +3960,11 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
   }, ignoreInit = TRUE))
 
   obs$add(observeEvent(input$clipCloseVideo, {
+    id_clip <- suppressWarnings(as.integer(isolate(current_clip_view_id())))
+    if (is.finite(id_clip)) {
+      update_clip_structure_status(id_clip, input_source = input)
+    }
+    current_clip_view_id(NA_integer_)
     clipOverlayPlayer$playing <- FALSE
     clipOverlayPlayer$seq     <- NULL
     try(removeUI(selector = paste0("#", ns("clip_summary_overlay")), immediate = TRUE), silent = TRUE)
@@ -4114,6 +4204,16 @@ build_objeto_descricao <- function(input, df, objeto, tiposPacotes, dyn_rects = 
     output_parts <- NULL
     if(objeto$cd_id_objeto_tipo == 1L){
       atributos <- collect_clip_attributes(input, objeto, id, df_tmp$t0, df_tmp$t1)
+      if (!isTRUE(clip_static_values_complete(input, objeto, id, df_tmp$t0, df_tmp$t1))) {
+        clip_label <- if (!is.null(df_tmp$title) && nzchar(as.character(df_tmp$title))) {
+          as.character(df_tmp$title)
+        } else {
+          paste0("Clip ", id)
+        }
+        status  <- FALSE
+        message <- paste0("Defina todos os valores da estrutura para o clip '", clip_label, "' antes de salvar o pacote.")
+        break
+      }
       atributos <- atributos |>
       group_by(name_componente) |>
       nest() |>
@@ -4170,4 +4270,949 @@ build_objeto_descricao <- function(input, df, objeto, tiposPacotes, dyn_rects = 
   }
 
   list(datas = listas, status = status, message = message)
+}
+
+#' @export
+uiBuildTreinar <- function(ns, input, output, session, callback) {
+
+  .register_auto_dispose(session)
+  e <- .get_private(session)
+
+  obs <- newObserve()
+
+  empty_packages <- function() {
+    data.frame(
+      cd_id_ia = integer(0),
+      cd_id_objeto = integer(0),
+      titulo_ia = character(0),
+      name_tipo_pacote = character(0),
+      name_setor = character(0),
+      name_objeto = character(0),
+      dt_hr_local_begin = as.POSIXct(character(0), tz = "UTC"),
+      dt_hr_local_end = as.POSIXct(character(0), tz = "UTC"),
+      arquivo_rds = character(0),
+      stringsAsFactors = FALSE
+    )
+  }
+
+  build_packages <- reactiveVal(empty_packages())
+  checked_package_ids <- reactiveVal(integer(0))
+  check_flag_active   <- reactiveVal(FALSE)
+  build_logs <- reactiveVal("Marque os pacotes desejados e clique em Compactar para gerar o arquivo .rds.")
+  build_notice <- reactiveVal(NULL)
+  build_running <- reactiveVal(FALSE)
+  show_output_widget <- reactiveVal(FALSE)
+  output_dir_value <- reactiveVal("train")
+  file_name_value <- reactiveVal("")
+  file_name_touched <- reactiveVal(FALSE)
+  build_limit_value <- reactiveVal(150L)
+  build_dir_roots <- local({
+    project_root <- normalizePath(getwd(), winslash = "/", mustWork = FALSE)
+
+    if (.Platform$OS.type == "windows") {
+      drive_paths <- paste0(LETTERS, ":/")
+      drive_paths <- drive_paths[dir.exists(drive_paths)]
+      drive_roots <- normalizePath(drive_paths, winslash = "/", mustWork = TRUE)
+      names(drive_roots) <- sub("/$", "", drive_paths)
+      return(c(project = project_root, drive_roots))
+    }
+
+    c(
+      project = project_root,
+      home = normalizePath("~", winslash = "/", mustWork = FALSE)
+    )
+  })
+
+  build_ctx <- reactiveValues(
+    rows = NULL,
+    index = 0L,
+    built = list(),
+    skipped = 0L,
+    output_dir = NULL,
+    file_name = NULL,
+    limit = 150L,
+    summary_row = NULL
+  )
+
+  append_log <- function(text) {
+    text <- paste0(format(Sys.time(), "%H:%M:%S"), " | ", text)
+    current_logs <- isolate(build_logs())
+    build_logs(paste(current_logs, text, sep = "\n"))
+  }
+
+  sync_build_checkbox_ui <- function(ids = integer(0)) {
+    session$sendCustomMessage(
+      "tvs-build-sync-checks",
+      list(
+        tableId = ns("buildPacotesTable"),
+        ids = as.integer(ids)
+      )
+    )
+    invisible(TRUE)
+  }
+
+  enqueue_build_notice <- function(message, type = "message", duration = NULL) {
+    build_notice(list(
+      message = as.character(message)[1],
+      type = as.character(type)[1],
+      duration = duration,
+      nonce = as.numeric(Sys.time())
+    ))
+    invisible(TRUE)
+  }
+
+  resolve_output_dir <- function(path) {
+    path <- trimws(as.character(path)[1])
+    if (!nzchar(path)) path <- "train"
+
+    is_abs <- grepl("^[A-Za-z]:[\\\\/]|^\\\\\\\\|^/", path)
+    full_path <- if (is_abs) path else file.path(getwd(), path)
+
+    normalizePath(full_path, winslash = "/", mustWork = FALSE)
+  }
+
+  normalize_file_name <- function(name) {
+    name <- trimws(as.character(name)[1])
+    if (!nzchar(name)) stop("Informe um nome para o arquivo .rds.")
+
+    name <- gsub("[<>:\"/\\\\|?*]", "_", name)
+    if (!grepl("\\.rds$", name, ignore.case = TRUE)) {
+      name <- paste0(name, ".rds")
+    }
+
+    name
+  }
+
+  normalize_build_packages <- function(df) {
+    if (is.null(df) || !nrow(df)) return(empty_packages())
+
+    if ("dt_hr_local_begin" %in% names(df)) {
+      df$dt_hr_local_begin <- as.POSIXct(df$dt_hr_local_begin, tz = "UTC")
+    }
+    if ("dt_hr_local_end" %in% names(df)) {
+      df$dt_hr_local_end <- as.POSIXct(df$dt_hr_local_end, tz = "UTC")
+    }
+
+    if (!"name_tipo_pacote" %in% names(df)) df$name_tipo_pacote <- "-"
+    df$name_tipo_pacote[is.na(df$name_tipo_pacote) | !nzchar(trimws(df$name_tipo_pacote))] <- "-"
+    df$arquivo_rds <- mapply(
+      buildTreinoFileName,
+      df$name_setor,
+      df$name_objeto,
+      USE.NAMES = FALSE
+    )
+
+    df
+  }
+
+  prepare_build_table_df <- function(df, checked_ids) {
+    table_df <- df
+
+    table_df$selecionar <- vapply(table_df$cd_id_ia, function(id) {
+      checked_attr <- if (as.integer(id) %in% as.integer(checked_ids)) "checked" else ""
+      sprintf(
+        "<input type='checkbox' class='build-check-pacote' data-pacote-id='%d' style='cursor:pointer;' %s onclick=\"Shiny.setInputValue('%s',{id:%d,checked:this.checked,nonce:Math.random()},{priority:'event'})\">",
+        as.integer(id),
+        checked_attr,
+        ns("buildCheckPacote"),
+        as.integer(id)
+      )
+    }, character(1))
+
+    table_df$excluir <- vapply(table_df$cd_id_ia, function(id) {
+      sprintf(
+        "<button class='btn btn-danger btn-xs' onclick=\"Shiny.setInputValue('%s',{id:%d,nonce:Math.random()},{priority:'event'})\"><i class='fa fa-trash'></i></button>",
+        ns("buildDeletePacote"),
+        as.integer(id)
+      )
+    }, character(1))
+
+    table_df$dt_hr_local_begin <- format(as.POSIXct(table_df$dt_hr_local_begin, tz = Sys.timezone()), "%d/%m/%Y %H:%M:%S")
+    table_df$dt_hr_local_end <- format(as.POSIXct(table_df$dt_hr_local_end, tz = Sys.timezone()), "%d/%m/%Y %H:%M:%S")
+
+    table_df <- table_df[, c(
+      "selecionar",
+      "excluir",
+      "cd_id_ia",
+      "cd_id_objeto",
+      "titulo_ia",
+      "name_tipo_pacote",
+      "name_setor",
+      "name_objeto",
+      "dt_hr_local_begin",
+      "dt_hr_local_end",
+      "arquivo_rds"
+    )]
+
+    names(table_df) <- c(
+      "Build",
+      "Excluir",
+      "ID Pacote",
+      "ID Objeto",
+      "Titulo",
+      "Tipo",
+      "Setor",
+      "Objeto",
+      "Inicio",
+      "Fim",
+      "Arquivo Padrao"
+    )
+
+    table_df
+  }
+
+  suggest_file_name_for_packages <- function(df) {
+    if (is.null(df) || !nrow(df)) return("dataset.rds")
+
+    objetos <- unique(as.integer(df$cd_id_objeto))
+    objetos <- objetos[is.finite(objetos)]
+
+    if (length(objetos) == 1L) {
+      return(buildTreinoFileName(df$name_setor[[1]], df$name_objeto[[1]]))
+    }
+
+    "dataset_multi_objetos.rds"
+  }
+
+  apply_suggested_file_name <- function(df, force = FALSE) {
+    if (isTRUE(force) || !isTRUE(isolate(file_name_touched()))) {
+      file_name_touched(FALSE)
+      file_name_value(suggest_file_name_for_packages(df))
+    }
+    invisible(TRUE)
+  }
+
+  get_checked_build_packages <- function(isolate_values = TRUE) {
+    ids <- if (isTRUE(isolate_values)) isolate(checked_package_ids()) else checked_package_ids()
+    df <- if (isTRUE(isolate_values)) isolate(build_packages()) else build_packages()
+
+    if (!length(ids) || !nrow(df)) return(empty_packages())
+
+    df[df$cd_id_ia %in% as.integer(ids), , drop = FALSE]
+  }
+
+  refresh_build_packages <- function(preserve_checks = TRUE) {
+    keep_ids <- if (isTRUE(preserve_checks)) isolate(checked_package_ids()) else integer(0)
+
+    df <- tryCatch(
+      selectBuildTreinoPacotes(dbp$get_pool()),
+      error = function(e) {
+        enqueue_build_notice(
+          paste0("Nao foi possivel carregar os pacotes de build: ", conditionMessage(e)),
+          type = "error"
+        )
+        empty_packages()
+      }
+    )
+
+    df <- normalize_build_packages(df)
+    build_packages(df)
+
+    if (!nrow(df)) {
+      checked_package_ids(integer(0))
+      apply_suggested_file_name(df, force = TRUE)
+      return(invisible(df))
+    }
+
+    keep_ids <- intersect(as.integer(keep_ids), as.integer(df$cd_id_ia))
+    checked_package_ids(keep_ids)
+    apply_suggested_file_name(df[df$cd_id_ia %in% keep_ids, , drop = FALSE], force = FALSE)
+    invisible(df)
+  }
+
+  process_next_build <- NULL
+
+  finish_build <- function(success = TRUE, notify_type = "message") {
+    build_running(FALSE)
+    build_ctx$rows <- NULL
+    build_ctx$index <- 0L
+    build_ctx$built <- list()
+
+    if (isTRUE(success)) {
+      refresh_build_packages(preserve_checks = TRUE)
+      enqueue_build_notice("Arquivo .rds gerado com sucesso!", type = notify_type)
+    } else {
+      enqueue_build_notice("Falha ao gerar o arquivo .rds. Veja os logs do processo.", type = "error")
+    }
+  }
+
+  process_next_build <- function() {
+    if (!isTRUE(isolate(build_running()))) return(invisible(FALSE))
+
+    rows <- isolate(build_ctx$rows)
+    total <- length(rows)
+    next_idx <- isolate(build_ctx$index) + 1L
+
+    if (!total) {
+      append_log("Nenhum pacote encontrado para o build.")
+      finish_build(success = FALSE)
+      return(invisible(FALSE))
+    }
+
+    if (next_idx > total) {
+      dataset <- dplyr::bind_rows(isolate(build_ctx$built))
+
+      if (!nrow(dataset)) {
+        append_log("Nenhum pacote valido foi convertido em dataset.")
+        finish_build(success = FALSE)
+        return(invisible(FALSE))
+      }
+
+      dir.create(isolate(build_ctx$output_dir), recursive = TRUE, showWarnings = FALSE)
+      file_path <- file.path(isolate(build_ctx$output_dir), isolate(build_ctx$file_name))
+
+      if (file.exists(file_path)) {
+        append_log(paste0("Arquivo existente sera sobrescrito: ", file_path))
+      }
+
+      save_ok <- tryCatch({
+        saveRDS(dataset, file_path)
+        TRUE
+      }, error = function(e) {
+        append_log(sprintf("Falha ao salvar o arquivo .rds: %s", conditionMessage(e)))
+        FALSE
+      })
+
+      if (!isTRUE(save_ok)) {
+        finish_build(success = FALSE)
+        return(invisible(FALSE))
+      }
+
+      append_log(sprintf("Dataset final com %d pacote(s) valido(s).", nrow(dataset)))
+      append_log(sprintf("Pacotes ignorados: %d", isolate(build_ctx$skipped)))
+      append_log(sprintf("Arquivo salvo em: %s", normalizePath(file_path, winslash = "/", mustWork = FALSE)))
+      finish_build(success = TRUE)
+      return(invisible(TRUE))
+    }
+
+    build_ctx$index <- next_idx
+    row <- rows[[next_idx]]
+
+    append_log(sprintf("[%d/%d] Processando pacote %s...", next_idx, total, row$cd_id_ia[[1]]))
+
+    result <- tryCatch(
+      buildTreinoDatasetRow(
+        dbp$get_pool(),
+        pacote_row = row,
+        limit = isolate(build_ctx$limit),
+        logger = append_log
+      ),
+      error = function(e) {
+        append_log(sprintf("Erro ao processar pacote %s: %s", row$cd_id_ia[[1]], conditionMessage(e)))
+        NULL
+      }
+    )
+
+    if (!is.null(result) && nrow(result)) {
+      built_items <- isolate(build_ctx$built)
+      built_items[[length(built_items) + 1L]] <- result
+      build_ctx$built <- built_items
+      append_log(sprintf("Pacote %s adicionado ao dataset.", row$cd_id_ia[[1]]))
+    } else {
+      build_ctx$skipped <- isolate(build_ctx$skipped) + 1L
+      append_log(sprintf("Pacote %s foi ignorado.", row$cd_id_ia[[1]]))
+    }
+
+    later::later(function() {
+      shiny::withReactiveDomain(session, {
+        process_next_build()
+      })
+    }, 0.02)
+    invisible(TRUE)
+  }
+
+  id <- ns("dialogBuildTrain")
+  cssStyle <- list()
+  cssStyle[[paste0(" #parent", id, " .modal-dialog")]] <- "width: 92% !important; height: 88% !important;"
+  cssStyle[[paste0(" #parent", id, " .modal-content")]] <- "width: 100% !important; height: 100% !important;"
+  cssStyle[[paste0(" #parent", id, " .modal-body")]] <- "width: 100% !important; height: calc(100% - 57px - 65px) !important; overflow-y: auto; overflow-x: hidden;"
+
+  showModal(
+    session = session,
+    div(
+      id = paste0("parent", id),
+      style = "height: 80%; overflow: hidden;",
+      inlineCSS(cssStyle),
+      dialogModal(
+        title = "Build de Dataset",
+        size = "m",
+        div(
+          singleton(tags$script(HTML(
+            "window.tvsBuildSyncCheckboxes = window.tvsBuildSyncCheckboxes || function(tableId) {
+               var selected = (window.tvsBuildSelected && window.tvsBuildSelected[tableId]) || [];
+               var selectedMap = {};
+               for (var i = 0; i < selected.length; i++) {
+                 selectedMap[String(selected[i])] = true;
+               }
+               var $table = $('#' + tableId);
+               if (!$table.length || !$.fn.dataTable.isDataTable($table)) return;
+               var table = $table.DataTable();
+               $(table.rows({page:'current'}).nodes()).find('input.build-check-pacote').each(function() {
+                 var pacoteId = String($(this).attr('data-pacote-id'));
+                 this.checked = !!selectedMap[pacoteId];
+               });
+             };
+             if (!window.tvsBuildSyncHandlerInstalled) {
+               window.tvsBuildSyncHandlerInstalled = true;
+               Shiny.addCustomMessageHandler('tvs-build-sync-checks', function(message) {
+                 window.tvsBuildSelected = window.tvsBuildSelected || {};
+                 window.tvsBuildSelected[message.tableId] = (message.ids || []).map(function(x) {
+                   return parseInt(x, 10);
+                 }).filter(function(x) {
+                   return !isNaN(x);
+                 });
+                 window.tvsBuildSyncCheckboxes(message.tableId);
+               });
+             }"
+          ))),
+          panelTitle(
+            title = "Pacotes Disponiveis",
+            background.color.title = "white",
+            title.color = "black",
+            border.color = "lightgray",
+            children = div(
+              style = "padding: 10px;",
+              tags$p(
+                style = "color:#666; margin-bottom:10px;",
+                "Marque os pacotes desejados. O Build vai gerar o .rds usando todos os itens que estiverem checados."
+              ),
+              uiOutput(ns("buildSelectionActions")),
+              DT::DTOutput(ns("buildPacotesTable"))
+            )
+          ),
+          br(),
+          fluidRow(
+            column(
+              12,
+              panelTitle(
+                title = "Saida",
+                background.color.title = "white",
+                title.color = "black",
+                border.color = "lightgray",
+                children = div(
+                  style = "padding: 15px;",
+                  uiOutput(ns("buildOutputToggle")),
+                  br(),
+                  uiOutput(ns("buildPathPreview")),
+                  br(),
+                  uiOutput(ns("buildOutputWidget")),
+                  tags$div(
+                    style = "color:#666; font-size:12px;",
+                    textOutput(ns("buildSelectedInfo"))
+                  )
+                )
+              )
+            ),
+            column(
+              12,
+              panelTitle(
+                title = "Logs do Processo",
+                background.color.title = "white",
+                title.color = "black",
+                border.color = "lightgray",
+                children = div(
+                  style = "padding: 10px;",
+                  tags$pre(
+                    style = paste(
+                      "height: 240px; overflow-y: auto; background: #111;",
+                      "color: #d9f3da; padding: 12px; border-radius: 6px;",
+                      "border: 1px solid #2d2d2d; margin: 0;"
+                    ),
+                    textOutput(ns("buildLogs"))
+                  )
+                )
+              )
+            )
+          )
+        ),
+        footer = uiOutput(ns("uiBuildFooter"))
+      )
+    )
+  )
+
+  shinyDirChoose(
+    input,
+    "buildOutputDirPicker",
+    roots = build_dir_roots,
+    session = session
+  )
+
+  output$uiBuildFooter <- renderUI({
+    compact_btn <- actionButton(
+      ns("btCompactarBuild"),
+      label = if (isTRUE(build_running())) "Processando..." else "Compactar",
+      icon = icon(if (isTRUE(build_running())) "spinner" else "archive"),
+      class = "btn-primary"
+    )
+
+    if (isTRUE(build_running())) {
+      compact_btn <- tagAppendAttributes(compact_btn, disabled = "disabled")
+    }
+
+    refresh_btn <- actionButton(
+      ns("btAtualizarBuild"),
+      label = "Atualizar",
+      icon = icon("refresh")
+    )
+
+    if (isTRUE(build_running())) {
+      refresh_btn <- tagAppendAttributes(refresh_btn, disabled = "disabled")
+    }
+
+    tagList(
+      actionButton(ns("btSairBuild"), label = "Sair", icon = icon("arrow-left")),
+      refresh_btn,
+      compact_btn
+    )
+  })
+
+  output$buildLogs <- renderText({
+    build_logs()
+  })
+
+  output$buildSelectionActions <- renderUI({
+    df <- build_packages()
+    ids <- checked_package_ids()
+    ids <- intersect(as.integer(ids), as.integer(df$cd_id_ia))
+    has_checked <- length(ids) > 0L
+
+    actions <- list(
+      actionButton(
+        ns("btCheckAllBuild"),
+        label = "Checar todos",
+        icon = icon("square-check"),
+        class = "btn btn-default btn-sm"
+      ),
+      actionButton(
+        ns("btUncheckAllBuild"),
+        label = "Desmarcar todos",
+        icon = icon("square"),
+        class = "btn btn-default btn-sm"
+      )
+    )
+
+    if (isTRUE(has_checked)) {
+      actions[[length(actions) + 1L]] <- actionButton(
+        ns("btClearAllBuild"),
+        label = "Limpar",
+        icon = icon("trash"),
+        class = "btn btn-danger btn-sm"
+      )
+    }
+
+    div(
+      style = "display:flex; gap:8px; margin-bottom:10px;",
+      tagList(actions)
+    )
+  })
+
+  obs$add(observeEvent(build_notice(), {
+    info <- build_notice()
+    if (is.null(info)) return(invisible())
+
+    showNotification(
+      ui = info$message,
+      type = info$type,
+      duration = info$duration
+    )
+
+    build_notice(NULL)
+  }, ignoreInit = TRUE, ignoreNULL = TRUE))
+
+  output$buildOutputToggle <- renderUI({
+    actionButton(
+      ns("btMostrarDestinoBuild"),
+      label = if (isTRUE(show_output_widget())) "Ocultar destino" else "Mostrar destino",
+      icon = icon(if (isTRUE(show_output_widget())) "eye-slash" else "folder-open"),
+      class = "btn btn-default"
+    )
+  })
+
+  output$buildOutputWidget <- renderUI({
+    if (!isTRUE(show_output_widget())) {
+      return(
+        tags$div(
+          style = "padding: 10px 12px; background: #f8f8f8; border: 1px dashed #d0d0d0; border-radius: 6px; color: #666;",
+          "Clique em 'Mostrar destino' para editar a pasta, o nome do arquivo e os parametros do build."
+        )
+      )
+    }
+
+    tagList(
+      splitLayout(
+        cellWidths = c("78%", "22%"),
+        textInput(
+          ns("buildOutputDir"),
+          "Pasta de saida",
+          value = output_dir_value(),
+          width = "100%"
+        ),
+        shinyDirButton(
+          ns("buildOutputDirPicker"),
+          "Selecionar...",
+          "Escolha a pasta de destino",
+          buttonType = "default",
+          icon = icon("folder-open"),
+          style = "margin-top: 25px; width: 100%;"
+        )
+      ),
+      textInput(
+        ns("buildFileName"),
+        "Nome do arquivo .rds",
+        value = file_name_value(),
+        width = "100%"
+      ),
+      numericInput(
+        ns("buildLimit"),
+        "Limite de frames por camera",
+        value = build_limit_value(),
+        min = 1L,
+        step = 1L,
+        width = "100%"
+      )
+    )
+  })
+
+  output$buildPathPreview <- renderUI({
+    checked_df <- get_checked_build_packages(isolate_values = FALSE)
+    default_file <- suggest_file_name_for_packages(checked_df)
+
+    dir_value <- output_dir_value()
+    file_value <- file_name_value()
+    if (!nzchar(trimws(file_value))) file_value <- default_file
+
+    full_path <- tryCatch(
+      file.path(resolve_output_dir(dir_value), normalize_file_name(file_value)),
+      error = function(e) file.path(resolve_output_dir(dir_value), default_file)
+    )
+
+    tags$div(
+      style = "padding: 12px; background: #f3f6f9; border: 1px solid #d9e1e8; border-radius: 6px;",
+      tags$div(style = "font-weight: 600; color: #37474f; margin-bottom: 6px;", "Destino atual"),
+      tags$div(style = "font-size: 12px; color: #5f6b72; margin-bottom: 4px;", paste0("Pasta: ", resolve_output_dir(dir_value))),
+      tags$div(style = "font-size: 12px; color: #5f6b72; margin-bottom: 4px;", paste0("Arquivo: ", file_value)),
+      tags$div(style = "font-size: 12px; color: #1f2d3d;", paste0("Caminho final: ", full_path))
+    )
+  })
+
+  output$buildSelectedInfo <- renderText({
+    df <- get_checked_build_packages(isolate_values = FALSE)
+    if (!nrow(df)) return("Nenhum pacote marcado para build.")
+
+    objetos <- unique(df$name_objeto)
+    tipos <- unique(df$name_tipo_pacote)
+
+    sprintf(
+      "Marcados: %d pacote(s) | Objetos: %d | Tipos: %s",
+      nrow(df),
+      length(objetos),
+      paste(tipos, collapse = ", ")
+    )
+  })
+
+  output$buildPacotesTable <- DT::renderDT({
+
+    check_flag_active()
+    df <- build_packages()
+
+    if (!nrow(df)) {
+      return(
+        DT::datatable(
+          data.frame(Mensagem = "Nenhum pacote disponivel para build.", stringsAsFactors = FALSE),
+          rownames = FALSE,
+          options = list(dom = "t", paging = FALSE, ordering = FALSE)
+        )
+      )
+    }
+    
+    table_df <- prepare_build_table_df(df, isolate(checked_package_ids()))
+
+    DT::datatable(
+      table_df,
+      escape = FALSE,
+      filter = "top",
+      rownames = FALSE,
+      selection = "none",
+      class = "cell-border stripe compact",
+      options = list(
+        dom = "ftip",
+        pageLength = 8,
+        lengthChange = FALSE,
+        autoWidth = TRUE,
+        scrollX = TRUE,
+        ordering = FALSE,
+        searching = TRUE,
+        destroy = TRUE,
+        language = list(
+          emptyTable = "Nenhum pacote disponivel para build.",
+          zeroRecords = "Nenhum pacote encontrado."
+        ),
+        drawCallback = DT::JS(
+          sprintf(
+            "function(settings){ if (window.tvsBuildSyncCheckboxes) window.tvsBuildSyncCheckboxes('%s'); }",
+            ns("buildPacotesTable")
+          )
+        ),
+        columnDefs = list(
+          list(searchable = FALSE, targets = c(0, 1)),
+          list(width = "40px", targets = c(0, 1)),
+          list(className = "dt-center", targets = c(0, 1, 2, 3))
+        )
+      )
+    )
+  }, server = FALSE)
+
+  obs$add(observeEvent(checked_package_ids(), {
+    df <- isolate(build_packages())
+    if (!nrow(df)) return(invisible())
+    sync_build_checkbox_ui(checked_package_ids())
+  }, ignoreInit = TRUE))
+
+  obs$add(observeEvent(input$buildCheckPacote, {
+    info <- input$buildCheckPacote
+    pacote_id <- suppressWarnings(as.integer(info$id))
+    if (!is.finite(pacote_id)) return(invisible())
+
+    ids <- as.integer(checked_package_ids())
+    if (isTRUE(info$checked)) {
+      ids <- union(ids, pacote_id)
+    } else {
+      ids <- setdiff(ids, pacote_id)
+    }
+
+    checked_package_ids(sort(unique(ids)))
+    apply_suggested_file_name(get_checked_build_packages(), force = FALSE)
+  }, ignoreInit = TRUE))
+
+  obs$add(observeEvent(input$btCheckAllBuild, {
+    if (isTRUE(build_running())) {
+      showNotification("Aguarde o build terminar para alterar a selecao dos pacotes.", type = "warning")
+      return(invisible())
+    }
+
+    df <- isolate(build_packages())
+    if (!nrow(df)) return(invisible())
+
+    checked_package_ids(sort(unique(as.integer(df$cd_id_ia))))
+    apply_suggested_file_name(get_checked_build_packages(), force = FALSE)
+    append_log(sprintf("Todos os pacotes foram marcados (%d item(ns)).", nrow(df)))
+    check_flag_active(TRUE)
+  }, ignoreInit = TRUE))
+
+  obs$add(observeEvent(input$btUncheckAllBuild, {
+    if (isTRUE(build_running())) {
+      showNotification("Aguarde o build terminar para alterar a selecao dos pacotes.", type = "warning")
+      return(invisible())
+    }
+
+    checked_package_ids(integer(0))
+    apply_suggested_file_name(get_checked_build_packages(), force = FALSE)
+    append_log("Todos os pacotes foram desmarcados.")
+    check_flag_active(FALSE)
+  }, ignoreInit = TRUE))
+
+  obs$add(observeEvent(input$btClearAllBuild, {
+    if (isTRUE(build_running())) {
+      showNotification("Aguarde o build terminar para limpar os pacotes.", type = "warning")
+      return(invisible())
+    }
+
+    df <- isolate(build_packages())
+    ids <- intersect(as.integer(isolate(checked_package_ids())), as.integer(df$cd_id_ia))
+    if (!length(ids)) return(invisible())
+
+    dialogConfirm(
+      session = session,
+      id = ns("dialogDeleteAllBuild"),
+      title = "Limpar pacotes marcados?",
+      text = paste0("Deseja excluir ", length(ids), " pacote(s) marcado(s) do banco de dados?")
+    )
+
+    obs$add(observeEvent(input$dialogDeleteAllBuild, {
+      status <- input$dialogDeleteAllBuild
+      if (!isTRUE(status)) return(invisible())
+
+      delete_result <- db$tryTransaction(function(conn) {
+        for (pacote_id in ids) {
+          db$deleteTable(
+            conn,
+            "pacote_ia",
+            where_cols = c("cd_id_ia"),
+            where_vals = list(as.integer(pacote_id))
+          )
+        }
+      })
+
+      if (!isTRUE(delete_result)) {
+        delete_err <- attr(delete_result, "error_message", exact = TRUE)
+        msg <- "Nao foi possivel limpar os pacotes marcados."
+        if (!is.null(delete_err) && nzchar(delete_err)) {
+          msg <- paste0(msg, " ", delete_err)
+        }
+        showNotification(msg, type = "error")
+        return(invisible())
+      }
+
+      checked_package_ids(integer(0))
+      check_flag_active(FALSE)
+      refresh_build_packages(preserve_checks = FALSE)
+      append_log(sprintf("%d pacote(s) marcado(s) foram excluidos do banco de dados.", length(ids)))
+      showNotification("Pacotes marcados removidos com sucesso.", type = "message")
+    }, ignoreInit = TRUE, once = TRUE))
+  }, ignoreInit = TRUE))
+
+  obs$add(observeEvent(input$buildDeletePacote, {
+    if (isTRUE(build_running())) {
+      showNotification("Aguarde o build terminar para excluir pacotes.", type = "warning")
+      return(invisible())
+    }
+
+    pacote_id <- suppressWarnings(as.integer(input$buildDeletePacote$id))
+    if (!is.finite(pacote_id)) return(invisible())
+
+    df <- build_packages()
+    pacote <- df[df$cd_id_ia == pacote_id, , drop = FALSE]
+    if (!nrow(pacote)) return(invisible())
+
+    dialogConfirm(
+      session = session,
+      id = ns("dialogDeleteBuild"),
+      title = "Excluir pacote?",
+      text = paste0("Deseja excluir o pacote ", pacote_id, " do banco de dados?")
+    )
+
+    obs$add(observeEvent(input$dialogDeleteBuild, {
+      status <- input$dialogDeleteBuild
+      if (!isTRUE(status)) return(invisible())
+
+      delete_result <- db$tryTransaction(function(conn) {
+        db$deleteTable(
+          conn,
+          "pacote_ia",
+          where_cols = c("cd_id_ia"),
+          where_vals = list(as.integer(pacote_id))
+        )
+      })
+
+      if (!isTRUE(delete_result)) {
+        delete_err <- attr(delete_result, "error_message", exact = TRUE)
+        msg <- "Nao foi possivel excluir o pacote selecionado."
+        if (!is.null(delete_err) && nzchar(delete_err)) {
+          msg <- paste0(msg, " ", delete_err)
+        }
+        showNotification(msg, type = "error")
+        return(invisible())
+      }
+
+      checked_package_ids(setdiff(as.integer(checked_package_ids()), pacote_id))
+      refresh_build_packages(preserve_checks = TRUE)
+      append_log(sprintf("Pacote %s excluido do banco de dados.", pacote_id))
+      showNotification("Pacote excluido com sucesso.", type = "message")
+    }, ignoreInit = TRUE, once = TRUE))
+  }, ignoreInit = TRUE))
+
+  obs$add(observeEvent(input$btMostrarDestinoBuild, {
+    show_output_widget(!isTRUE(show_output_widget()))
+  }, ignoreInit = TRUE))
+
+  obs$add(observeEvent(input$buildOutputDir, {
+    val <- trimws(as.character(input$buildOutputDir)[1])
+    output_dir_value(if (nzchar(val)) val else "train")
+  }, ignoreInit = TRUE))
+
+  obs$add(observeEvent(input$buildOutputDirPicker, {
+    selected_dir <- tryCatch(
+      parseDirPath(build_dir_roots, input$buildOutputDirPicker),
+      error = function(e) character(0)
+    )
+
+    if (!length(selected_dir)) return(invisible())
+
+    selected_dir <- normalizePath(as.character(selected_dir)[1], winslash = "/", mustWork = FALSE)
+    output_dir_value(selected_dir)
+    updateTextInput(session, "buildOutputDir", value = selected_dir)
+  }, ignoreInit = TRUE))
+
+  obs$add(observeEvent(input$buildFileName, {
+    file_name_value(as.character(input$buildFileName)[1])
+    file_name_touched(TRUE)
+  }, ignoreInit = TRUE))
+
+  obs$add(observeEvent(input$buildLimit, {
+    val <- suppressWarnings(as.integer(input$buildLimit))
+    if (is.finite(val) && val >= 1L) build_limit_value(val)
+  }, ignoreInit = TRUE))
+
+  obs$add(observeEvent(input$btAtualizarBuild, {
+    refresh_build_packages(preserve_checks = TRUE)
+    append_log("Lista de pacotes atualizada.")
+  }, ignoreInit = TRUE))
+
+  obs$add(observeEvent(input$btCompactarBuild, {
+    if (isTRUE(build_running())) {
+      showNotification("Ja existe um build em andamento.", type = "warning")
+      return(invisible())
+    }
+
+    checked_df <- get_checked_build_packages()
+    if (!nrow(checked_df)) {
+      showNotification("Marque pelo menos um pacote na lista para compactar.", type = "warning")
+      return(invisible())
+    }
+
+    output_dir <- tryCatch(
+      resolve_output_dir(output_dir_value()),
+      error = function(e) {
+        showNotification(conditionMessage(e), type = "error")
+        NULL
+      }
+    )
+    if (is.null(output_dir)) return(invisible())
+
+    file_name <- tryCatch(
+      normalize_file_name(file_name_value()),
+      error = function(e) {
+        showNotification(conditionMessage(e), type = "error")
+        NULL
+      }
+    )
+    if (is.null(file_name)) return(invisible())
+
+    limit_frames <- suppressWarnings(as.integer(build_limit_value()))
+    if (!is.finite(limit_frames) || limit_frames < 1L) {
+      showNotification("Informe um limite de frames valido.", type = "warning")
+      return(invisible())
+    }
+
+    build_logs("Preparando build para os pacotes marcados.")
+    append_log(sprintf("Pacotes marcados: %d", nrow(checked_df)))
+    append_log(sprintf("Arquivo de saida: %s", file.path(output_dir, file_name)))
+    append_log(sprintf("Limite por camera: %d frame(s)", limit_frames))
+
+    build_ctx$rows <- split(checked_df, seq_len(nrow(checked_df)))
+    build_ctx$index <- 0L
+    build_ctx$built <- list()
+    build_ctx$skipped <- 0L
+    build_ctx$output_dir <- output_dir
+    build_ctx$file_name <- file_name
+    build_ctx$limit <- limit_frames
+    build_ctx$summary_row <- checked_df
+
+    build_running(TRUE)
+    later::later(function() {
+      shiny::withReactiveDomain(session, {
+        process_next_build()
+      })
+    }, 0.02)
+  }, ignoreInit = TRUE))
+
+  obs$add(observeEvent(input$btSairBuild, {
+    build_running(FALSE)
+    build_ctx$rows <- NULL
+    obs$destroy()
+    removeModal(session)
+    callback()
+  }, ignoreInit = TRUE, ignoreNULL = TRUE))
+
+  refresh_build_packages(preserve_checks = FALSE)
 }

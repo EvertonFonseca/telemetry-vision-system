@@ -361,13 +361,17 @@ server <- function(id) {
             treinar$uiNewTreinar(ns, input, output, session, function() {
               treinar$dispose(session)
             })
+          } else if (identical(sel, "treinarBuild")) {
+            treinar$uiBuildTreinar(ns, input, output, session, function() {
+              treinar$dispose(session)
+            })
           } else if (identical(sel, "treinarTable")) {
             treinar$uiEditTreinar(ns, input, output, session, function() {
               treinar$dispose(session)
             })
           }
           
-          if (!is.null(sel) && sel %in% c("treinarNew", "treinarTable")) {
+          if (!is.null(sel) && sel %in% c("treinarNew", "treinarBuild", "treinarTable")) {
             updateTabItems(session, inputId = "treinar", selected = "noop")
           }
         })
@@ -480,6 +484,7 @@ renderMenuSideBarMain <- function(ns) {
       sidebarMenu(id = ns("treinar"),
         menuItem("Treinar", icon = icon("brain"),
           menuSubItem("Novo", tabName = "treinarNew"),
+          menuSubItem("Build", tabName = "treinarBuild"),
           menuSubItem(text = htmltools::HTML("&nbsp;"), tabName = "noop", selected = TRUE)
         )
       )
