@@ -216,14 +216,16 @@ selectAllCameras <- function(con) {
 }
 
 #' @export
-selectAllCamerasIfExistFrame <- function(con) {
-    sql <- "
-      select
+selectAllCamerasWithFrameStatus <- function(con) {
+  sql <- "
+    select
       cv.cd_id_camera,
       cv.name_camera,
       cv.url_camera,
       cc.fps_camera,
-      cc.dt_hr_local
+      cc.dt_hr_local,
+      coalesce(fc.has_frame, false) as has_frame,
+      fc.dt_hr_last_frame
     from camera_view cv
     left join (
       select c1.cd_id_camera, c1.fps_camera, c1.dt_hr_local
@@ -234,17 +236,30 @@ selectAllCamerasIfExistFrame <- function(con) {
         group by cd_id_camera
       ) latest
         on latest.cd_id_camera = c1.cd_id_camera
-      and latest.max_dt      = c1.dt_hr_local
-    ) cc
-      on cc.cd_id_camera = cv.cd_id_camera
-    where exists (
-      select 1
+       and latest.max_dt      = c1.dt_hr_local
+    ) cc on cc.cd_id_camera = cv.cd_id_camera
+    left join (
+      select
+        fc.cd_id_camera,
+        true as has_frame,
+        max(fc.dt_hr_local) as dt_hr_last_frame
       from frame_camera fc
-      where fc.cd_id_camera = cv.cd_id_camera
-    )
-    order by cv.cd_id_camera;
-    "
-  DBI$dbGetQuery(con, sql)
+      group by fc.cd_id_camera
+    ) fc on fc.cd_id_camera = cv.cd_id_camera
+    order by cv.cd_id_camera
+  "
+
+  out <- DBI$dbGetQuery(con, sql)
+  if ("has_frame" %in% names(out)) {
+    out$has_frame <- as.logical(out$has_frame)
+  }
+  out
+}
+
+#' @export
+selectAllCamerasIfExistFrame <- function(con) {
+  out <- selectAllCamerasWithFrameStatus(con)
+  out[!is.na(out$has_frame) & out$has_frame, , drop = FALSE]
 }
 
 #' @export

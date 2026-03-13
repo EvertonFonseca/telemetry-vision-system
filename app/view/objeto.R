@@ -97,6 +97,129 @@ MAP_GROUP_COMPONENT_NAMES   <- "componentes_nomes"
   isTRUE(as.logical(value[[1]]))
 }
 
+.DEFAULT_FRAME_WIDTH  <- 512L
+.DEFAULT_FRAME_HEIGHT <- 512L
+
+.camera_has_frame <- function(camera) {
+  if (is.null(camera) || !is.data.frame(camera) || !"has_frame" %in% names(camera) || !nrow(camera)) {
+    return(FALSE)
+  }
+
+  isTRUE(as.logical(camera$has_frame[[1]]))
+}
+
+.camera_missing_frame_text <- function(camera_name = NULL) {
+  camera_name <- as.character(camera_name %||% "")
+  camera_name <- stringr::str_trim(camera_name)
+
+  if (!nzchar(camera_name)) {
+    return("Esta câmera não possui frame. Um frame preto será usado no editor para desenhar os polígonos.")
+  }
+
+  paste0(
+    "A câmera ", camera_name,
+    " não possui frame. Um frame preto será usado no editor para desenhar os polígonos."
+  )
+}
+
+.camera_choice_label <- function(camera) {
+  nm <- as.character(camera$name_camera[[1]])
+
+  if (.camera_has_frame(camera)) {
+    return(tags$span(style = "pointer-events:none;", nm))
+  }
+
+  tags$span(
+    title = .camera_missing_frame_text(nm),
+    style = "display:inline-flex; align-items:center; gap:6px; pointer-events:none;",
+    icon("exclamation-triangle", class = "text-warning"),
+    tags$span(nm),
+    tags$small("(sem frame)", style = "color:#f0ad4e; font-weight:600;")
+  )
+}
+
+.camera_choice_names <- function(cameras) {
+  if (is.null(cameras) || !is.data.frame(cameras) || !nrow(cameras)) {
+    return(list())
+  }
+
+  lapply(seq_len(nrow(cameras)), function(i) .camera_choice_label(cameras[i, , drop = FALSE]))
+}
+
+.camera_selection_help <- function(cameras) {
+  if (is.null(cameras) || !is.data.frame(cameras) || !nrow(cameras) || !"has_frame" %in% names(cameras)) {
+    return(NULL)
+  }
+
+  has_frame <- as.logical(cameras$has_frame)
+  has_frame[is.na(has_frame)] <- FALSE
+  if (!any(!has_frame)) return(NULL)
+
+  tags$div(
+    style = "margin-top:8px; display:flex; align-items:flex-start; gap:8px; color:#f0ad4e;",
+    icon("exclamation-triangle"),
+    tags$span("Câmeras com aviso estão sem frame. Se selecionadas, o editor abrirá um frame preto para permitir o desenho dos polígonos.")
+  )
+}
+
+.camera_frame_alert <- function(frame_data, camera) {
+  if (is.null(frame_data) || !is.data.frame(frame_data) || !nrow(frame_data) || is.null(camera) || !is.data.frame(camera) || !nrow(camera)) {
+    return(NULL)
+  }
+
+  data <- frame_data |> filter(.data$id == camera$cd_id_camera[[1]])
+  if (!nrow(data) || !"frame_is_placeholder" %in% names(data) || !isTRUE(data$frame_is_placeholder[[1]])) {
+    return(NULL)
+  }
+
+  msg <- as.character(data$frame_warning[[1]] %||% "")
+  if (is.na(msg) || !nzchar(msg)) {
+    msg <- .camera_missing_frame_text(camera$name_camera[[1]])
+  }
+
+  tags$div(
+    style = paste(
+      "margin:8px 0 10px 0; padding:10px 12px; border-radius:6px;",
+      "background:#fff7e6; border:1px solid #f0ad4e; color:#8a6d3b;"
+    ),
+    tags$div(
+      style = "display:flex; align-items:flex-start; gap:8px;",
+      icon("exclamation-triangle"),
+      tags$span(msg)
+    )
+  )
+}
+
+.empty_componentes_df <- function() {
+  tibble::tibble(
+    cd_id_componente   = integer(0),
+    name_componente    = character(0),
+    cd_id_camera       = integer(0),
+    poligno_componente = list(),
+    estrutura          = list(),
+    color_componente   = character(0)
+  )
+}
+
+.blank_frame_image <- function(width = .DEFAULT_FRAME_WIDTH, height = .DEFAULT_FRAME_HEIGHT) {
+  image_blank(width = as.integer(width), height = as.integer(height), color = "black")
+}
+
+.frame_warning_text <- function(camera_name, frame, img_ok) {
+  if (nrow(frame) == 0L || is.null(frame$data_frame[[1]])) {
+    return(.camera_missing_frame_text(camera_name))
+  }
+
+  if (!isTRUE(img_ok)) {
+    return(paste0(
+      "Não foi possível carregar o último frame da câmera ", camera_name,
+      ". Um frame preto será usado no editor para desenhar os polígonos."
+    ))
+  }
+
+  NULL
+}
+
 #' @export
  uiNewObjeto <- function(ns,input,output,session,callback){
   
@@ -109,7 +232,7 @@ MAP_GROUP_COMPONENT_NAMES   <- "componentes_nomes"
   obs2      <- newObserve()
   obs3      <- newObserve()
   setores   <- selectAllSetors(dbp$get_pool())
-  cameras   <- selectAllCamerasIfExistFrame(dbp$get_pool())
+  cameras   <- selectAllCamerasWithFrameStatus(dbp$get_pool())
   camerasSelected <- reactiveVal(NULL)
   tiposObjeto     <- selectTipoObjeto(dbp$get_pool())
   deleting        <- reactiveVal(FALSE)
@@ -213,6 +336,13 @@ MAP_GROUP_COMPONENT_NAMES   <- "componentes_nomes"
           'Novos Componentes'
         }
         
+      })
+
+      output$uiCameraFrameAlert <- renderUI({
+        req(sliderPosition() == 2L, !is.null(frame_data), !is.null(input$comboCameras))
+
+        camera <- cameras |> filter(name_camera == input$comboCameras)
+        .camera_frame_alert(frame_data, camera)
       })
       
       output$slider1 <- renderUI({
@@ -512,6 +642,7 @@ MAP_GROUP_COMPONENT_NAMES   <- "componentes_nomes"
             openOnFocus = TRUE,
             closeAfterSelect = TRUE
           )),
+          uiOutput(ns("uiCameraFrameAlert")),
           leafletOutput(ns("mapFrame"), height = "512px", width = "100%"),
           visibilidade_estaticos,
           estruturas_dinamicos,
@@ -779,7 +910,7 @@ uiEditObjeto <- function(ns,input,output,session,callback){
   obs2            <- newObserve()
   obs3            <- newObserve()
   setores         <- selectAllSetors(dbp$get_pool())
-  cameras         <- selectAllCamerasIfExistFrame(dbp$get_pool())
+  cameras         <- selectAllCamerasWithFrameStatus(dbp$get_pool())
   camerasSelected <- reactiveVal(NULL)
   tiposObjeto     <- selectTipoObjeto(dbp$get_pool())
   deleting        <- reactiveVal(FALSE)
@@ -886,7 +1017,14 @@ uiEditObjeto <- function(ns,input,output,session,callback){
         }else{
           'Edição do Objeto'
         }
-        
+
+      })
+
+      output$uiCameraFrameAlert <- renderUI({
+        req(sliderPosition() == 3L, !is.null(frame_data), !is.null(input$comboCameras))
+
+        camera <- cameras |> filter(name_camera == input$comboCameras)
+        .camera_frame_alert(frame_data, camera)
       })
       
       output$slider1 <- renderUI({
@@ -1265,6 +1403,7 @@ uiEditObjeto <- function(ns,input,output,session,callback){
             openOnFocus = TRUE,
             closeAfterSelect = TRUE
           )),
+          uiOutput(ns("uiCameraFrameAlert")),
           leafletOutput(ns("mapFrame"), height = "512px", width = "100%"),
           visibilidade_estaticos,
           estruturas_dinamicos,
@@ -1645,9 +1784,10 @@ uiMain <- function(ns,
             selected = valueMultiCamera,
             label = "Câmeras ativas",
             choices = NULL,
-            choiceNames  = apply(cameras,1, function(x)  tagList(x["name_camera"])),
-            choiceValues = apply(cameras,1, function(x)  x["name_camera"])
-          ) |> tagAppendAttributes(style = ';height: auto; width: 100%;')
+            choiceNames  = .camera_choice_names(cameras),
+            choiceValues = as.character(cameras$name_camera)
+          ) |> tagAppendAttributes(style = ';height: auto; width: 100%;'),
+          .camera_selection_help(cameras)
         )
 }
 
@@ -1973,14 +2113,30 @@ searchFramesByCamerasSelected <- function(conn,camerasTargets,cameras,objeto = N
   df <- map_df(camerasTargets,function(camera){
 
        cam_id <- cameras |> filter(name_camera == camera)
-       frame  <- selectLastFrameById(conn,cam_id$cd_id_camera)
+       if (nrow(cam_id) != 1L) return(NULL)
 
-       if(nrow(frame) == 0) return(NULL)
+       frame     <- selectLastFrameById(conn, cam_id$cd_id_camera)
+       img       <- NULL
+       img_ok    <- FALSE
 
-       img       <- image_read(frame$data_frame[[1]])
+       if (nrow(frame) > 0L && !is.null(frame$data_frame[[1]])) {
+         img <- tryCatch(
+           image_read(frame$data_frame[[1]]),
+           error = function(e) NULL
+         )
+         img_ok <- !is.null(img)
+       }
+
+       frame_warning <- .frame_warning_text(cam_id$name_camera[[1]], frame, img_ok)
+       frame_is_placeholder <- !img_ok
+
+       if (is.null(img)) {
+         img <- .blank_frame_image()
+       }
+
        info      <- image_info(img)
-       w         <- info$width
-       h         <- info$height
+       w         <- as.integer(info$width[[1]])
+       h         <- as.integer(info$height[[1]])
       componentes <- NULL
 
       if(!is.null(objeto)){
@@ -2002,10 +2158,20 @@ searchFramesByCamerasSelected <- function(conn,camerasTargets,cameras,objeto = N
                w     = w,
                h     = h,
                img_path   = img_path,
+               has_frame  = .camera_has_frame(cam_id),
+               frame_is_placeholder = frame_is_placeholder,
+               frame_warning = frame_warning %||% NA_character_,
                componente = list(componentes)
                )
     })
-  df$componente[[1]] <- map_df(df$componente,~ .x)
+
+  componentes_list <- Filter(function(x) is.data.frame(x) && nrow(x) > 0L, df$componente)
+  if (length(componentes_list)) {
+    df$componente[[1]] <- bind_rows(componentes_list)
+  } else {
+    df$componente[[1]] <- .empty_componentes_df()
+  }
+
   df$componente[[1]] <- .ensure_component_colors(df$componente[[1]])
   df
 }
