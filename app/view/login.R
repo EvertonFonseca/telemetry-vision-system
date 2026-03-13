@@ -163,7 +163,7 @@ uiLogin <- function(ns, session, input, output, callback, btCancel = FALSE) {
             tags$div(
               class = "tvs-login-title",
               shiny::icon("database"),
-              tags$span("Conexao com PostgreSQL")
+              tags$span("Telemetry Vision System")
             ),
             tags$p(
               class = "tvs-login-sub",
