@@ -397,7 +397,10 @@ WITH oc_latest AS (
   SELECT
     x.cd_id_obj_conf,
     x.cd_id_objeto,
-    o.name_objeto
+    o.grupo,
+    o.name_objeto,
+    o.cd_id_setor,
+    s.name_setor
   FROM (
     SELECT
       oc.*,
@@ -409,17 +412,23 @@ WITH oc_latest AS (
   ) x
   LEFT JOIN objeto o
     ON o.cd_id_objeto = x.cd_id_objeto
+  LEFT JOIN setor s
+    ON s.cd_id_setor = o.cd_id_setor
   WHERE x.rn = 1
 ),
 comps_base AS (
   SELECT
     ol.cd_id_objeto,
     ol.name_objeto,
+    ol.grupo,
+    ol.cd_id_setor,
+    ol.name_setor,
     c.cd_id_camera,
     c.cd_id_componente,
     c.name_componente,
     c.poligno_componente,
-    e.cd_id_estrutura
+    e.cd_id_estrutura,
+    e.name_estrutura
   FROM oc_latest ol
   LEFT JOIN componente c
     ON c.cd_id_obj_conf = ol.cd_id_obj_conf
@@ -430,6 +439,9 @@ cams AS (
   SELECT
     cb.cd_id_objeto,
     MAX(cb.name_objeto) AS name_objeto,
+    bool_or(cb.grupo) AS grupo,
+    MAX(cb.cd_id_setor) AS cd_id_setor,
+    MAX(cb.name_setor) AS name_setor,
 
     COALESCE((
       SELECT string_agg(d.cd_id_camera::text, ',' ORDER BY d.cd_id_camera)
@@ -448,7 +460,8 @@ cams AS (
           'cd_id_componente', cb.cd_id_componente,
           'name_componente', cb.name_componente,
           'poligno_componente', cb.poligno_componente,
-          'cd_id_estrutura', cb.cd_id_estrutura
+          'cd_id_estrutura', cb.cd_id_estrutura,
+          'name_estrutura', cb.name_estrutura
         )
       ) FILTER (WHERE cb.cd_id_componente IS NOT NULL),
       '[]'::jsonb
@@ -461,6 +474,9 @@ cams AS (
 SELECT
   p.*,
   cams.name_objeto,
+  cams.grupo,
+  cams.cd_id_setor,
+  cams.name_setor,
   COALESCE(cams.cd_id_cameras, '') AS cd_id_cameras,
   COALESCE(cams.polignos_componentes, '[]'::jsonb) AS polignos_componentes
 FROM pacote_ia p
@@ -470,7 +486,6 @@ ORDER BY p.cd_id_ia
 "
 
 frames <- DBI::dbGetQuery(con, query)
-frames <- lower_names(frames)
 
 limit <- 150L
 frames_u <- frames %>% upper_names()
@@ -568,8 +583,5 @@ for(i in seq_along(grupos$CD_ID_OBJETO)){
   pacote            <- grupos[i,]
   datas             <- pacote |> unnest(data)
   nome              <- tolower(str_replace_all(unique(datas$NAME_OBJETO)," ","_"))
-  datas$NAME_OBJETO <- NULL
-  saveRDS(datas,paste0("train/dataset_",nome,".rds"))
+  saveRDS(datas,paste0("train/dataset_",tolower(datas$NAME_SETOR),"_",nome,".rds"))
 }
-
-

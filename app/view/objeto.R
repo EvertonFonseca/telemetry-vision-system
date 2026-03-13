@@ -86,6 +86,17 @@ initMap <- FALSE
 MAP_GROUP_COMPONENT_POLYGON <- "poligonos_componentes"
 MAP_GROUP_COMPONENT_NAMES   <- "componentes_nomes"
 
+.object_flag_value <- function(df, col, default = FALSE) {
+  if (is.null(df) || !is.data.frame(df) || !(col %in% names(df))) {
+    return(default)
+  }
+
+  value <- df[[col]]
+  if (!length(value)) return(default)
+
+  isTRUE(as.logical(value[[1]]))
+}
+
 #' @export
  uiNewObjeto <- function(ns,input,output,session,callback){
   
@@ -669,7 +680,9 @@ MAP_GROUP_COMPONENT_NAMES   <- "componentes_nomes"
 
             #check if it has already data of Câmera
             nomeObjeto     <- isolate(toupper(input$textNameObjeto))
-            ativoObjeto    <- isolate(input$checkboxAtivoObjeto)  
+            ativoObjeto    <- isolate(input$checkboxAtivoObjeto)
+            isDevObjeto    <- isolate(input$checkboxIsDevObjeto)
+            grupoObjeto    <- isolate(input$checkboxGrupoObjeto)
             tipoObjeto     <- tiposObjeto |> filter(name_objeto_tipo == isolate(input$comboTipoObjeto))
             setor          <- setores |> filter(name_setor == isolate(input$comboSetor))
             
@@ -677,6 +690,8 @@ MAP_GROUP_COMPONENT_NAMES   <- "componentes_nomes"
             obj               <- list()
             obj$name_objeto   <- nomeObjeto
             obj$fg_ativo      <- as.integer(ativoObjeto)
+            obj$is_dev        <- as.integer(isDevObjeto)
+            obj$grupo         <- as.integer(grupoObjeto)
             obj$cd_id_setor   <- setor$cd_id_setor
             obj$cd_id_objeto_tipo <- tipoObjeto$cd_id_objeto_tipo
             obj$timeline_context_sec <- 5L #isolate(input$sliderTimeContexto)
@@ -972,6 +987,8 @@ uiEditObjeto <- function(ns,input,output,session,callback){
         tiposObjeto,
         valueComboSetor  = objetoSelect$name_setor,
         valueAtivo       = as.logical(objetoSelect$fg_ativo),
+        valueIsDev       = .object_flag_value(objetoSelect, "is_dev"),
+        valueGrupo       = .object_flag_value(objetoSelect, "grupo"),
         valueTextName    = objetoSelect$name_objeto,
         valueTipoObjeto  = objetoSelect$name_objeto_tipo,
         valueMultiCamera = cameraComponetes,
@@ -1463,13 +1480,17 @@ uiEditObjeto <- function(ns,input,output,session,callback){
 
             #check if it has already data of Câmera
             nomeObjeto     <- isolate(toupper(input$textNameObjeto))
-            ativoObjeto    <- isolate(input$checkboxAtivoObjeto)  
+            ativoObjeto    <- isolate(input$checkboxAtivoObjeto)
+            isDevObjeto    <- isolate(input$checkboxIsDevObjeto)
+            grupoObjeto    <- isolate(input$checkboxGrupoObjeto)
             tipoObjeto     <- tiposObjeto |> filter(name_objeto_tipo == isolate(input$comboTipoObjeto))
             setor          <- setores |> filter(name_setor == isolate(input$comboSetor))
        
             obj                      <- list()
             obj$name_objeto          <- nomeObjeto
             obj$fg_ativo             <- as.integer(ativoObjeto)
+            obj$is_dev               <- as.integer(isDevObjeto)
+            obj$grupo                <- as.integer(grupoObjeto)
             obj$cd_id_setor          <- setor$cd_id_setor
             obj$timeline_context_sec <- 5L #isolate(input$sliderTimeContexto)
         
@@ -1525,11 +1546,17 @@ uiMain <- function(ns,
                    tiposObjeto,
                    valueComboSetor = NULL,
                    valueAtivo      = TRUE,
+                   valueIsDev      = FALSE,
+                   valueGrupo      = FALSE,
                    valueTextName   = NULL,
                    valueTipoObjeto = NULL,
                    valueMultiCamera = NULL,
                    valueTempoContexto = 5
                   ){
+
+     valueAtivo <- isTRUE(as.logical(valueAtivo))
+     valueIsDev <- isTRUE(as.logical(valueIsDev))
+     valueGrupo <- isTRUE(as.logical(valueGrupo))
 
      changetextPlaceHolder()
       cameras
@@ -1539,9 +1566,10 @@ uiMain <- function(ns,
            column(12,selectizeInput(ns('comboSetor'),label = 'Setor',choices = setores$name_setor,selected = valueComboSetor))
            #column(6,sliderInput(ns('sliderTimeContexto'),label = 'Tempo Contexto Segundo',min = 1,step = 1,max = 10,round = TRUE,value = valueTempoContexto))
           ),
-          splitLayout(
-            cellWidths = c("10%", "60%","30%"),
-            tagList(          
+          div(
+            style = "display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end;",
+            div(
+              style = "flex: 0 1 120px;",
               tags$label("Ativar", style = "font-size: 15px;"),
               div(style = "margin-top: 5px;",
               prettyToggle(
@@ -1553,8 +1581,58 @@ uiMain <- function(ns,
                 icon_off  = icon("thumbs-down"),
                 bigger    = TRUE, width = "auto",
               ))),
-          textInput(paste0(ns('textNameObjeto')),label = 'Nome',placeholder = 'Digite o nome para o Objeto',width = "100%",value = valueTextName),
-          selectizeInput(ns('comboTipoObjeto'),label = 'Tipo',choices = tiposObjeto$name_objeto_tipo,width = "100px",selected = valueTipoObjeto),
+            div(
+              style = "flex: 0 1 160px;",
+              tags$label("Desenvolvimento", style = "font-size: 15px;"),
+              div(
+                style = "margin-top: 5px;",
+                prettyToggle(
+                  inputId   = ns("checkboxIsDevObjeto"),
+                  label_on  = "Sim",
+                  label_off = "NÃO",
+                  outline   = TRUE, plain = TRUE, value = valueIsDev,
+                  icon_on   = icon("check"),
+                  icon_off  = icon("times"),
+                  bigger    = TRUE, width = "auto"
+                )
+              )
+            ),
+            div(
+              style = "flex: 0 1 175px;",
+              tags$label("Grupado componentes", style = "font-size: 15px;"),
+              div(
+                style = "margin-top: 5px;",
+                prettyToggle(
+                  inputId   = ns("checkboxGrupoObjeto"),
+                  label_on  = "Sim",
+                  label_off = "NÃO",
+                  outline   = TRUE, plain = TRUE, value = valueGrupo,
+                  icon_on   = icon("check"),
+                  icon_off  = icon("times"),
+                  bigger    = TRUE, width = "auto"
+                )
+              )
+            ),
+            div(
+              style = "flex: 1 1 280px; min-width: 240px;",
+              textInput(
+                paste0(ns('textNameObjeto')),
+                label = 'Nome',
+                placeholder = 'Digite o nome para o Objeto',
+                width = "100%",
+                value = valueTextName
+              )
+            ),
+            div(
+              style = "flex: 0 1 140px; min-width: 120px;",
+              selectizeInput(
+                ns('comboTipoObjeto'),
+                label = 'Tipo',
+                choices = tiposObjeto$name_objeto_tipo,
+                width = "100%",
+                selected = valueTipoObjeto
+              )
+            ),
           ),
           multiInput(
             inputId = ns('multiCameras'),
@@ -1758,7 +1836,9 @@ uiMapa <-function(ns,camera,cameras,frame_data,componentes = NULL,is_dynamic = F
         )
    
   if(!is.null(componentes)){
-    componentes <- .filter_componentes_visible(componentes, camera$cd_id_camera, componentes_visiveis)
+    if (!isTRUE(is_dynamic)) {
+      componentes <- .filter_componentes_visible(componentes, camera$cd_id_camera, componentes_visiveis)
+    }
     componentes <- .ensure_component_colors(componentes)
 
     for(i in seq_len(nrow(componentes))){

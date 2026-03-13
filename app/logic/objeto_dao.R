@@ -348,6 +348,8 @@ insertNewObjeto <- function(con, cd_id_objeto, objeto) {
     !is.null(cd_id_objeto),
     !is.null(objeto$name_objeto),
     !is.null(objeto$fg_ativo),
+    !is.null(objeto$is_dev),
+    !is.null(objeto$grupo),
     !is.null(objeto$cd_id_setor),
     !is.null(objeto$cd_id_objeto_tipo),
     !is.null(objeto$timeline_context_sec)
@@ -355,9 +357,9 @@ insertNewObjeto <- function(con, cd_id_objeto, objeto) {
 
   sql <- "
     insert into objeto
-      (cd_id_objeto, name_objeto, fg_ativo, cd_id_setor, cd_id_objeto_tipo, timeline_context_sec)
+      (cd_id_objeto, name_objeto, fg_ativo, is_dev, grupo, cd_id_setor, cd_id_objeto_tipo, timeline_context_sec)
     values
-      ($1, $2, $3, $4, $5, $6)
+      ($1, $2, $3, $4, $5, $6, $7, $8)
   "
 
   DBI$dbExecute(
@@ -366,6 +368,8 @@ insertNewObjeto <- function(con, cd_id_objeto, objeto) {
       as.integer(cd_id_objeto),
       objeto$name_objeto,
       as.logical(objeto$fg_ativo),
+      as.logical(objeto$is_dev),
+      as.logical(objeto$grupo),
       as.integer(objeto$cd_id_setor),
       as.integer(objeto$cd_id_objeto_tipo),
       as.integer(objeto$timeline_context_sec)
@@ -467,8 +471,10 @@ updateObjeto <- function(con, obj) {
     update objeto
        set name_objeto = $1,
            cd_id_setor = $2,
-           fg_ativo    = $3
-     where cd_id_objeto = $4
+           fg_ativo    = $3,
+           is_dev      = $4,
+           grupo       = $5
+     where cd_id_objeto = $6
   "
 
   DBI$dbExecute(
@@ -477,6 +483,8 @@ updateObjeto <- function(con, obj) {
       obj$name_objeto,
       as.integer(obj$cd_id_setor),
       as.logical(obj$fg_ativo),
+      as.logical(obj$is_dev),
+      as.logical(obj$grupo),
       as.integer(obj$cd_id_objeto)
     )
   )
