@@ -55,7 +55,17 @@ checkifExistUrlEstrutura <- function(con, url_estrutura) {
 
 #' @export
 selectAllEstrutura <- function(con) {
-  estruturas <- DBI$dbGetQuery(con, "select * from estrutura order by cd_id_estrutura")
+  estruturas <- DBI$dbGetQuery(
+    con,
+    "
+    select
+      cd_id_estrutura,
+      name_estrutura,
+      grupo
+    from estrutura
+    order by cd_id_estrutura
+    "
+  )
   estruturas <- .df_names_lower(estruturas)
 
   estruturas$configs <- purrr::map(seq_len(nrow(estruturas)), function(i) {
@@ -69,7 +79,14 @@ selectAllEstrutura <- function(con) {
 selectAllEstruturaByIdComponente <- function(con, cd_id_estrutura) {
   estruturas <- DBI$dbGetQuery(
     con,
-    "select * from estrutura where cd_id_estrutura = $1",
+    "
+    select
+      cd_id_estrutura,
+      name_estrutura,
+      grupo
+    from estrutura
+    where cd_id_estrutura = $1
+    ",
     params = list(as.integer(cd_id_estrutura))
   )
   estruturas <- .df_names_lower(estruturas)

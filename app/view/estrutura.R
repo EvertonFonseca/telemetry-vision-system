@@ -27,7 +27,7 @@ box::use(
   stringr,
   dplyr[...],
   lubridate[...],
-  shinyWidgets[multiInput,updateMultiInput,prettyToggle],
+  shinyWidgets[multiInput,updateMultiInput,prettyToggle,updatePrettyToggle],
   htmlwidgets,
   ../logic/utils[...],
   purrr[map,map_df,map_chr],
@@ -70,6 +70,17 @@ dispose <- function(session, key = "setor_private") {
   })
 
   invisible(NULL)
+}
+
+.estrutura_flag_value <- function(df, col, default = FALSE) {
+  if (is.null(df) || !is.data.frame(df) || !(col %in% names(df))) {
+    return(default)
+  }
+
+  value <- df[[col]]
+  if (!length(value)) return(default)
+
+  isTRUE(as.logical(value[[1]]))
 }
 
 #' @export
@@ -249,6 +260,7 @@ uiNewEstrutura <- function(ns,input,output,session,callback){
             obs$add(observeEvent(input$btSalvar,{
               
                 nomeEstrutura <- isolate(toupper(input$textNameEstrutura))
+                grupoEstrutura <- isolate(input$checkboxGrupoEstrutura)
                 
                 if(stringi$stri_isempty(stringr$str_trim(nomeEstrutura))){
                   showNotification("O nome do Estrutura nÃ£o foi preenchido!", type = "warning")
@@ -277,6 +289,7 @@ uiNewEstrutura <- function(ns,input,output,session,callback){
                   #check if it has already data of CÃ¢mera
                   obj <- list()
                   obj$name_estrutura   <- nomeEstrutura
+                  obj$grupo            <- isTRUE(as.logical(grupoEstrutura))
                   obj$cd_id_estrutura  <- db$nextSequenciaID(conn, "estrutura", id_col = "cd_id_estrutura", schema = "public")
                 
                   db$insertTable(conn,"estrutura",obj)
@@ -395,9 +408,9 @@ uiEditEstrutura <- function(ns,input,output,session,callback){
       output$titleTexto <- renderText({
         
         if(sliderPosition() == 1L){
-          'Registros CÃ¢meras'
+          'Registros câmeras'
         }else{
-          'EdiÃ§Ã£o da cÃ¢mera'
+          'Edição da câmera'
         }
         
       })
@@ -611,7 +624,11 @@ uiEditEstrutura <- function(ns,input,output,session,callback){
             })
           )
           
-          uiAtributos(ns,estruturaSelect$name_estrutura)
+          uiAtributos(
+            ns,
+            valueTextoNameEstrutura = estruturaSelect$name_estrutura,
+            valueGrupo = .estrutura_flag_value(estruturaSelect, "grupo")
+          )
         })
         
         obs$add(observeEvent(input$editPressedRow,{
@@ -684,6 +701,7 @@ uiEditEstrutura <- function(ns,input,output,session,callback){
             
             estruturaSelect <- isolate(estrutura())
             nomeEstrutura   <- isolate(toupper(input$textNameEstrutura))
+            grupoEstrutura  <- isolate(input$checkboxGrupoEstrutura)
             
             if(stringi$stri_isempty(stringr$str_trim(nomeEstrutura))){
               showNotification("O nome do Estrutura nÃ£o foi preenchido!", type = "warning")
@@ -711,6 +729,7 @@ uiEditEstrutura <- function(ns,input,output,session,callback){
               #check if it has already data of CÃ¢mera
               obj <- list()
               obj$name_estrutura   <- nomeEstrutura
+              obj$grupo            <- isTRUE(as.logical(grupoEstrutura))
               db$updateTable(conn,"ESTRUTURA",obj, where_cols = "cd_id_estrutura", where_vals = estruturaSelect$cd_id_estrutura)
               
               #Estrutura Config
@@ -745,16 +764,32 @@ uiEditEstrutura <- function(ns,input,output,session,callback){
           },ignoreInit = T))
 }
             
- uiAtributos <- function(ns,valueTextoNameEstrutura = NULL){
+ uiAtributos <- function(ns, valueTextoNameEstrutura = NULL, valueGrupo = FALSE){
+  valueGrupo <- isTRUE(as.logical(valueGrupo))
   
   div(
     inlineCSS(paste0("#", ns("textNameEstrutura"), " {text-transform: uppercase;}")),
     splitLayout(
-      cellWidths = c("80%", "auto","auto"),
+      cellWidths = c("70%", "140px", "auto", "auto"),
       textInput(ns("textNameEstrutura"), label = "Nome",
       placeholder = "Digite o nome para a Estrutura (ex.: PRENSA 1.0)",width = "100%",value = valueTextoNameEstrutura ),
-      actionButton(ns("atributoClearAll"), label = "", icon = icon("eraser"),style = "margin-top: 25px;"),
-      actionButton(ns("atributoAdd"), label = "", icon = icon("plus"),style = "margin-top: 25px;")
+      tagList(
+        tags$label("Grupar", style = "font-size: 15px;"),
+        div(
+          style = "margin-top: 5px;",
+          prettyToggle(
+            inputId   = ns("checkboxGrupoEstrutura"),
+            label_on  = "Sim",
+            label_off = "Não",
+            outline   = TRUE, plain = TRUE, value = valueGrupo,
+            icon_on   = icon("check"),
+            icon_off  = icon("times"),
+            bigger    = TRUE, width = "auto"
+          )
+        )
+      ),
+      actionButton(ns("atributoClearAll"), label = "", icon = icon("eraser"),style = "margin-top: 25px;margin-left: -80px;"),
+      actionButton(ns("atributoAdd"), label = "", icon = icon("plus"),style = "margin-top: 25px;margin-left: -40px;")
     ),
     uiOutput(ns("containerAtributo"))   # <- conteÃºdo dinÃ¢mico entra aqui
   )
@@ -826,6 +861,7 @@ clearPanel <- function(session,attributoReactive){
   # Limpar os campos APÃ“S o flush/render â€” garante que os inputs existam no DOM
   session$onFlushed(function() {
     updateTextInput(session,'textNameEstrutura', value = '')
+    updatePrettyToggle(session, 'checkboxGrupoEstrutura', value = FALSE)
     updateTextInput(session,sprintf("atributo_%d",1L), value = '')
     updateTextAreaInput(session,sprintf("textoClasse_%d",1L), value = '')
     updateSelectizeInput(session,sprintf("comboTipodados_%d",1L),selected = "QUALITATIVE")
