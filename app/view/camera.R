@@ -49,6 +49,7 @@ box::use(
   stringr,
   dplyr[...],
   lubridate[...],
+  shinyWidgets[prettyToggle,updatePrettyToggle],
   dbp  = ../infra/db_pool,
   db   = ../infra/database
 )
@@ -127,6 +128,7 @@ dispose <- function(session, key = "setor_private") {
      updateTextInput(session,'textNameCamera', value = '')
      updateTextInput(session,'textUrlCamera',  value = '')
      updateSelectInput(session,'comboFps',selected = 5)
+     updatePrettyToggle(session,'checkboxAtivoCamera', value = TRUE)
   }, ignoreInit = TRUE))
 
    ## Salvar Camera
@@ -159,6 +161,7 @@ dispose <- function(session, key = "setor_private") {
       obj$name_camera   <- nomeCamera
       obj$url_camera    <- urlCamera
       obj$fps_camera    <- isolate(input$comboFps)
+      obj$fg_ativo      <- isTRUE(isolate(input$checkboxAtivoCamera))
       id <- db$nextSequenciaID(conn, "camera_view", id_col = "cd_id_camera", schema = "public")
       insertNewCamera(conn,id,obj)
      
@@ -178,6 +181,7 @@ dispose <- function(session, key = "setor_private") {
           updateTextInput(session,'textNameCamera', value = '')
           updateTextInput(session,'textUrlCamera',  value = '')
           updateSelectInput(session,'comboFps',selected = 5)
+          updatePrettyToggle(session,'checkboxAtivoCamera', value = TRUE)
         }, once = TRUE)
   
         if(!status){
@@ -260,6 +264,8 @@ uiEditCamera <- function(ns,input,output,session,callback = NULL){
         
         colunaNames <- c('LINHA','CAMERÂ',"URL",'VISUALIZAR / EDITAR','REMOVER')
 
+        colunaNames <- c('LINHA','CAMERA',"URL",'ATIVA','VISUALIZAR / EDITAR','REMOVER')
+
         DT$datatable({
           
           dataset |> 
@@ -270,7 +276,8 @@ uiEditCamera <- function(ns,input,output,session,callback = NULL){
                   !!colunaNames[1] := 1:nrow(dataset),
                   !!colunaNames[2] :=  dataset$name_camera,
                   !!colunaNames[3] :=  paste0(substr(dataset$url_camera, 1,10), "..."),
-                  !!colunaNames[4] :=  sapply(dataset$cd_id_camera, function (x) {
+                  !!colunaNames[4] :=  ifelse(as.logical(dataset$fg_ativo), "SIM", "NAO"),
+                  !!colunaNames[5] :=  sapply(dataset$cd_id_camera, function (x) {
                     
                    as.character(
                       actionButton(
@@ -282,7 +289,7 @@ uiEditCamera <- function(ns,input,output,session,callback = NULL){
                       )
                     )
                   }),
-                  !!colunaNames[5] :=  sapply(dataset$cd_id_camera, function (x) {
+                  !!colunaNames[6] :=  sapply(dataset$cd_id_camera, function (x) {
                     
                    as.character(
                       actionButton(
@@ -303,7 +310,7 @@ uiEditCamera <- function(ns,input,output,session,callback = NULL){
           language = list(url = 'js/table.json'),
           dom = 't',
           bSort=FALSE,
-          columnDefs = list(list(visible=FALSE, targets=c(0)),list(className = 'dt-center', targets = "_all"),list(width = '75px',targets = c(1)),list(width = 'autos',targets = c(3))),
+          columnDefs = list(list(visible=FALSE, targets=c(0)),list(className = 'dt-center', targets = "_all"),list(width = '75px',targets = c(1)),list(width = '90px',targets = c(3)),list(width = 'autos',targets = c(4))),
           deferRender = TRUE,
           scroller = FALSE,
           fixedHeader = TRUE,
@@ -331,7 +338,8 @@ uiEditCamera <- function(ns,input,output,session,callback = NULL){
      uiMain(ns,
             valueName = cameraSelect$name_camera,
             valueUrl = cameraSelect$url_camera,
-            valueFps = cameraSelect$fps_camera
+            valueFps = cameraSelect$fps_camera,
+            valueAtivo = cameraSelect$fg_ativo
           )
   })
 
@@ -406,6 +414,7 @@ uiEditCamera <- function(ns,input,output,session,callback = NULL){
       id         <- isolate(camera()$cd_id_camera)
       nomeCamera <- isolate(toupper(input$textNameCamera))
       urlCamera  <- isolate(input$textUrlCamera)
+      ativoCamera <- isTRUE(isolate(input$checkboxAtivoCamera))
 
       if(stringi$stri_isempty(stringr$str_trim(nomeCamera))){
         showNotification("O nome do Câmera não foi preenchido!", type = "warning")
@@ -429,6 +438,7 @@ uiEditCamera <- function(ns,input,output,session,callback = NULL){
       obj$name_camera   <- nomeCamera
       obj$url_camera    <- urlCamera
       obj$fps_camera    <- isolate(input$comboFps)
+      obj$fg_ativo      <- ativoCamera
 
       updateCamera(conn,obj)
       #load todos os setores
@@ -444,7 +454,8 @@ uiEditCamera <- function(ns,input,output,session,callback = NULL){
   
 }
 
-uiMain <- function(ns,valueName = NULL,valueUrl = NULL,valueFps = 5){
+uiMain <- function(ns,valueName = NULL,valueUrl = NULL,valueFps = 5,valueAtivo = TRUE){
+  valueAtivo <- isTRUE(as.logical(valueAtivo))
 
   div(
         inlineCSS(paste0("#",ns("textNameCamera")," {text-transform: uppercase;}")),
@@ -457,7 +468,29 @@ uiMain <- function(ns,valueName = NULL,valueUrl = NULL,valueFps = 5){
                    children = fluidRow(
                      style = 'padding-top: 10px; padding-left: 15px; padding-right: 15px;',
                      column(12,textInput(ns('textUrlCamera'),label = 'Url',placeholder = 'rtsp://...',value = valueUrl,width = "95%")),
-                     column(12,selectizeInput(ns('comboFps'),label = 'Frame por segundos',choices = c(1,5,15,30),selected = valueFps))
+                     column(6,selectizeInput(ns('comboFps'),label = 'Frame por segundos',choices = c(1,5,15,30),selected = valueFps)),
+                     column(
+                       6,
+                       div(
+                         style = "padding-top: 27px;",
+                         div("Ativa", style = "font-size: 15px;"),
+                         div(
+                           style = "margin-top: 5px;",
+                           prettyToggle(
+                             inputId   = ns("checkboxAtivoCamera"),
+                             label_on  = "Sim",
+                             label_off = "Nao",
+                             outline   = TRUE,
+                             plain     = TRUE,
+                             value     = valueAtivo,
+                             icon_on   = icon("thumbs-up"),
+                             icon_off  = icon("thumbs-down"),
+                             bigger    = TRUE,
+                             width     = "auto"
+                           )
+                         )
+                       )
+                     )
                    )
         )
       )

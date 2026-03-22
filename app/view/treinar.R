@@ -1522,7 +1522,7 @@ get_current_frame_ts <- function(rv, tz = "UTC", fmt = NULL) {
 # Módulo principal (server)
 # ==================================================
 #' @export
-uiNewTreinar <- function(ns, input, output, session, callback) {
+uiNewTreinar <- function(ns, input, output, session, callback, dialogTitle = "Novo Pacote") {
 
   .register_auto_dispose(session)
   e <- .get_private(session)
@@ -2729,7 +2729,7 @@ uiNewTreinar <- function(ns, input, output, session, callback) {
       style = "height: 80%; overflow: hidden;",
       inlineCSS(cssStyle),
       dialogModal(
-        title = "Novo Pacote",
+        title = dialogTitle,
         size  = "m",
         uiMain(ns, setores),
         footer = uiOutput(ns("uiFooter"))

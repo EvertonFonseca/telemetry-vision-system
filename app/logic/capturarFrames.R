@@ -399,30 +399,27 @@ capture_rtsp_loop <- function(
 }
 
 # ===================== EXECUTAR =====================
-ip   <- "172.30.0.211"
-port <- 554
-user <- "everton"
-pwd  <- "kNFR#8wnT4p"
 
-ip   <- "172.30.0.233"
-port <- 554
-user <- "everton"
-pwd  <- "ssbwarcq1586"
 
-rtsp_url <- make_rtsp_url(ip, port, user, pwd, channel = 19, subtype = 1)
+ip   <- "172.30.0.205"
+port <- 554
+user <- "system523"
+pwd  <- "Sd2fnk9d1W"
+
+rtsp_url <- make_rtsp_url(ip, port, user, pwd, channel = 1, subtype = 0)
 
 # Exemplo: 1 FPS, 512x512, COMMIT a cada 20, sem salvar cópia local
-capture_rtsp_loop(
-  url             = rtsp_url,
-  save_local_copy = FALSE,       # TRUE se quiser imagens em disco
-  fps             = 5L,
-  size            = c(512, 512), # resize feito no ffmpeg
-  retention_hours = 24,
-  stop_flag       = "STOP.txt",
-  batch_size      = 5L,
-  id_camera       = 1L,
-  use_magick      = FALSE        # set TRUE se quiser manter image_read() internamente
-)
+# capture_rtsp_loop(
+#   url             = rtsp_url,
+#   save_local_copy = FALSE,       # TRUE se quiser imagens em disco
+#   fps             = 5L,
+#   size            = c(512, 512), # resize feito no ffmpeg
+#   retention_hours = 24,
+#   stop_flag       = "STOP.txt",
+#   batch_size      = 5L,
+#   id_camera       = 1L,
+#   use_magick      = FALSE        # set TRUE se quiser manter image_read() internamente
+# )
 
 res <- validate_rtsp_and_plot(rtsp_url, size = c(512,512), plot = TRUE)
 

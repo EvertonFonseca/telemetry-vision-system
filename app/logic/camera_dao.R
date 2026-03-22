@@ -9,6 +9,15 @@ box::use(
 # ---- helpers ----
 .affected_ok <- function(n) isTRUE(!is.na(n) && n > 0)
 .count1 <- function(df) as.integer(df[[1]][[1]])
+.coerce_camera_logicals <- function(df) {
+  if ("fg_ativo" %in% names(df)) {
+    df$fg_ativo <- as.logical(df$fg_ativo)
+  }
+  if ("has_frame" %in% names(df)) {
+    df$has_frame <- as.logical(df$has_frame)
+  }
+  df
+}
 
 # (opcional) normaliza nomes de listas para lower
 # use: camera <- .names_to_lower(camera)
@@ -122,6 +131,11 @@ selectLastFrameById <- function(con, cd_id_camera) {
 #' @export
 insertNewCamera <- function(con, cd_id_camera, camera) {
   camera <- .names_to_lower(camera)
+  camera_fg_ativo <- camera$fg_ativo
+
+  if (is.null(camera_fg_ativo) || is.na(camera_fg_ativo)) {
+    camera_fg_ativo <- TRUE
+  }
 
   stopifnot(
     !is.null(cd_id_camera),
@@ -132,12 +146,13 @@ insertNewCamera <- function(con, cd_id_camera, camera) {
 
   n1 <- DBI$dbExecute(
     con,
-    "insert into camera_view (cd_id_camera, name_camera, url_camera)
-     values ($1, $2, $3)",
+    "insert into camera_view (cd_id_camera, name_camera, url_camera, fg_ativo)
+     values ($1, $2, $3, $4)",
     params = list(
       as.integer(cd_id_camera),
       camera$name_camera,
-      camera$url_camera
+      camera$url_camera,
+      as.logical(camera_fg_ativo)
     )
   )
 
@@ -158,6 +173,11 @@ insertNewCamera <- function(con, cd_id_camera, camera) {
 #' @export
 updateCamera <- function(con, camera) {
   camera <- .names_to_lower(camera)
+  camera_fg_ativo <- camera$fg_ativo
+
+  if (is.null(camera_fg_ativo) || is.na(camera_fg_ativo)) {
+    camera_fg_ativo <- TRUE
+  }
 
   stopifnot(!is.null(camera$cd_id_camera))
 
@@ -165,11 +185,13 @@ updateCamera <- function(con, camera) {
     con,
     "update camera_view
         set name_camera = $1,
-            url_camera  = $2
-      where cd_id_camera = $3",
+            url_camera  = $2,
+            fg_ativo    = $3
+      where cd_id_camera = $4",
     params = list(
       camera$name_camera,
       camera$url_camera,
+      as.logical(camera_fg_ativo),
       as.integer(camera$cd_id_camera)
     )
   )
@@ -196,6 +218,7 @@ selectAllCameras <- function(con) {
       cv.cd_id_camera,
       cv.name_camera,
       cv.url_camera,
+      cv.fg_ativo,
       cc.fps_camera,
       cc.dt_hr_local
     from camera_view cv
@@ -212,7 +235,7 @@ selectAllCameras <- function(con) {
     ) cc on cc.cd_id_camera = cv.cd_id_camera
     order by cv.cd_id_camera
   "
-  DBI$dbGetQuery(con, sql)
+  .coerce_camera_logicals(DBI$dbGetQuery(con, sql))
 }
 
 #' @export
@@ -222,6 +245,7 @@ selectAllCamerasWithFrameStatus <- function(con) {
       cv.cd_id_camera,
       cv.name_camera,
       cv.url_camera,
+      cv.fg_ativo,
       cc.fps_camera,
       cc.dt_hr_local,
       coalesce(fc.has_frame, false) as has_frame,
@@ -249,11 +273,7 @@ selectAllCamerasWithFrameStatus <- function(con) {
     order by cv.cd_id_camera
   "
 
-  out <- DBI$dbGetQuery(con, sql)
-  if ("has_frame" %in% names(out)) {
-    out$has_frame <- as.logical(out$has_frame)
-  }
-  out
+  .coerce_camera_logicals(DBI$dbGetQuery(con, sql))
 }
 
 #' @export
@@ -268,7 +288,9 @@ selectCameraByComponente <- function(con, componente) {
   stopifnot(!is.null(componente$cd_id_camera))
 
   sql <- "select * from camera_view where cd_id_camera = $1"
-  DBI$dbGetQuery(con, sql, params = list(as.integer(componente$cd_id_camera)))
+  .coerce_camera_logicals(
+    DBI$dbGetQuery(con, sql, params = list(as.integer(componente$cd_id_camera)))
+  )
 }
 
 #' @export

@@ -79,6 +79,6 @@ app <- rhino::app()  # (segue a recomendação da doc do mirai) :contentReferenc
 #     shiny::runApp(app, host = "127.0.0.1", port = 5000)
 #   })
 # })
-
+# rtsp://system523:Sd2fnk9d1W@186.0.146.87:8086/cam/realmonitor?channel=1&subtype=0
 shiny::runApp(app, host = "127.0.0.1", port = 5000)
 
