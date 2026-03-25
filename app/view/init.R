@@ -303,9 +303,21 @@ server <- function(id) {
             objeto$uiEditObjeto(ns, input, output, session, function() {
               objeto$dispose(session)
             })
+          } else if (identical(sel, "objetoContexto")) {
+            tryCatch(
+              objeto$uiObjetoContexto(ns, input, output, session, function() {
+                objeto$dispose(session)
+              }),
+              error = function(e) {
+                showNotification(
+                  paste0("Nao foi possivel abrir o contexto do objeto: ", conditionMessage(e)),
+                  type = "error"
+                )
+              }
+            )
           }
           
-          if (!is.null(sel) && sel %in% c("objetoNew", "objetoTable")) {
+          if (!is.null(sel) && sel %in% c("objetoNew", "objetoTable", "objetoContexto")) {
             updateTabItems(session, inputId = "objeto", selected = "noop")
           }
         })
@@ -469,6 +481,7 @@ renderMenuSideBarMain <- function(ns) {
         menuItem("Objeto", icon = icon("cube"),
           menuSubItem("Novo",  tabName = "objetoNew"),
           menuSubItem("Lista", tabName = "objetoTable"),
+          menuSubItem("Contexto", tabName = "objetoContexto"),
           menuSubItem(text = htmltools::HTML("&nbsp;"), tabName = "noop", selected = TRUE)
         )
       ),

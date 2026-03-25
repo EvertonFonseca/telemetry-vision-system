@@ -135,7 +135,24 @@ updateSetor <- function(con, setor) {
 
 #' @export
 selectAllSetors <- function(con) {
-  DBI$dbGetQuery(con, "select * from setor order by cd_id_setor")
+  DBI$dbGetQuery(
+    con,
+    "
+    select
+      s.*,
+      coalesce(o.qtd_objetos_vinculados, 0) as qtd_objetos_vinculados
+    from setor s
+    left join (
+      select
+        cd_id_setor,
+        count(*) as qtd_objetos_vinculados
+      from objeto
+      group by cd_id_setor
+    ) o
+      on o.cd_id_setor = s.cd_id_setor
+    order by s.cd_id_setor
+    "
+  )
 }
 
 #' @export

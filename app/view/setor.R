@@ -35,6 +35,8 @@ box::use(
       panelTitle,
       removeModalClear,
       newObserve,
+      dtProfessionalOptions,
+      dtProfessionalOutput,
       shinySetInputValue,
       play_sound,
       debugLocal,
@@ -252,7 +254,7 @@ uiEditSetor <- function(ns,input,output,session,callback){
 
           if(length(dataset) == 0) return(NULL)
           
-          colunaNames <- c('LINHA','SETOR','VISUALIZAR / EDITAR','REMOVER')
+          colunaNames <- c('LINHA','SETOR','OBJETOS VINCULADOS','VISUALIZAR / EDITAR','REMOVER')
         
           DT$datatable({
             
@@ -263,7 +265,8 @@ uiEditSetor <- function(ns,input,output,session,callback){
               mutate(
                     !!colunaNames[1] := 1:nrow(dataset),
                     !!colunaNames[2] :=  dataset$name_setor,
-                    !!colunaNames[3] :=  sapply(dataset$cd_id_setor, function (x) {
+                    !!colunaNames[3] :=  if ("qtd_objetos_vinculados" %in% names(dataset)) dataset$qtd_objetos_vinculados else rep(0L, nrow(dataset)),
+                    !!colunaNames[4] :=  sapply(dataset$cd_id_setor, function (x) {
                       
                     as.character(
                         actionButton(
@@ -275,7 +278,7 @@ uiEditSetor <- function(ns,input,output,session,callback){
                         )
                       )
                     }),
-                    !!colunaNames[4] :=  sapply(dataset$cd_id_setor, function (x) {
+                    !!colunaNames[5] :=  sapply(dataset$cd_id_setor, function (x) {
                       
                     as.character(
                         actionButton(
@@ -292,16 +295,15 @@ uiEditSetor <- function(ns,input,output,session,callback){
           },  
           class = 'cell-border stripe',
           extensions = 'Scroller',
-          options = list(
-            language = list(url = 'js/table.json'),
-            dom = 't',
-            bSort=FALSE,
-            columnDefs = list(list(visible=FALSE, targets=c(0)),list(className = 'dt-center', targets = "_all"),list(width = '75px',targets = c(1,4)),list(width = 'autos',targets = c(3))),
-            deferRender = TRUE,
-            scroller = FALSE,
-            fixedHeader = TRUE,
-            scrollX = TRUE,
-            scrollY = '280px'
+          options = dtProfessionalOptions(
+            columnDefs = list(
+              list(visible = FALSE, targets = c(0)),
+              list(className = 'dt-center', targets = "_all"),
+              list(width = 'auto', targets = c(1)),
+              list(width = '120px', targets = c(2)),
+              list(width = '75px', targets = c(3, 4))
+            ),
+            search_placeholder = "Pesquisar setor ou objetos vinculados"
           ),
           escape = F,
           selection = 'none',
@@ -309,10 +311,7 @@ uiEditSetor <- function(ns,input,output,session,callback){
           
         })
         
-        div(
-          style = 'border-style: solid; border-color: white; border-width: 1px; overflow-x: auto;',
-          DT$dataTableOutput(outputId = ns('tableDinamicaSetor'))
-        )
+        dtProfessionalOutput(ns, 'tableDinamicaSetor')
         
       })
     

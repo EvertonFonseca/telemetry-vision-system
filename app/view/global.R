@@ -256,6 +256,123 @@ changetextPlaceHolder <- function(text = "Filtro ..."){
 }
 
 #' @export
+dtProfessionalOptions <- function(columnDefs,
+                                  scrollY = "280px",
+                                  search_placeholder = "Pesquisar registros",
+                                  language_url = "js/table.json",
+                                  extra_options = list()) {
+
+  search_placeholder_js <- gsub("'", "\\\\'", search_placeholder, fixed = TRUE)
+
+  options_base <- list(
+    language = list(
+      url = language_url,
+      search = "",
+      searchPlaceholder = search_placeholder
+    ),
+    dom = '<"tvs-dt-toolbar"f>t',
+    searching = TRUE,
+    searchDelay = 250L,
+    bSort = FALSE,
+    columnDefs = columnDefs,
+    deferRender = TRUE,
+    scroller = FALSE,
+    fixedHeader = TRUE,
+    scrollX = TRUE,
+    scrollY = scrollY,
+    initComplete = DT::JS(
+      sprintf(
+        paste0(
+          "function(settings){",
+          "var wrapper = $(this.api().table().container()).closest('.dataTables_wrapper');",
+          "var filter = wrapper.find('div.dataTables_filter');",
+          "var label = filter.find('label');",
+          "var input = label.find('input');",
+          "filter.attr('role', 'search');",
+          "if (!label.find('.tvs-dt-search-icon').length) {",
+          "label.prepend('<span class=\"tvs-dt-search-icon\"><i class=\"fa fa-search\"></i></span>');",
+          "}",
+          "input.attr({",
+          "placeholder: '%s',",
+          "autocomplete: 'off',",
+          "spellcheck: 'false',",
+          "'aria-label': '%s'",
+          "});",
+          "}"
+        ),
+        search_placeholder_js,
+        search_placeholder_js
+      )
+    )
+  )
+
+  utils::modifyList(options_base, extra_options)
+}
+
+#' @export
+dtProfessionalOutput <- function(ns,
+                                 output_id,
+                                 container_style = "border-style: solid; border-color: white; border-width: 1px; overflow-x: auto;") {
+
+  wrapper_selector <- paste0("#", ns(output_id), "_wrapper")
+  css_style <- list()
+
+  css_style[[paste0(wrapper_selector, " .tvs-dt-toolbar")]] <- paste(
+    "display: flex;",
+    "justify-content: flex-end;",
+    "align-items: center;",
+    "margin-bottom: 12px;"
+  )
+  css_style[[paste0(wrapper_selector, " .dataTables_filter")]] <- paste(
+    "float: none !important;",
+    "width: 100%;",
+    "display: flex;",
+    "justify-content: flex-end;",
+    "margin: 0;"
+  )
+  css_style[[paste0(wrapper_selector, " .dataTables_filter label")]] <- paste(
+    "display: flex !important;",
+    "align-items: center;",
+    "gap: 10px;",
+    "width: 100%;",
+    "max-width: 320px;",
+    "margin: 0;",
+    "padding: 0 12px;",
+    "border: 1px solid #d9dee7;",
+    "border-radius: 10px;",
+    "background: #ffffff;",
+    "box-shadow: inset 0 1px 2px rgba(16, 24, 40, 0.04);"
+  )
+  css_style[[paste0(wrapper_selector, " .dataTables_filter label:focus-within")]] <- paste(
+    "border-color: #5b9bd5;",
+    "box-shadow: 0 0 0 3px rgba(91, 155, 213, 0.16);"
+  )
+  css_style[[paste0(wrapper_selector, " .tvs-dt-search-icon")]] <- paste(
+    "color: #6b7280;",
+    "font-size: 14px;",
+    "line-height: 1;"
+  )
+  css_style[[paste0(wrapper_selector, " .dataTables_filter input")]] <- paste(
+    "width: 100% !important;",
+    "margin-left: 0 !important;",
+    "padding: 9px 0 !important;",
+    "border: 0 !important;",
+    "background: transparent !important;",
+    "box-shadow: none !important;"
+  )
+  css_style[[paste0(wrapper_selector, " .dataTables_filter input:focus")]] <- "outline: 0 !important;"
+  css_style[[paste0(wrapper_selector, " .dataTables_filter input::placeholder")]] <- "color: #98a2b3;"
+
+  div(
+    shinyjs::inlineCSS(css_style),
+    div(
+      style = container_style,
+      DT::dataTableOutput(outputId = ns(output_id))
+    )
+  )
+}
+
+#' @export
 tagAppendChildFind <- function(tag,target,child){
 
   tag$children[[target]]$children <- list.append(tag$children[[target]]$children,child)

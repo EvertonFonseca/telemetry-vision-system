@@ -17,6 +17,8 @@ box::use(
       messageAlerta,
       changetextPlaceHolder,
       tagAppendAttributesFind,
+      dtProfessionalOptions,
+      dtProfessionalOutput,
       set_readonly_js,
       actionWebUser
     ],
@@ -30,7 +32,7 @@ box::use(
   stringr,
   dplyr[...],
   lubridate[...],
-  shinyWidgets[multiInput,updateMultiInput,prettyToggle],
+  shinyWidgets[multiInput,updateMultiInput,prettyToggle,airDatepickerInput,timepickerOptions,updateAirDateInput],
   leaflet[...],
   leaflet.extras[...],
   magick[...],
@@ -95,6 +97,20 @@ MAP_GROUP_COMPONENT_NAMES   <- "componentes_nomes"
   if (!length(value)) return(default)
 
   isTRUE(as.logical(value[[1]]))
+}
+
+.object_integer_value <- function(df, col, default = NA_integer_) {
+  if (is.null(df) || !is.data.frame(df) || !(col %in% names(df))) {
+    return(default)
+  }
+
+  value <- df[[col]]
+  if (!length(value)) return(default)
+
+  value <- suppressWarnings(as.integer(value[[1]]))
+  if (!length(value) || is.na(value)) return(default)
+
+  value
 }
 
 .DEFAULT_FRAME_WIDTH  <- 512L
@@ -218,6 +234,442 @@ MAP_GROUP_COMPONENT_NAMES   <- "componentes_nomes"
   }
 
   NULL
+}
+
+.objeto_contexto_tz <- function() {
+  tz <- tryCatch(Sys.timezone(), error = function(e) "")
+  tz <- as.character(tz)[1]
+  if (is.na(tz) || !nzchar(tz)) tz <- "America/Sao_Paulo"
+  tz
+}
+
+.objeto_contexto_to_utc <- function(x, tz_local = .objeto_contexto_tz()) {
+  if (is.null(x) || !length(x) || all(is.na(x))) return(NULL)
+
+  x <- as.POSIXct(x)
+  tz_in <- attr(x, "tzone")
+  tz_in <- as.character(tz_in)[1]
+
+  if (is.na(tz_in) || !nzchar(tz_in)) {
+    x <- lubridate::force_tz(x, tzone = tz_local)
+  }
+
+  lubridate::with_tz(x, tzone = "UTC")
+}
+
+.objeto_contexto_empty_choice <- function() {
+  stats::setNames("", "")
+}
+
+.objeto_contexto_choices_setor <- function(setores) {
+  c(
+    .objeto_contexto_empty_choice(),
+    stats::setNames(as.character(setores$cd_id_setor), toupper(as.character(setores$name_setor)))
+  )
+}
+
+.objeto_contexto_choices_objeto <- function(objetos) {
+  if (is.null(objetos) || !is.data.frame(objetos) || !nrow(objetos)) {
+    return(.objeto_contexto_empty_choice())
+  }
+
+  c(
+    .objeto_contexto_empty_choice(),
+    stats::setNames(as.character(objetos$cd_id_objeto), toupper(as.character(objetos$name_objeto)))
+  )
+}
+
+.objeto_contexto_dt_empty <- function() {
+  data.frame(
+    CONTEXTO = character(0),
+    MOMENTO  = character(0),
+    stringsAsFactors = FALSE
+  )
+}
+
+#' @export
+uiObjetoContexto <- function(ns, input, output, session, callback) {
+
+  .register_auto_dispose(session)
+
+  obs <- newObserve()
+  tz_local <- .objeto_contexto_tz()
+  setores <- selectAllSetors(dbp$get_pool())
+  objetos_lookup <- reactiveVal(data.frame())
+  contextos <- reactiveVal(.objeto_contexto_dt_empty())
+
+  id <- ns("dialogObjetoContexto")
+  cssStyle <- list()
+  cssStyle[[paste0(" #parent", id, " .modal-dialog")]]  <- "width: 96% !important; height: 90% !important;"
+  cssStyle[[paste0(" #parent", id, " .modal-content")]] <- "width: 100% !important; height: 100% !important;"
+  cssStyle[[paste0(" #parent", id, " .modal-body")]]    <- "width: 100% !important; height: calc(100% - 57px - 65px) !important; overflow-y: auto; overflow-x: hidden;"
+
+  .set_objetos_do_setor <- function(cd_id_setor = NULL, selected = "") {
+    setor_id <- suppressWarnings(as.integer(cd_id_setor))
+    objs_all <- objetos_lookup()
+    objs <- if (is.data.frame(objs_all)) objs_all[0, , drop = FALSE] else data.frame()
+
+    if (!is.na(setor_id) && is.data.frame(objs_all) && nrow(objs_all)) {
+      objs <- objs_all |> filter(.data$cd_id_setor == setor_id)
+    }
+
+    updateSelectizeInput(
+      session,
+      "comboObjetoContexto",
+      choices = .objeto_contexto_choices_objeto(objs),
+      selected = selected,
+      server = TRUE
+    )
+  }
+
+  .reload_objetos_lookup <- function(cd_id_setor = NULL, selected = "") {
+    setor_id <- suppressWarnings(as.integer(cd_id_setor))
+
+    ok <- db$tryTransaction(function(conn) {
+      objetos_lookup(selectObjetosLookup(conn, cd_id_setor = setor_id))
+    })
+
+    if (!isTRUE(ok)) {
+      objetos_lookup(data.frame())
+      updateSelectizeInput(
+        session,
+        "comboObjetoContexto",
+        choices = .objeto_contexto_empty_choice(),
+        selected = "",
+        server = TRUE
+      )
+      showNotification("Nao foi possivel carregar os objetos do setor.", type = "error")
+      return(invisible(NULL))
+    }
+
+    .set_objetos_do_setor(cd_id_setor = setor_id, selected = selected)
+    invisible(NULL)
+  }
+
+  .load_contextos <- function(use_loader = FALSE) {
+    objeto_id <- suppressWarnings(as.integer(isolate(input$comboObjetoContexto)))
+    if (is.na(objeto_id)) {
+      contextos(.objeto_contexto_dt_empty())
+      return(invisible(NULL))
+    }
+
+    dt_de_utc <- .objeto_contexto_to_utc(isolate(input$dtDeContexto), tz_local = tz_local)
+    dt_ate_utc <- .objeto_contexto_to_utc(isolate(input$dtAteContexto), tz_local = tz_local)
+
+    runner <- function() {
+      ok <- db$tryTransaction(function(conn) {
+        df <- selectObjetoContexto(
+          conn,
+          cd_id_objeto = objeto_id,
+          dt_de_utc = dt_de_utc,
+          dt_ate_utc = dt_ate_utc,
+          tz_local = tz_local
+        )
+
+        df_tbl <- if (nrow(df)) {
+          data.frame(
+            CONTEXTO = as.character(df$contexto),
+            MOMENTO  = format(df$momento, "%d/%m/%Y %H:%M:%S"),
+            stringsAsFactors = FALSE
+          )
+        } else {
+          .objeto_contexto_dt_empty()
+        }
+
+        contextos(df_tbl)
+      })
+
+      if (!isTRUE(ok)) {
+        showNotification("Nao foi possivel carregar o contexto do objeto.", type = "error")
+      }
+    }
+
+    if (isTRUE(use_loader)) {
+      actionWebUser(runner, delay = 0, lock_id = "objeto_contexto_load")
+    } else {
+      runner()
+    }
+
+    invisible(NULL)
+  }
+
+  if (nrow(setores) == 0) {
+    showNotification("Nenhum registro de setor foi encontrado!", type = "error")
+    callback()
+    return(invisible(NULL))
+  }
+
+  showModal(
+    session = session,
+    div(
+      id = paste0("parent", id),
+      style = "height: 90%;",
+      inlineCSS(cssStyle),
+      dialogModal(
+        title = "Contexto do Objeto",
+        size = "l",
+        div(
+          style = "padding: 14px;",
+          shinyjs::inlineCSS(paste0(
+            "#", ns("tbObjetoContexto"), "_wrapper .dataTables_scrollBody {",
+            "max-height: 52vh !important; height: 52vh !important;}",
+            "#", ns("uiResumoContexto"), " {margin-bottom: 10px;}"
+          )),
+          fluidRow(
+            column(
+              3,
+              selectizeInput(
+                ns("comboSetorContexto"),
+                label = "Setor",
+                choices = .objeto_contexto_choices_setor(setores),
+                selected = "",
+                options = list(
+                  placeholder = "Selecione o setor",
+                  openOnFocus = TRUE
+                )
+              )
+            ),
+            column(
+              3,
+              selectizeInput(
+                ns("comboObjetoContexto"),
+                label = "Objeto",
+                choices = .objeto_contexto_empty_choice(),
+                selected = "",
+                options = list(
+                  placeholder = "Selecione o objeto",
+                  openOnFocus = TRUE
+                )
+              )
+            ),
+            column(
+              2,
+              airDatepickerInput(
+                inputId = ns("dtDeContexto"),
+                label = "De",
+                value = NULL,
+                timepicker = TRUE,
+                autoClose = TRUE,
+                clearButton = TRUE,
+                readonly = TRUE,
+                dateFormat = "dd/MM/yyyy",
+                language = "pt-BR",
+                timepickerOpts = timepickerOptions(hoursStep = 1, minutesStep = 1),
+                placeholder = "Sem filtro",
+                addon = "none"
+              )
+            ),
+            column(
+              2,
+              airDatepickerInput(
+                inputId = ns("dtAteContexto"),
+                label = "Ate",
+                value = NULL,
+                timepicker = TRUE,
+                autoClose = TRUE,
+                clearButton = TRUE,
+                readonly = TRUE,
+                dateFormat = "dd/MM/yyyy",
+                language = "pt-BR",
+                timepickerOpts = timepickerOptions(hoursStep = 1, minutesStep = 1),
+                placeholder = "Sem filtro",
+                addon = "none"
+              )
+            ),
+            column(
+              2,
+              div(
+                style = "padding-top: 25px; display:flex; gap:6px; justify-content:flex-end;",
+                actionButton(
+                  ns("btAtualizarContexto"),
+                  label = NULL,
+                  icon = icon("search"),
+                  class = "btn btn-default",
+                  title = "Atualizar tabela"
+                ),
+                actionButton(
+                  ns("btLimparPeriodoContexto"),
+                  label = NULL,
+                  icon = icon("eraser"),
+                  class = "btn btn-warning",
+                  title = "Limpar periodo"
+                ),
+                actionButton(
+                  ns("btExcluirPeriodoContexto"),
+                  label = NULL,
+                  icon = icon("trash"),
+                  class = "btn btn-danger",
+                  title = "Excluir periodo filtrado"
+                )
+              )
+            )
+          ),
+          uiOutput(ns("uiResumoContexto")),
+          uiOutput(ns("uiTabelaContexto"))
+        ),
+        footer = tagList(
+          actionButton(ns("btSairContexto"), "Sair", icon = icon("arrow-left"))
+        )
+      )
+    )
+  )
+
+  output$uiResumoContexto <- renderUI({
+    objeto_id <- suppressWarnings(as.integer(input$comboObjetoContexto))
+    qtd <- nrow(contextos())
+
+    msg <- if (is.na(objeto_id)) {
+      "Selecione um setor e um objeto para carregar o contexto."
+    } else if (qtd == 0) {
+      "Nenhum contexto encontrado para o filtro atual."
+    } else {
+      paste0(qtd, " registro(s) carregado(s).")
+    }
+
+    div(
+      style = "display:flex; justify-content:space-between; align-items:center; gap:12px;",
+      tags$span(msg),
+      tags$small(style = "color:#6b7280;", paste0("Horario exibido em ", tz_local))
+    )
+  })
+
+  output$uiTabelaContexto <- renderUI({
+    objeto_id <- suppressWarnings(as.integer(input$comboObjetoContexto))
+    if (is.na(objeto_id)) {
+      return(NULL)
+    }
+
+    dtProfessionalOutput(ns, "tbObjetoContexto") |>
+      shinycssloaders$withSpinner(color = "lightblue", proxy.height = "50px")
+  })
+
+  output$tbObjetoContexto <- DT$renderDataTable({
+    df <- contextos()
+    if (is.null(df)) {
+      df <- .objeto_contexto_dt_empty()
+    }
+
+    DT$datatable(
+      df,
+      class = "cell-border stripe",
+      extensions = "Scroller",
+      options = dtProfessionalOptions(
+        columnDefs = list(
+          list(className = "dt-left", targets = c(0)),
+          list(className = "dt-center", targets = c(1)),
+          list(width = "90%", targets = c(0)),
+          list(width = "10%", targets = c(1))
+        ),
+        scrollY = "420px",
+        search_placeholder = "Pesquisar contexto ou momento"
+      ),
+      escape = TRUE,
+      selection = "none"
+    ) |> DT$formatStyle(names(df), cursor = "pointer")
+  })
+
+  obs$add(observeEvent(input$comboSetorContexto, {
+    .reload_objetos_lookup(input$comboSetorContexto, selected = "")
+    contextos(.objeto_contexto_dt_empty())
+  }, ignoreInit = TRUE, ignoreNULL = FALSE))
+
+  obs$add(observeEvent(input$comboObjetoContexto, {
+    .load_contextos()
+  }, ignoreInit = TRUE, ignoreNULL = FALSE))
+
+  obs$add(observeEvent(list(input$dtDeContexto, input$dtAteContexto), {
+    objeto_sel <- as.character(input$comboObjetoContexto)
+    objeto_sel <- if (length(objeto_sel)) objeto_sel[[1]] else ""
+    if (!is.na(objeto_sel) && nzchar(objeto_sel)) {
+      .load_contextos()
+    }
+  }, ignoreInit = TRUE))
+
+  obs$add(observeEvent(input$btAtualizarContexto, {
+    .load_contextos(use_loader = TRUE)
+  }, ignoreInit = TRUE))
+
+  obs$add(observeEvent(input$btLimparPeriodoContexto, {
+    updateAirDateInput(session, "dtDeContexto", clear = TRUE)
+    updateAirDateInput(session, "dtAteContexto", clear = TRUE)
+  }, ignoreInit = TRUE))
+
+  obs$add(observeEvent(input$btExcluirPeriodoContexto, {
+    objeto_id <- suppressWarnings(as.integer(isolate(input$comboObjetoContexto)))
+    if (is.na(objeto_id)) {
+      showNotification("Selecione um objeto para excluir o contexto.", type = "warning")
+      return()
+    }
+
+    dt_de_local <- isolate(input$dtDeContexto)
+    dt_ate_local <- isolate(input$dtAteContexto)
+
+    if (is.null(dt_de_local) || any(is.na(dt_de_local)) || is.null(dt_ate_local) || any(is.na(dt_ate_local))) {
+      showNotification("Informe os filtros De e Ate para excluir o periodo.", type = "warning")
+      return()
+    }
+
+    dt_de_utc <- .objeto_contexto_to_utc(dt_de_local, tz_local = tz_local)
+    dt_ate_utc <- .objeto_contexto_to_utc(dt_ate_local, tz_local = tz_local)
+
+    if (is.null(dt_de_utc) || is.null(dt_ate_utc) || dt_de_utc > dt_ate_utc) {
+      showNotification("O periodo informado e invalido.", type = "warning")
+      return()
+    }
+
+    qtd <- nrow(isolate(contextos()))
+    if (qtd == 0) {
+      showNotification("Nenhum contexto encontrado para o periodo informado.", type = "warning")
+      return()
+    }
+
+    nome_objeto <- objetos_lookup() |>
+      filter(.data$cd_id_objeto == objeto_id) |>
+      pull(.data$name_objeto)
+    nome_objeto <- if (length(nome_objeto)) toupper(as.character(nome_objeto[[1]])) else paste0("#", objeto_id)
+
+    messageAlerta(
+      input,
+      ns,
+      title = "Excluir contexto do objeto",
+      message = paste0(
+        "Deseja remover ", qtd, " registro(s) do objeto ", nome_objeto,
+        " entre ",
+        format(as.POSIXct(dt_de_local), "%d/%m/%Y %H:%M:%S"),
+        " e ",
+        format(as.POSIXct(dt_ate_local), "%d/%m/%Y %H:%M:%S"),
+        "?"
+      ),
+      callback.no = function() {
+      },
+      callback.yes = function() {
+        actionWebUser(function() {
+          ok <- db$tryTransaction(function(conn) {
+            deleteObjetoContextoByPeriodo(
+              conn,
+              cd_id_objeto = objeto_id,
+              dt_de_utc = dt_de_utc,
+              dt_ate_utc = dt_ate_utc
+            )
+          })
+
+          if (!isTRUE(ok)) {
+            showNotification("Nao foi possivel excluir o periodo selecionado.", type = "error")
+            return()
+          }
+
+          showNotification("Contexto excluido com sucesso!", type = "message")
+          .load_contextos(use_loader = FALSE)
+        }, delay = 0, lock_id = "objeto_contexto_delete")
+      }
+    )
+  }, ignoreInit = TRUE))
+
+  obs$add(observeEvent(input$btSairContexto, {
+    obs$destroy()
+    removeModal(session)
+    callback()
+  }, ignoreInit = TRUE))
 }
 
 #' @export
@@ -738,6 +1190,7 @@ MAP_GROUP_COMPONENT_NAMES   <- "componentes_nomes"
       obs$add(observeEvent(input$btClear, {
         updateTextInput(session,'textNameObjeto', value = '')
         updateMultiInput(session,'multiCameras',choices = '')
+        updateNumericInput(session, "numericIdGrupoObjeto", value = NA_integer_)
       }, ignoreInit = TRUE))
       
       ## Salvar Objeto
@@ -747,7 +1200,8 @@ MAP_GROUP_COMPONENT_NAMES   <- "componentes_nomes"
         
         if(current == 1L){
           nomeObjeto     <- isolate(toupper(input$textNameObjeto))
-          camerasTargets <- isolate(input$multiCameras) 
+          camerasTargets <- isolate(input$multiCameras)
+          idGrupoObjeto  <- suppressWarnings(as.integer(isolate(input$numericIdGrupoObjeto)))
           tipoObjeto     <- tiposObjeto |> filter(name_objeto_tipo == isolate(input$comboTipoObjeto))
           
           if(tipoObjeto$cd_id_objeto_tipo == 2 && length( camerasTargets) > 1){
@@ -762,6 +1216,11 @@ MAP_GROUP_COMPONENT_NAMES   <- "componentes_nomes"
           
           if(length(camerasTargets) == 0){
             showNotification("Nenhuma câmera foi selecionada para objeto!", type = "warning")
+            return()
+          }
+
+          if(is.na(idGrupoObjeto)){
+            showNotification("O ID do grupo nÃ£o foi preenchido!", type = "warning")
             return()
           }
           
@@ -814,8 +1273,14 @@ MAP_GROUP_COMPONENT_NAMES   <- "componentes_nomes"
             ativoObjeto    <- isolate(input$checkboxAtivoObjeto)
             isDevObjeto    <- isolate(input$checkboxIsDevObjeto)
             grupoObjeto    <- isolate(input$checkboxGrupoObjeto)
+            idGrupoObjeto  <- suppressWarnings(as.integer(isolate(input$numericIdGrupoObjeto)))
             tipoObjeto     <- tiposObjeto |> filter(name_objeto_tipo == isolate(input$comboTipoObjeto))
             setor          <- setores |> filter(name_setor == isolate(input$comboSetor))
+
+            if(is.na(idGrupoObjeto)){
+              showNotification("O ID do grupo nÃ£o foi preenchido!", type = "warning")
+              return()
+            }
             
             # try insert or roolback
             obj               <- list()
@@ -823,6 +1288,7 @@ MAP_GROUP_COMPONENT_NAMES   <- "componentes_nomes"
             obj$fg_ativo      <- as.integer(ativoObjeto)
             obj$is_dev        <- as.integer(isDevObjeto)
             obj$grupo         <- as.integer(grupoObjeto)
+            obj$id_grupo      <- idGrupoObjeto
             obj$cd_id_setor   <- setor$cd_id_setor
             obj$cd_id_objeto_tipo <- tipoObjeto$cd_id_objeto_tipo
             obj$timeline_context_sec <- 5L #isolate(input$sliderTimeContexto)
@@ -870,6 +1336,7 @@ MAP_GROUP_COMPONENT_NAMES   <- "componentes_nomes"
                   updateTextInput(session,'textNameObjeto', value = '')
                   updateMultiInput(session,'multiCameras',selected = NULL)
                   updateSelectizeInput(session,'comboTipoObjeto',selected = NULL)
+                  updateNumericInput(session, "numericIdGrupoObjeto", value = NA_integer_)
                 },once = TRUE)
                 
                 if(!status){
@@ -1043,7 +1510,7 @@ uiEditObjeto <- function(ns,input,output,session,callback){
         
         output$tableDinamicaObjeto <- DT$renderDataTable({
           
-          colunaNames <- c('LINHA','OBJETO','TIPO','VISUALIZAR / EDITAR','REMOVER')
+          colunaNames <- c('LINHA','OBJETO','TIPO','ID GRUPO','VISUALIZAR / EDITAR','REMOVER')
           
           DT$datatable({
             
@@ -1055,7 +1522,8 @@ uiEditObjeto <- function(ns,input,output,session,callback){
               !!colunaNames[1] := 1:nrow(dataset),
               !!colunaNames[2] :=  dataset$name_objeto,
               !!colunaNames[3] :=  dataset$name_objeto_tipo,
-              !!colunaNames[4] :=  sapply(dataset$cd_id_objeto, function (x) {
+              !!colunaNames[4] := if ("id_grupo" %in% names(dataset)) dplyr::coalesce(as.character(dataset$id_grupo), "") else rep("", nrow(dataset)),
+              !!colunaNames[5] :=  sapply(dataset$cd_id_objeto, function (x) {
                 
                 as.character(
                   actionButton(
@@ -1067,7 +1535,7 @@ uiEditObjeto <- function(ns,input,output,session,callback){
                   )
                 )
               }),
-              !!colunaNames[5] :=  sapply(dataset$cd_id_objeto,function (x) {
+              !!colunaNames[6] :=  sapply(dataset$cd_id_objeto,function (x) {
                 
                 as.character(
                   actionButton(
@@ -1084,16 +1552,14 @@ uiEditObjeto <- function(ns,input,output,session,callback){
           },  
           class = 'cell-border stripe',
           extensions = 'Scroller',
-          options = list(
-            language = list(url = 'js/table.json'),
-            dom = 't',
-            bSort=FALSE,
-            columnDefs = list(list(visible=FALSE, targets=c(0)),list(className = 'dt-center', targets = "_all"),list(width = '75px',targets = c(1,3,4,5)),list(width = 'autos',targets = c(2,4))),
-            deferRender = TRUE,
-            scroller = FALSE,
-            fixedHeader = TRUE,
-            scrollX = TRUE,
-            scrollY = '280px'
+          options = dtProfessionalOptions(
+            columnDefs = list(
+              list(visible = FALSE, targets = c(0)),
+              list(className = 'dt-center', targets = "_all"),
+              list(width = '75px', targets = c(1, 3, 4, 5)),
+              list(width = 'auto', targets = c(2))
+            ),
+            search_placeholder = "Pesquisar objeto, tipo ou ID grupo"
           ),
           escape = F,
           selection = 'none',
@@ -1101,10 +1567,7 @@ uiEditObjeto <- function(ns,input,output,session,callback){
         
       })
       
-      div(
-        style = 'border-style: solid; border-color: white; border-width: 1px; overflow-x: auto;',
-        DT$dataTableOutput(outputId = ns('tableDinamicaObjeto'))
-      )
+      dtProfessionalOutput(ns, 'tableDinamicaObjeto')
       
     })
     
@@ -1127,6 +1590,7 @@ uiEditObjeto <- function(ns,input,output,session,callback){
         valueAtivo       = as.logical(objetoSelect$fg_ativo),
         valueIsDev       = .object_flag_value(objetoSelect, "is_dev"),
         valueGrupo       = .object_flag_value(objetoSelect, "grupo"),
+        valueIdGrupo     = .object_integer_value(objetoSelect, "id_grupo"),
         valueTextName    = objetoSelect$name_objeto,
         valueTipoObjeto  = objetoSelect$name_objeto_tipo,
         valueMultiCamera = cameraComponetes,
@@ -1551,6 +2015,7 @@ uiEditObjeto <- function(ns,input,output,session,callback){
       obs$add(observeEvent(input$btClear, {
         updateTextInput(session,'textNameObjeto', value = '')
         updateMultiInput(session,'multiCameras',choices = '')
+        updateNumericInput(session, "numericIdGrupoObjeto", value = NA_integer_)
       },ignoreInit = TRUE))
       
       obs$add(observeEvent(input$btSalvar,{
@@ -1563,7 +2028,8 @@ uiEditObjeto <- function(ns,input,output,session,callback){
         if(current == 2L){
           
           nomeObjeto     <- isolate(toupper(input$textNameObjeto))
-          camerasTargets <- isolate(input$multiCameras) 
+          camerasTargets <- isolate(input$multiCameras)
+          idGrupoObjeto  <- suppressWarnings(as.integer(isolate(input$numericIdGrupoObjeto)))
           tipoObjeto     <- tiposObjeto |> filter(name_objeto_tipo == isolate(input$comboTipoObjeto))
           
           if(tipoObjeto$cd_id_objeto_tipo == 2 && length( camerasTargets) > 1){
@@ -1581,6 +2047,11 @@ uiEditObjeto <- function(ns,input,output,session,callback){
             return()
           }
           
+          if(is.na(idGrupoObjeto)){
+            showNotification("O ID do grupo nÃ£o foi preenchido!", type = "warning")
+            return()
+          }
+
           if(checkifExistNameObjetoEdit(dbp$get_pool(),objetoSelect$cd_id_objeto,nomeObjeto)){
             showNotification("O nome do Objeto já possui nos registros!", type = "warning")
             return()
@@ -1622,14 +2093,21 @@ uiEditObjeto <- function(ns,input,output,session,callback){
             ativoObjeto    <- isolate(input$checkboxAtivoObjeto)
             isDevObjeto    <- isolate(input$checkboxIsDevObjeto)
             grupoObjeto    <- isolate(input$checkboxGrupoObjeto)
+            idGrupoObjeto  <- suppressWarnings(as.integer(isolate(input$numericIdGrupoObjeto)))
             tipoObjeto     <- tiposObjeto |> filter(name_objeto_tipo == isolate(input$comboTipoObjeto))
             setor          <- setores |> filter(name_setor == isolate(input$comboSetor))
+
+            if(is.na(idGrupoObjeto)){
+              showNotification("O ID do grupo nÃ£o foi preenchido!", type = "warning")
+              return()
+            }
        
             obj                      <- list()
             obj$name_objeto          <- nomeObjeto
             obj$fg_ativo             <- as.integer(ativoObjeto)
             obj$is_dev               <- as.integer(isDevObjeto)
             obj$grupo                <- as.integer(grupoObjeto)
+            obj$id_grupo             <- idGrupoObjeto
             obj$cd_id_setor          <- setor$cd_id_setor
             obj$timeline_context_sec <- 5L #isolate(input$sliderTimeContexto)
         
@@ -1687,6 +2165,7 @@ uiMain <- function(ns,
                    valueAtivo      = TRUE,
                    valueIsDev      = FALSE,
                    valueGrupo      = FALSE,
+                   valueIdGrupo    = NA_integer_,
                    valueTextName   = NULL,
                    valueTipoObjeto = NULL,
                    valueMultiCamera = NULL,
@@ -1696,6 +2175,8 @@ uiMain <- function(ns,
      valueAtivo <- isTRUE(as.logical(valueAtivo))
      valueIsDev <- isTRUE(as.logical(valueIsDev))
      valueGrupo <- isTRUE(as.logical(valueGrupo))
+     valueIdGrupo <- suppressWarnings(as.integer(valueIdGrupo[[1]]))
+     if (!length(valueIdGrupo) || is.na(valueIdGrupo)) valueIdGrupo <- NA_integer_
 
      changetextPlaceHolder()
       cameras
@@ -1760,6 +2241,17 @@ uiMain <- function(ns,
                 placeholder = 'Digite o nome para o Objeto',
                 width = "100%",
                 value = valueTextName
+              )
+            ),
+            div(
+              style = "flex: 0 1 150px; min-width: 130px;",
+              numericInput(
+                ns("numericIdGrupoObjeto"),
+                label = "ID Grupo",
+                value = valueIdGrupo,
+                min = 0,
+                step = 1,
+                width = "100%"
               )
             ),
             div(

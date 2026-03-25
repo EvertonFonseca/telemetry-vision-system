@@ -35,6 +35,8 @@ box::use(
       panelTitle,
       removeModalClear,
       newObserve,
+      dtProfessionalOptions,
+      dtProfessionalOutput,
       shinySetInputValue,
       play_sound,
       debugLocal,
@@ -306,16 +308,15 @@ uiEditCamera <- function(ns,input,output,session,callback = NULL){
         },  
         class = 'cell-border stripe',
         extensions = 'Scroller',
-        options = list(
-          language = list(url = 'js/table.json'),
-          dom = 't',
-          bSort=FALSE,
-          columnDefs = list(list(visible=FALSE, targets=c(0)),list(className = 'dt-center', targets = "_all"),list(width = '75px',targets = c(1)),list(width = '90px',targets = c(3)),list(width = 'autos',targets = c(4))),
-          deferRender = TRUE,
-          scroller = FALSE,
-          fixedHeader = TRUE,
-          scrollX = TRUE,
-          scrollY = '280px'
+        options = dtProfessionalOptions(
+          columnDefs = list(
+            list(visible = FALSE, targets = c(0)),
+            list(className = 'dt-center', targets = "_all"),
+            list(width = '75px', targets = c(1)),
+            list(width = '90px', targets = c(3)),
+            list(width = 'auto', targets = c(4))
+          ),
+          search_placeholder = "Pesquisar camera ou URL"
         ),
         escape = F,
         selection = 'none',
@@ -323,10 +324,7 @@ uiEditCamera <- function(ns,input,output,session,callback = NULL){
         
       })
       
-      div(
-        style = 'border-style: solid; border-color: white; border-width: 1px; overflow-x: auto;',
-        DT$dataTableOutput(outputId = ns('tableDinamicaCamera'))
-      )
+      dtProfessionalOutput(ns, 'tableDinamicaCamera')
       
     })
   

@@ -3,7 +3,8 @@ box::use(
   DBI,
   dplyr[pull, mutate],
   purrr[...],
-  jsonlite
+  jsonlite,
+  lubridate[with_tz]
 )
 
 # ---- helpers ----
@@ -18,6 +19,21 @@ box::use(
 .df_names_lower <- function(df) {
   if (is.data.frame(df) && ncol(df)) names(df) <- tolower(names(df))
   df
+}
+
+.has_value <- function(x) {
+  !is.null(x) && length(x) && !all(is.na(x))
+}
+
+.safe_tz_local <- function(tz = NULL) {
+  tz <- as.character(tz)[1]
+  if (is.na(tz) || !nzchar(tz)) {
+    tz <- tryCatch(Sys.timezone(), error = function(e) "")
+  }
+  if (!length(tz) || is.na(tz) || !nzchar(tz)) {
+    tz <- "America/Sao_Paulo"
+  }
+  tz
 }
 
 # fg_ativo IN (...) com placeholders
@@ -268,13 +284,13 @@ box::use(
             oc.*,
             row_number() over (
               partition by oc.cd_id_objeto
-              order by oc.dt_hr_local desc, oc.cd_id_obj_conf desc
+              order by oc.dt_hr_local desc nulls last, oc.cd_id_obj_conf desc
             ) as rn
           from objeto_config oc
           where oc.cd_id_objeto in (%s)
         ) y
        where y.rn = 1
-       order by y.cd_id_objeto, y.dt_hr_local desc, y.cd_id_obj_conf desc
+       order by y.cd_id_objeto, y.dt_hr_local desc nulls last, y.cd_id_obj_conf desc
       ",
       ph
     ),
@@ -350,6 +366,7 @@ insertNewObjeto <- function(con, cd_id_objeto, objeto) {
     !is.null(objeto$fg_ativo),
     !is.null(objeto$is_dev),
     !is.null(objeto$grupo),
+    !is.null(objeto$id_grupo),
     !is.null(objeto$cd_id_setor),
     !is.null(objeto$cd_id_objeto_tipo),
     !is.null(objeto$timeline_context_sec)
@@ -357,9 +374,9 @@ insertNewObjeto <- function(con, cd_id_objeto, objeto) {
 
   sql <- "
     insert into objeto
-      (cd_id_objeto, name_objeto, fg_ativo, is_dev, grupo, cd_id_setor, cd_id_objeto_tipo, timeline_context_sec)
+      (cd_id_objeto, name_objeto, fg_ativo, is_dev, grupo, id_grupo, cd_id_setor, cd_id_objeto_tipo, timeline_context_sec)
     values
-      ($1, $2, $3, $4, $5, $6, $7, $8)
+      ($1, $2, $3, $4, $5, $6, $7, $8, $9)
   "
 
   DBI$dbExecute(
@@ -370,6 +387,7 @@ insertNewObjeto <- function(con, cd_id_objeto, objeto) {
       as.logical(objeto$fg_ativo),
       as.logical(objeto$is_dev),
       as.logical(objeto$grupo),
+      as.integer(objeto$id_grupo),
       as.integer(objeto$cd_id_setor),
       as.integer(objeto$cd_id_objeto_tipo),
       as.integer(objeto$timeline_context_sec)
@@ -465,7 +483,7 @@ insertNewAtributo <- function(con, cd_id_atributo, objeto) {
 #' @export
 updateObjeto <- function(con, obj) {
   obj <- .names_to_lower(obj)
-  stopifnot(!is.null(obj$cd_id_objeto))
+  stopifnot(!is.null(obj$cd_id_objeto), !is.null(obj$id_grupo))
 
   sql <- "
     update objeto
@@ -473,8 +491,9 @@ updateObjeto <- function(con, obj) {
            cd_id_setor = $2,
            fg_ativo    = $3,
            is_dev      = $4,
-           grupo       = $5
-     where cd_id_objeto = $6
+           grupo       = $5,
+           id_grupo    = $6
+     where cd_id_objeto = $7
   "
 
   DBI$dbExecute(
@@ -485,10 +504,138 @@ updateObjeto <- function(con, obj) {
       as.logical(obj$fg_ativo),
       as.logical(obj$is_dev),
       as.logical(obj$grupo),
+      as.integer(obj$id_grupo),
       as.integer(obj$cd_id_objeto)
     )
   )
 
+  invisible(TRUE)
+}
+
+#' @export
+selectObjetosLookup <- function(con, cd_id_setor = NULL) {
+  sql <- "
+    select
+      o.cd_id_objeto,
+      o.name_objeto,
+      o.cd_id_setor,
+      o.fg_ativo,
+      s.name_setor
+    from objeto o
+    left join setor s
+      on s.cd_id_setor = o.cd_id_setor
+    where 1 = 1
+  "
+
+  params <- list()
+  if (.has_value(cd_id_setor)) {
+    sql <- paste0(sql, " and o.cd_id_setor = $1")
+    params <- list(as.integer(cd_id_setor[[1]]))
+  }
+
+  sql <- paste0(
+    sql,
+    "
+    order by
+      s.name_setor nulls last,
+      o.name_objeto nulls last,
+      o.cd_id_objeto
+    "
+  )
+
+  out <- DBI::dbGetQuery(con, sql, params = params)
+  .df_names_lower(out)
+}
+
+#' @export
+selectObjetoContexto <- function(con,
+                                 cd_id_objeto,
+                                 dt_de_utc = NULL,
+                                 dt_ate_utc = NULL,
+                                 tz_local = NULL) {
+  stopifnot(!is.null(cd_id_objeto))
+
+  sql <- "
+    select
+      oc.cd_id_oc,
+      oc.data_oc    as contexto,
+      oc.dt_hr_local as momento
+    from objeto_contexto oc
+    where oc.cd_id_objeto = $1
+  "
+
+  params <- list(as.integer(cd_id_objeto[[1]]))
+  p <- 2L
+
+  if (.has_value(dt_de_utc)) {
+    sql <- paste0(sql, " and oc.dt_hr_local >= $", p)
+    params <- c(params, list(as.POSIXct(dt_de_utc[[1]], tz = "UTC")))
+    p <- p + 1L
+  }
+
+  if (.has_value(dt_ate_utc)) {
+    sql <- paste0(sql, " and oc.dt_hr_local <= $", p)
+    params <- c(params, list(as.POSIXct(dt_ate_utc[[1]], tz = "UTC")))
+  }
+
+  sql <- paste0(
+    sql,
+    "
+    order by
+      oc.dt_hr_local desc nulls last,
+      oc.cd_id_oc desc
+    "
+  )
+
+  out <- DBI::dbGetQuery(con, sql, params = params)
+  out <- .df_names_lower(out)
+
+  if ("contexto" %in% names(out)) {
+    out$contexto <- as.character(out$contexto)
+  }
+
+  if ("momento" %in% names(out)) {
+    if (!inherits(out$momento, "POSIXct")) {
+      out$momento <- as.POSIXct(out$momento, tz = "UTC")
+    } else {
+      attr(out$momento, "tzone") <- "UTC"
+    }
+    out$momento <- lubridate::with_tz(out$momento, tzone = .safe_tz_local(tz_local))
+  }
+
+  out
+}
+
+#' @export
+deleteObjetoContextoByPeriodo <- function(con,
+                                          cd_id_objeto,
+                                          dt_de_utc = NULL,
+                                          dt_ate_utc = NULL) {
+  stopifnot(!is.null(cd_id_objeto))
+
+  sql <- "
+    delete from objeto_contexto
+    where cd_id_objeto = $1
+  "
+  params <- list(as.integer(cd_id_objeto[[1]]))
+  p <- 2L
+
+  if (.has_value(dt_de_utc)) {
+    sql <- paste0(sql, " and dt_hr_local >= $", p)
+    params <- c(params, list(as.POSIXct(dt_de_utc[[1]], tz = "UTC")))
+    p <- p + 1L
+  }
+
+  if (.has_value(dt_ate_utc)) {
+    sql <- paste0(sql, " and dt_hr_local <= $", p)
+    params <- c(params, list(as.POSIXct(dt_ate_utc[[1]], tz = "UTC")))
+  }
+
+  if (length(params) <= 1L) {
+    stop("Informe ao menos um filtro de data para excluir registros de contexto.")
+  }
+
+  DBI::dbExecute(con, sql, params = params)
   invisible(TRUE)
 }
 

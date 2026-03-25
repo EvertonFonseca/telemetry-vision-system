@@ -17,6 +17,8 @@ box::use(
       messageAlerta,
       changetextPlaceHolder,
       tagAppendAttributesFind,
+      dtProfessionalOptions,
+      dtProfessionalOutput,
       set_readonly_js,
       actionWebUser
     ],
@@ -463,16 +465,14 @@ uiEditEstrutura <- function(ns,input,output,session,callback){
           },  
           class = 'cell-border stripe',
           extensions = 'Scroller',
-          options = list(
-            language = list(url = 'js/table.json'),
-            dom = 't',
-            bSort=FALSE,
-            columnDefs = list(list(visible=FALSE, targets=c(0)),list(className = 'dt-center', targets = "_all"),list(width = '75px',targets = c(1)),list(width = 'autos',targets = c(3))),
-            deferRender = TRUE,
-            scroller = FALSE,
-            fixedHeader = TRUE,
-            scrollX = TRUE,
-            scrollY = '280px'
+          options = dtProfessionalOptions(
+            columnDefs = list(
+              list(visible = FALSE, targets = c(0)),
+              list(className = 'dt-center', targets = "_all"),
+              list(width = '75px', targets = c(1)),
+              list(width = 'auto', targets = c(3))
+            ),
+            search_placeholder = "Pesquisar estrutura"
           ),
           escape = F,
           selection = 'none',
@@ -480,10 +480,7 @@ uiEditEstrutura <- function(ns,input,output,session,callback){
         
       })
       
-      div(
-        style = 'border-style: solid; border-color: white; border-width: 1px; overflow-x: auto;',
-        DT$dataTableOutput(outputId = ns('tableDinamicaEstrutura'))
-      )
+      dtProfessionalOutput(ns, 'tableDinamicaEstrutura')
       
     })
     
