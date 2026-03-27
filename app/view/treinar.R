@@ -27,6 +27,7 @@ box::use(
       panelTitle,
       removeModalClear,
       newObserve,
+      newProgressLoader,
       shinySetInputValue,
       play_sound,
       debugLocal,
@@ -186,6 +187,71 @@ fmt_ts_utc_br <- function(x, digits = 3L) {
   format(as.POSIXct(x, tz = "UTC"), "%d/%m/%Y %H:%M:%OS", tz = "UTC")
 }
 
+seq_time_keys <- function(ts_vec) {
+  if (!length(ts_vec)) return(character(0))
+  format(as.POSIXct(ts_vec, tz = "UTC"), "%Y-%m-%d %H:%M:%OS6", tz = "UTC")
+}
+
+seq_timeline_rows <- function(seq_df) {
+  if (is.null(seq_df) || !nrow(seq_df) || !"dt_hr_local" %in% names(seq_df)) {
+    return(integer(0))
+  }
+
+  keys <- seq_time_keys(seq_df$dt_hr_local)
+  as.integer(which(!duplicated(keys)))
+}
+
+timeline_pos_from_row <- function(timeline_rows, row_index) {
+  if (!length(timeline_rows)) return(NA_integer_)
+
+  row_index <- suppressWarnings(as.integer(row_index))
+  if (!is.finite(row_index)) row_index <- timeline_rows[[1]]
+
+  pos <- findInterval(row_index, timeline_rows)
+  pos <- max(1L, min(length(timeline_rows), pos))
+  as.integer(pos)
+}
+
+timeline_row_at <- function(timeline_rows, pos) {
+  if (!length(timeline_rows)) return(NA_integer_)
+
+  pos <- suppressWarnings(as.integer(pos))
+  if (!is.finite(pos)) pos <- 1L
+  pos <- max(1L, min(length(timeline_rows), pos))
+
+  as.integer(timeline_rows[[pos]])
+}
+
+timeline_window_rows <- function(timeline_rows, total_rows, start_pos, end_pos) {
+  if (!length(timeline_rows)) return(integer(0))
+
+  total_rows <- suppressWarnings(as.integer(total_rows))
+  if (!is.finite(total_rows) || total_rows < 1L) return(integer(0))
+
+  start_pos <- suppressWarnings(as.integer(start_pos))
+  end_pos   <- suppressWarnings(as.integer(end_pos))
+  if (!is.finite(start_pos) || !is.finite(end_pos)) return(integer(0))
+
+  n_steps <- length(timeline_rows)
+  rng <- sort(c(
+    max(1L, min(n_steps, start_pos)),
+    max(1L, min(n_steps, end_pos))
+  ))
+
+  row_start <- timeline_row_at(timeline_rows, rng[[1]])
+  row_end <- if (rng[[2]] < n_steps) {
+    as.integer(timeline_rows[[rng[[2]] + 1L]] - 1L)
+  } else {
+    total_rows
+  }
+
+  if (!is.finite(row_start) || !is.finite(row_end) || row_start > row_end) {
+    return(integer(0))
+  }
+
+  seq.int(row_start, row_end)
+}
+
 validaDateFormat <- function(text) {
   grepl(
     "^(0[1-9]|[12][0-9]|3[01])/(0[1-9]|1[0-2])/[0-9]{2} ([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]$",
@@ -240,6 +306,7 @@ new_player_ctx <- function(session, pool_getter, lru_cache) {
   env$frame_ids_by_cam  <- NULL
   env$pos_by_cam        <- NULL
   env$last_frame_by_cam <- NULL
+  env$timeline_rows     <- NULL
   env$prefetch_busy      <- FALSE
   env$prefetch_scheduled <- FALSE
   env$prefetch_next      <- NULL
@@ -307,6 +374,7 @@ new_player_ctx <- function(session, pool_getter, lru_cache) {
       env$pos_by_cam        <- lapply(env$times_by_cam, function(x) 1L)
       env$last_frame_by_cam <- as.list(rep(NA_integer_, length(env$times_by_cam)))
       names(env$last_frame_by_cam) <- names(env$times_by_cam)
+      env$timeline_rows <- seq_timeline_rows(seq_df2)
       env$prefetch_next <- NULL
       env$seq_sig <- sig
     }
@@ -426,8 +494,19 @@ new_player_ctx <- function(session, pool_getter, lru_cache) {
     if (is.null(seq_df) || !nrow(seq_df)) return(invisible(FALSE))
     n <- nrow(seq_df); i <- as.integer(i)
     if (i >= n) return(invisible(FALSE))
+    env$ensure_cam_times(seq_df)
 
-    tgt_idx <- seq.int(i + 1L, min(n, i + N))
+    timeline_rows <- env$timeline_rows
+    if (is.null(timeline_rows) || !length(timeline_rows)) return(invisible(FALSE))
+
+    cur_pos <- timeline_pos_from_row(timeline_rows, i)
+    if (!is.finite(cur_pos)) return(invisible(FALSE))
+
+    start_pos <- cur_pos + 1L
+    end_pos   <- min(length(timeline_rows), cur_pos + as.integer(N))
+    if (start_pos > end_pos) return(invisible(FALSE))
+
+    tgt_idx <- timeline_window_rows(timeline_rows, n, start_pos, end_pos)
     if (!length(tgt_idx)) return(invisible(FALSE))
     seg <- seq_df[tgt_idx, , drop = FALSE]
 
@@ -531,7 +610,7 @@ clip_start <- function(rv) {
   if (is.null(ts0)) return(FALSE)
   rv$clip_active <- TRUE
   rv$clip_t0     <- ts0
-  rv$clip_i0     <- rv$i
+  rv$clip_i0     <- rv_get_current_step(rv)
   TRUE
 }
 clip_limit_exceeded <- function(rv, max_min, now_ts = NULL) {
@@ -856,7 +935,7 @@ clip_summary_overlay <- function(ns, session, input, objeto, id_clip, ts_start, 
         ),
         shiny::icon("step-forward"), " Next"
       ),
-      numericInput(ns("clipOverlay_step_ms"), label = "Intervalo (ms)", value = 50, min = 1, step = 1, width = "120px") |>
+      numericInput(ns("clipOverlay_step_ms"), label = "FPS", value = 25, min = 1, max = 60, step = 1, width = "120px") |>
         tagAppendAttributes(style = ";margin-top: -25px;")
     )
   )
@@ -1490,7 +1569,7 @@ uiComponenteVideo <- function(ns) {
     actionButton(ns("nextFrame"), label = "Next",    icon = icon("step-forward"),
       class = "btn btn-outline-secondary", title = "Próximo frame"
     ),
-    numericInput(ns("step_ms"), "Intervalo (ms)", value = 50, min = 1, step = 1, width = "110px") |>
+    numericInput(ns("step_ms"), "FPS", value = 25, min = 1, max = 60, step = 1, width = "110px") |>
       tagAppendAttributes(style = ";margin-top: -25px;"),
     actionButton(ns("clipToggle"), label = "Start Clip", icon = icon("scissors"),
       class = "btn btn-outline-primary", title = "Iniciar/encerrar clip (máx. duração)"
@@ -1518,6 +1597,18 @@ get_current_frame_ts <- function(rv, tz = "UTC", fmt = NULL) {
   format(ts, tz = tz, usetz = FALSE, format = fmt)
 }
 
+rv_get_current_step <- function(rv) {
+  isolate({
+    pos <- suppressWarnings(as.integer(rv$timeline_pos))
+    if (is.finite(pos) && pos >= 1L) return(pos)
+
+    i <- suppressWarnings(as.integer(rv$i))
+    if (is.finite(i) && i >= 1L) return(i)
+
+    NA_integer_
+  })
+}
+
 # ==================================================
 # Módulo principal (server)
 # ==================================================
@@ -1541,7 +1632,8 @@ uiNewTreinar <- function(ns, input, output, session, callback, dialogTitle = "No
   }
 
   rv <- reactiveValues(
-    seq = NULL, i = 1L, w = 512L, h = 512L,
+    seq = NULL, i = 1L, timeline_rows = integer(0), timeline_pos = NA_integer_,
+    w = 512L, h = 512L,
     id_by_cam = NULL,
     clip_active = FALSE, clip_t0 = NULL, clip_i0 = NA_integer_
   )
@@ -1636,6 +1728,8 @@ uiNewTreinar <- function(ns, input, output, session, callback, dialogTitle = "No
 
   clipOverlayPlayer <- reactiveValues(
     seq = NULL,
+    timeline_rows = integer(0),
+    timeline_pos = NA_integer_,
     i   = 1L,
     dir = +1L,
     playing = FALSE
@@ -1672,7 +1766,7 @@ uiNewTreinar <- function(ns, input, output, session, callback, dialogTitle = "No
       if (length(fids)) {
         miss <- fids[vapply(fids, function(fid) is.null(ctx$cache$get(key_of_frame(fid))), logical(1L))]
         if (length(miss)) {
-          blobs <- tryCatch(db_fetch_many_frames_by_id(ctx$pool, miss), error = function(e) NULL)
+          blobs <- tryCatch(db_fetch_many_frames_by_id(ctx$get_pool(), miss), error = function(e) NULL)
           if (!is.null(blobs) && nrow(blobs)) {
             for (jj in seq_len(nrow(blobs))) {
               fid_j <- suppressWarnings(as.integer(blobs$cd_id_frame[[jj]]))
@@ -1738,19 +1832,28 @@ uiNewTreinar <- function(ns, input, output, session, callback, dialogTitle = "No
           return(invisible())
         }
 
-        n   <- nrow(clipOverlayPlayer$seq)
+        timeline_rows <- isolate(clipOverlayPlayer$timeline_rows)
+        n_steps <- length(timeline_rows)
+        pos <- isolate({
+          cur <- suppressWarnings(as.integer(clipOverlayPlayer$timeline_pos))
+          if (is.finite(cur) && cur >= 1L) cur else timeline_pos_from_row(timeline_rows, clipOverlayPlayer$i)
+        })
         dir <- clipOverlayPlayer$dir
-        if ((dir > 0L && clipOverlayPlayer$i >= n) ||
-            (dir < 0L && clipOverlayPlayer$i <= 1L)) {
+        if (!n_steps || !is.finite(pos) ||
+            (dir > 0L && pos >= n_steps) ||
+            (dir < 0L && pos <= 1L)) {
           clipOverlayPlayer$playing <- FALSE
           return(invisible())
         }
 
-        clipOverlayPlayer$i <- clipOverlayPlayer$i + dir
+        clipOverlayPlayer$timeline_pos <- pos + dir
+        clipOverlayPlayer$i <- timeline_row_at(timeline_rows, clipOverlayPlayer$timeline_pos)
         render_clip_overlay_frame()
 
-        delay <- suppressWarnings(as.numeric(input$clipOverlay_step_ms) / 1000)
-        if (!is.finite(delay) || delay <= 0) delay <- 0.001
+        fps <- suppressWarnings(as.numeric(input$clipOverlay_step_ms))
+        if (!is.finite(fps)) fps <- 25
+        fps <- max(1, min(60, fps))
+        delay <- 1 / fps
         later::later(function() { overlay_play_step() }, delay)
       })
     })
@@ -2751,6 +2854,8 @@ uiNewTreinar <- function(ns, input, output, session, callback, dialogTitle = "No
     playing(FALSE); loop_on <<- FALSE
     session$userData$lru_cache$clear()
     dyn_reset()
+    rv$timeline_rows <- integer(0)
+    rv$timeline_pos <- NA_integer_
 
     if (isTRUE(rv$clip_active)) {
       rv$clip_active <- FALSE; rv$clip_t0 <- NULL; rv$clip_i0 <- NA_integer_
@@ -2759,6 +2864,13 @@ uiNewTreinar <- function(ns, input, output, session, callback, dialogTitle = "No
   }, ignoreNULL = TRUE))
 
   obs$add(observeEvent(input$btBuscar, {
+    loader_started <- FALSE
+    loader_managed_async <- FALSE
+    on.exit({
+      if (isTRUE(loader_started) && !isTRUE(loader_managed_async)) {
+        removeProgressLoader(session = session)
+      }
+    }, add = TRUE)
 
     objeto <<- objetos |> dplyr::filter(name_objeto == isolate(input$comboObjeto))
     if (!nrow(objeto)) {
@@ -2782,6 +2894,9 @@ uiNewTreinar <- function(ns, input, output, session, callback, dialogTitle = "No
     componentes <- objeto$config[[1]]$componentes[[1]]
     cameras_ids <- unique(purrr::map_int(componentes$camera, "cd_id_camera"))
 
+    newProgressLoader(session)
+    loader_started <- TRUE
+
     frames_idx <- fetch_frames(
       dbp$get_pool(),
       time_begin    = time_begin,
@@ -2789,7 +2904,6 @@ uiNewTreinar <- function(ns, input, output, session, callback, dialogTitle = "No
       camera_id_vec = cameras_ids
     )
     if (!nrow(frames_idx)) {
-      removeProgressLoader()
       showNotification("Nenhum frame no intervalo/Cameras selecionados.", type = "warning")
       return(invisible())
     }
@@ -2817,10 +2931,16 @@ uiNewTreinar <- function(ns, input, output, session, callback, dialogTitle = "No
       rv$clip_active <- FALSE; rv$clip_t0 <- NULL; rv$clip_i0 <- NA_integer_
       try(removeUI(selector = paste0("#", ns("clip_summary_overlay")), immediate = TRUE), silent = TRUE)
     }
-    rv$seq <- frames_idx; rv$i <- 1L; rv$w <- 512L; rv$h <- 512L
+    timeline_rows <- seq_timeline_rows(frames_idx)
+    rv$seq <- frames_idx
+    rv$timeline_rows <- timeline_rows
+    rv$timeline_pos <- if (length(timeline_rows)) 1L else NA_integer_
+    rv$i <- if (length(timeline_rows)) timeline_row_at(timeline_rows, 1L) else 1L
+    rv$w <- 512L
+    rv$h <- 512L
     playing(FALSE); loop_on <<- FALSE
 
-    first <- frames_idx[1, ]
+    first <- frames_idx[rv$i, , drop = FALSE]
     fid1 <- suppressWarnings(as.integer(first$cd_id_frame[[1]]))
     if (is.finite(fid1)) {
       res1 <- db_fetch_frame_by_id(dbp$get_pool(), fid1)
@@ -2834,6 +2954,7 @@ uiNewTreinar <- function(ns, input, output, session, callback, dialogTitle = "No
     }
 
     id_map <- rv$id_by_cam; seq_df <- rv$seq; i0 <- rv$i; w0 <- rv$w; h0 <- rv$h
+    loader_managed_async <- TRUE
     session$onFlushed(function() {
       # Tolerancia larga somente no bootstrap inicial para desenhar
       # frame em todos os Leaflets das cameras carregadas.
@@ -2873,7 +2994,7 @@ uiNewTreinar <- function(ns, input, output, session, callback, dialogTitle = "No
       render_first_frames()
       ctx$prefetch_request(seq_df = seq_df, i = i0, N = PREFETCH_AHEAD)
 
-      removeProgressLoader(callback = function() {
+      removeProgressLoader(session = session, callback = function() {
         render_first_frames(attempt = 1L, max_attempts = 3L)
       })
     }, once = TRUE)
@@ -3036,9 +3157,19 @@ uiNewTreinar <- function(ns, input, output, session, callback, dialogTitle = "No
 
   step_frame <- function(delta) {
     req(rv$seq, nrow(rv$seq) > 0)
-    new_i <- max(1L, min(nrow(rv$seq), rv$i + delta))
-    if (new_i == rv$i) return(invisible())
-    rv$i <- new_i
+    timeline_rows <- isolate(rv$timeline_rows)
+    n_steps <- length(timeline_rows)
+    if (!n_steps) return(invisible())
+
+    cur_pos <- isolate({
+      pos <- suppressWarnings(as.integer(rv$timeline_pos))
+      if (is.finite(pos) && pos >= 1L) pos else timeline_pos_from_row(timeline_rows, rv$i)
+    })
+    new_pos <- max(1L, min(n_steps, cur_pos + as.integer(delta)))
+    if (new_pos == cur_pos) return(invisible())
+
+    rv$timeline_pos <- new_pos
+    rv$i <- timeline_row_at(timeline_rows, new_pos)
     st <- ctx$render_current(rv$seq, rv$i, rv$w, rv$h, rv$id_by_cam, fit_bounds = FALSE)
     if (isTRUE(st$ok)) { rv$w <- st$w; rv$h <- st$h }
     ctx$prefetch_request(rv$seq, rv$i, PREFETCH_AHEAD)
@@ -3047,7 +3178,7 @@ uiNewTreinar <- function(ns, input, output, session, callback, dialogTitle = "No
     if (clip_limit_exceeded(rv, suppressWarnings(as.numeric(input$clip_max_min)))) {
       playing(FALSE); loop_on <<- FALSE
       ts_start <- rv$clip_t0; i0 <- rv$clip_i0
-      ts_end   <- rv_get_current_ts(rv); i1 <- rv$i
+      ts_end   <- rv_get_current_ts(rv); i1 <- rv_get_current_step(rv)
       rv$clip_active <- FALSE; rv$clip_t0 <- NULL; rv$clip_i0 <- NA_integer_
       updateActionButton(session, "clipToggle", label = "Start Clip", icon = icon("scissors"))
       clips_add(ts_start, ts_end, i0, i1)
@@ -3064,13 +3195,21 @@ uiNewTreinar <- function(ns, input, output, session, callback, dialogTitle = "No
         
         t0 <- proc.time()[3]
         
-        n   <- nrow(rv$seq)
+        timeline_rows <- isolate(rv$timeline_rows)
+        n_steps <- length(timeline_rows)
+        pos <- isolate({
+          cur <- suppressWarnings(as.integer(rv$timeline_pos))
+          if (is.finite(cur) && cur >= 1L) cur else timeline_pos_from_row(timeline_rows, rv$i)
+        })
         dir <- play_dir()
-        if ((dir > 0L && rv$i >= n) || (dir < 0L && rv$i <= 1L)) {
+        if (!n_steps || !is.finite(pos) ||
+            (dir > 0L && pos >= n_steps) ||
+            (dir < 0L && pos <= 1L)) {
           playing(FALSE); loop_on <<- FALSE; return(invisible())
         }
         
-        rv$i <- rv$i + dir
+        rv$timeline_pos <- pos + dir
+        rv$i <- timeline_row_at(timeline_rows, rv$timeline_pos)
         st <- ctx$render_current(rv$seq, rv$i, rv$w, rv$h, rv$id_by_cam, fit_bounds = FALSE)
         if (isTRUE(st$ok)) { rv$w <- st$w; rv$h <- st$h }
         dyn_update_view_on_ts(rv_get_current_ts(rv))
@@ -3083,15 +3222,17 @@ uiNewTreinar <- function(ns, input, output, session, callback, dialogTitle = "No
         if (clip_limit_exceeded(rv, suppressWarnings(as.numeric(input$clip_max_min)))) {
           playing(FALSE); loop_on <<- FALSE
           ts_start <- rv$clip_t0; i0 <- rv$clip_i0
-          ts_end   <- rv_get_current_ts(rv); i1 <- rv$i
+          ts_end   <- rv_get_current_ts(rv); i1 <- rv_get_current_step(rv)
           rv$clip_active <- FALSE; rv$clip_t0 <- NULL; rv$clip_i0 <- NA_integer_
           updateActionButton(session, "clipToggle", label = "Start Clip", icon = icon("scissors"))
           clips_add(ts_start, ts_end, i0, i1)
           return(invisible())
         }
         
-        target <- suppressWarnings(as.numeric(input$step_ms) / 1000)
-        if (!is.finite(target) || target <= 0) target <- 0.05
+        fps <- suppressWarnings(as.numeric(input$step_ms))
+        if (!is.finite(fps)) fps <- 25
+        fps <- max(1, min(60, fps))
+        target <- 1 / fps
         
         elapsed <- proc.time()[3] - t0
         delay <- max(0.001, target - elapsed)
@@ -3121,7 +3262,7 @@ uiNewTreinar <- function(ns, input, output, session, callback, dialogTitle = "No
     } else {
       playing(FALSE); loop_on <<- FALSE
       ts_start <- rv$clip_t0; i0 <- rv$clip_i0
-      ts_end   <- rv_get_current_ts(rv); i1 <- rv$i
+      ts_end   <- rv_get_current_ts(rv); i1 <- rv_get_current_step(rv)
       rv$clip_active <- FALSE; rv$clip_t0 <- NULL; rv$clip_i0 <- NA_integer_
       updateActionButton(session, "clipToggle", label = "Start Clip", icon = icon("scissors"))
       clips_add(ts_start, ts_end, i0, i1)
@@ -3737,11 +3878,14 @@ uiNewTreinar <- function(ns, input, output, session, callback, dialogTitle = "No
     if (act == "view") {
       n_frames <- abs(row$i1 - row$i0) + 1L
 
-      if (!is.null(rv$seq) && nrow(rv$seq) > 0) {
-        i0 <- max(1L, min(nrow(rv$seq), row$i0[1]))
-        i1 <- max(1L, min(nrow(rv$seq), row$i1[1]))
-        rng <- sort(c(i0, i1))
-        sub_seq <- rv$seq[seq.int(rng[1], rng[2]), , drop = FALSE]
+      if (!is.null(rv$seq) && nrow(rv$seq) > 0 && length(rv$timeline_rows)) {
+        rows_sel <- timeline_window_rows(
+          timeline_rows = rv$timeline_rows,
+          total_rows = nrow(rv$seq),
+          start_pos = row$i0[1],
+          end_pos = row$i1[1]
+        )
+        sub_seq <- rv$seq[rows_sel, , drop = FALSE]
       } else {
         sub_seq <- NULL
       }
@@ -3753,8 +3897,11 @@ uiNewTreinar <- function(ns, input, output, session, callback, dialogTitle = "No
       )
       current_clip_view_id(id_sel)
 
+      clip_timeline_rows <- seq_timeline_rows(sub_seq)
       clipOverlayPlayer$seq     <- sub_seq
-      clipOverlayPlayer$i       <- 1L
+      clipOverlayPlayer$timeline_rows <- clip_timeline_rows
+      clipOverlayPlayer$timeline_pos  <- if (length(clip_timeline_rows)) 1L else NA_integer_
+      clipOverlayPlayer$i       <- if (length(clip_timeline_rows)) timeline_row_at(clip_timeline_rows, 1L) else 1L
       clipOverlayPlayer$dir     <- +1L
       clipOverlayPlayer$playing <- FALSE
       render_clip_overlay_first_frame(attempt = 1L, max_attempts = 3L)
@@ -3770,6 +3917,8 @@ uiNewTreinar <- function(ns, input, output, session, callback, dialogTitle = "No
       try(removeUI(selector = paste0("#", ns("clip_summary_overlay")), immediate = TRUE), silent = TRUE)
       clipOverlayPlayer$playing <- FALSE
       clipOverlayPlayer$seq     <- NULL
+      clipOverlayPlayer$timeline_rows <- integer(0)
+      clipOverlayPlayer$timeline_pos  <- NA_integer_
     }
   }, ignoreInit = TRUE))
 
@@ -3794,12 +3943,28 @@ uiNewTreinar <- function(ns, input, output, session, callback, dialogTitle = "No
 
     } else if (act == "prev") {
       clipOverlayPlayer$playing <- FALSE
-      clipOverlayPlayer$i <- max(1L, clipOverlayPlayer$i - 1L)
+      timeline_rows <- isolate(clipOverlayPlayer$timeline_rows)
+      n_steps <- length(timeline_rows)
+      if (!n_steps) return(invisible())
+      cur_pos <- isolate({
+        cur <- suppressWarnings(as.integer(clipOverlayPlayer$timeline_pos))
+        if (is.finite(cur) && cur >= 1L) cur else timeline_pos_from_row(timeline_rows, clipOverlayPlayer$i)
+      })
+      clipOverlayPlayer$timeline_pos <- max(1L, cur_pos - 1L)
+      clipOverlayPlayer$i <- timeline_row_at(timeline_rows, clipOverlayPlayer$timeline_pos)
       render_clip_overlay_frame()
 
     } else if (act == "next") {
       clipOverlayPlayer$playing <- FALSE
-      clipOverlayPlayer$i <- min(nrow(clipOverlayPlayer$seq), clipOverlayPlayer$i + 1L)
+      timeline_rows <- isolate(clipOverlayPlayer$timeline_rows)
+      n_steps <- length(timeline_rows)
+      if (!n_steps) return(invisible())
+      cur_pos <- isolate({
+        cur <- suppressWarnings(as.integer(clipOverlayPlayer$timeline_pos))
+        if (is.finite(cur) && cur >= 1L) cur else timeline_pos_from_row(timeline_rows, clipOverlayPlayer$i)
+      })
+      clipOverlayPlayer$timeline_pos <- min(n_steps, cur_pos + 1L)
+      clipOverlayPlayer$i <- timeline_row_at(timeline_rows, clipOverlayPlayer$timeline_pos)
       render_clip_overlay_frame()
     }
   }, ignoreInit = TRUE))
@@ -3810,6 +3975,8 @@ uiNewTreinar <- function(ns, input, output, session, callback, dialogTitle = "No
     playing(FALSE); loop_on <<- FALSE
     session$userData$lru_cache$clear()
     dyn_reset()
+    rv$timeline_rows <- integer(0)
+    rv$timeline_pos <- NA_integer_
 
     if (isTRUE(rv$clip_active)) {
       rv$clip_active <- FALSE; rv$clip_t0 <- NULL; rv$clip_i0 <- NA_integer_
@@ -3818,6 +3985,8 @@ uiNewTreinar <- function(ns, input, output, session, callback, dialogTitle = "No
 
     clipOverlayPlayer$playing <- FALSE
     clipOverlayPlayer$seq     <- NULL
+    clipOverlayPlayer$timeline_rows <- integer(0)
+    clipOverlayPlayer$timeline_pos  <- NA_integer_
     current_clip_view_id(NA_integer_)
 
     removeModal(session); callback()

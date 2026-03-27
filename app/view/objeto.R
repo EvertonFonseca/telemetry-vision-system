@@ -557,7 +557,7 @@ uiObjetoContexto <- function(ns, input, output, session, callback) {
         columnDefs = list(
           list(className = "dt-left", targets = c(0)),
           list(className = "dt-center", targets = c(1)),
-          list(width = "90%", targets = c(0)),
+          list(width = "auto", targets = c(0)),
           list(width = "10%", targets = c(1))
         ),
         scrollY = "420px",
