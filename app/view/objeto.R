@@ -297,6 +297,7 @@ uiObjetoContexto <- function(ns, input, output, session, callback) {
   setores <- selectAllSetors(dbp$get_pool())
   objetos_lookup <- reactiveVal(data.frame())
   contextos <- reactiveVal(.objeto_contexto_dt_empty())
+  busca_realizada <- reactiveVal(FALSE)
 
   id <- ns("dialogObjetoContexto")
   cssStyle <- list()
@@ -349,6 +350,7 @@ uiObjetoContexto <- function(ns, input, output, session, callback) {
   .load_contextos <- function(use_loader = FALSE) {
     objeto_id <- suppressWarnings(as.integer(isolate(input$comboObjetoContexto)))
     if (is.na(objeto_id)) {
+      busca_realizada(FALSE)
       contextos(.objeto_contexto_dt_empty())
       return(invisible(NULL))
     }
@@ -377,9 +379,11 @@ uiObjetoContexto <- function(ns, input, output, session, callback) {
         }
 
         contextos(df_tbl)
+        busca_realizada(TRUE)
       })
 
       if (!isTRUE(ok)) {
+        busca_realizada(FALSE)
         showNotification("Nao foi possivel carregar o contexto do objeto.", type = "error")
       }
     }
@@ -520,6 +524,8 @@ uiObjetoContexto <- function(ns, input, output, session, callback) {
 
     msg <- if (is.na(objeto_id)) {
       "Selecione um setor e um objeto para carregar o contexto."
+    } else if (!isTRUE(busca_realizada())) {
+      "Clique na lupa para carregar o contexto."
     } else if (qtd == 0) {
       "Nenhum contexto encontrado para o filtro atual."
     } else {
@@ -535,7 +541,7 @@ uiObjetoContexto <- function(ns, input, output, session, callback) {
 
   output$uiTabelaContexto <- renderUI({
     objeto_id <- suppressWarnings(as.integer(input$comboObjetoContexto))
-    if (is.na(objeto_id)) {
+    if (is.na(objeto_id) || !isTRUE(busca_realizada())) {
       return(NULL)
     }
 
@@ -551,17 +557,21 @@ uiObjetoContexto <- function(ns, input, output, session, callback) {
 
     DT$datatable(
       df,
+      rownames = TRUE,
       class = "cell-border stripe",
       extensions = "Scroller",
       options = dtProfessionalOptions(
         columnDefs = list(
-          list(className = "dt-left", targets = c(0)),
-          list(className = "dt-center", targets = c(1)),
-          list(width = "auto", targets = c(0)),
-          list(width = "10%", targets = c(1))
+          list(className = "dt-center", targets = c(0)),
+          list(className = "dt-left", targets = c(1)),
+          list(className = "dt-center", targets = c(2)),
+          list(width = "6%", targets = c(0)),
+          list(width = "74%", targets = c(1)),
+          list(width = "20%", targets = c(2))
         ),
         scrollY = "420px",
-        search_placeholder = "Pesquisar contexto ou momento"
+        search_placeholder = "Pesquisar contexto ou momento",
+        extra_options = list(autoWidth = FALSE)
       ),
       escape = TRUE,
       selection = "none"
@@ -570,19 +580,18 @@ uiObjetoContexto <- function(ns, input, output, session, callback) {
 
   obs$add(observeEvent(input$comboSetorContexto, {
     .reload_objetos_lookup(input$comboSetorContexto, selected = "")
+    busca_realizada(FALSE)
     contextos(.objeto_contexto_dt_empty())
   }, ignoreInit = TRUE, ignoreNULL = FALSE))
 
   obs$add(observeEvent(input$comboObjetoContexto, {
-    .load_contextos()
+    busca_realizada(FALSE)
+    contextos(.objeto_contexto_dt_empty())
   }, ignoreInit = TRUE, ignoreNULL = FALSE))
 
   obs$add(observeEvent(list(input$dtDeContexto, input$dtAteContexto), {
-    objeto_sel <- as.character(input$comboObjetoContexto)
-    objeto_sel <- if (length(objeto_sel)) objeto_sel[[1]] else ""
-    if (!is.na(objeto_sel) && nzchar(objeto_sel)) {
-      .load_contextos()
-    }
+    busca_realizada(FALSE)
+    contextos(.objeto_contexto_dt_empty())
   }, ignoreInit = TRUE))
 
   obs$add(observeEvent(input$btAtualizarContexto, {
@@ -1128,7 +1137,7 @@ uiObjetoContexto <- function(ns, input, output, session, callback) {
         },ignoreNULL = TRUE))
 
         estrutura  <- componente$estrutura[[1]]
-        uiEstrutura(ns,componente$name_componente,estruturas,estrutura)
+        uiEstrutura(ns,componente$name_componente,estruturas,estrutura,componente$poligno_componente[[1]])
       })
       
       
@@ -1153,7 +1162,17 @@ uiObjetoContexto <- function(ns, input, output, session, callback) {
             componente <- isolate(componenteReactive())
             index      <- which(df_poly$cd_id_componente == componente$cd_id_componente)
             df_p       <- df_poly[index,]
+            poly_text  <- isolate(input$textPolygonComponente)
+            poly_new   <- tryCatch(
+              .component_polygon_from_string(poly_text),
+              error = function(e) {
+                showNotification(conditionMessage(e), type = "warning")
+                NULL
+              }
+            )
+            if (is.null(poly_new)) return(invisible())
             df_p$name_componente <- toupper(isolate(input$textNameComponente))
+            df_p$poligno_componente[[1]] <- poly_new
             estrutura  <- isolate(estruturas |> filter(name_estrutura == input$comboEstrutura))
             df_p$estrutura[[1]] <- estrutura
             frame_data$componente[[1]][index,] <<- df_p
@@ -1900,7 +1919,7 @@ uiEditObjeto <- function(ns,input,output,session,callback){
       },ignoreNULL = TRUE))
         
         estrutura  <- componente$estrutura[[1]]
-        uiEstrutura(ns,componente$name_componente,estruturas,estrutura)
+        uiEstrutura(ns,componente$name_componente,estruturas,estrutura,componente$poligno_componente[[1]])
       })
     
     obs$add(observeEvent(input$editPressedRow,{
@@ -1973,7 +1992,17 @@ uiEditObjeto <- function(ns,input,output,session,callback){
             componente <- isolate(componenteReactive())
             index      <- which(df_poly$cd_id_componente == componente$cd_id_componente)
             df_p       <- df_poly[index,]
+            poly_text  <- isolate(input$textPolygonComponente)
+            poly_new   <- tryCatch(
+              .component_polygon_from_string(poly_text),
+              error = function(e) {
+                showNotification(conditionMessage(e), type = "warning")
+                NULL
+              }
+            )
+            if (is.null(poly_new)) return(invisible())
             df_p$name_componente <- toupper(isolate(input$textNameComponente))
+            df_p$poligno_componente[[1]] <- poly_new
             estrutura  <- isolate(estruturas |> filter(name_estrutura == input$comboEstrutura))
             df_p$estrutura[[1]] <- estrutura
             frame_data$componente[[1]][index,] <<- df_p
@@ -2668,12 +2697,127 @@ searchFramesByCamerasSelected <- function(conn,camerasTargets,cameras,objeto = N
   df
 }
 
-uiEstrutura <- function(ns,nameComp,estruturas,estrutura){
+.component_polygon_as_df <- function(poly) {
+  if (is.null(poly)) return(NULL)
+
+  if (is.character(poly)) {
+    txt <- trimws(as.character(poly)[1])
+    if (!nzchar(txt)) return(NULL)
+    poly <- tryCatch(jsonlite::fromJSON(txt), error = function(e) NULL)
+  }
+
+  if (is.null(poly)) return(NULL)
+  if (!is.data.frame(poly)) poly <- as.data.frame(poly, stringsAsFactors = FALSE)
+  if (!all(c("x", "y") %in% names(poly))) {
+    if (ncol(poly) < 2L) return(NULL)
+    names(poly)[1:2] <- c("x", "y")
+  }
+
+  out <- tibble::tibble(
+    x = suppressWarnings(as.numeric(poly$x)),
+    y = suppressWarnings(as.numeric(poly$y))
+  )
+  out <- out[is.finite(out$x) & is.finite(out$y), , drop = FALSE]
+  if (!nrow(out)) return(NULL)
+
+  .drop_dup_last(out)
+}
+
+.format_polygon_number <- function(x) {
+  format(as.numeric(x), trim = TRUE, scientific = FALSE, digits = 15)
+}
+
+.component_polygon_to_string <- function(poly) {
+  poly_df <- .component_polygon_as_df(poly)
+  if (is.null(poly_df) || !nrow(poly_df)) return("")
+
+  paste(
+    vapply(seq_len(nrow(poly_df)), function(i) {
+      paste0(
+        .format_polygon_number(poly_df$x[[i]]),
+        ",",
+        .format_polygon_number(poly_df$y[[i]])
+      )
+    }, character(1)),
+    collapse = "; "
+  )
+}
+
+.component_polygon_from_string <- function(text) {
+  txt <- trimws(as.character(text)[1])
+  if (!nzchar(txt)) {
+    stop("Informe a string do poligono do componente.", call. = FALSE)
+  }
+
+  poly_json <- tryCatch(.component_polygon_as_df(txt), error = function(e) NULL)
+  if (!is.null(poly_json) && nrow(poly_json) >= 3L) {
+    return(poly_json)
+  }
+
+  tokens <- unlist(strsplit(txt, "(;|\\||\\r\\n|\\n|\\r)+", perl = TRUE))
+  tokens <- trimws(tokens)
+  tokens <- tokens[nzchar(tokens)]
+
+  if (!length(tokens)) {
+    stop("Nao foi possivel interpretar a string do poligono.", call. = FALSE)
+  }
+
+  coords <- lapply(tokens, function(token) {
+    clean <- gsub("^[\\[{(\\s]+|[\\]})\\s]+$", "", token)
+    clean <- trimws(clean)
+    if (!nzchar(clean)) return(NULL)
+
+    parts <- if (grepl(",", clean, fixed = TRUE)) {
+      strsplit(clean, ",", fixed = TRUE)[[1]]
+    } else {
+      strsplit(clean, "\\s+")[[1]]
+    }
+
+    parts <- trimws(parts)
+    parts <- parts[nzchar(parts)]
+    if (length(parts) != 2L) {
+      stop("Use o formato x,y; x,y; x,y para o poligono.", call. = FALSE)
+    }
+
+    x <- suppressWarnings(as.numeric(parts[[1]]))
+    y <- suppressWarnings(as.numeric(parts[[2]]))
+    if (!is.finite(x) || !is.finite(y)) {
+      stop("Cada ponto do poligono deve ter coordenadas numericas validas.", call. = FALSE)
+    }
+
+    tibble::tibble(x = x, y = y)
+  })
+
+  poly_df <- dplyr::bind_rows(coords)
+  poly_df <- .drop_dup_last(poly_df)
+
+  if (nrow(poly_df) < 3L) {
+    stop("O poligono do componente precisa ter pelo menos 3 pontos.", call. = FALSE)
+  }
+
+  poly_df
+}
+
+uiEstrutura <- function(ns,nameComp,estruturas,estrutura,poligno = NULL){
   
   div(
     inlineCSS(paste0("#", ns("textNameComponente"), " {text-transform: uppercase;}")),
     textInput(ns("textNameComponente"), label = "Nome",
     placeholder = "Digite o nome para o componente",value = nameComp),
+    textAreaInput(
+      ns("textPolygonComponente"),
+      label = "String do poligono",
+      value = .component_polygon_to_string(poligno),
+      placeholder = "Ex.: 10,10; 120,10; 120,80; 10,80",
+      resize = "vertical",
+      width = "100%",
+      rows = 4
+    ) |>
+      shiny::tagAppendAttributes(style = "width: 100%;"),
+    tags$div(
+      style = "margin-top:-10px; margin-bottom:10px; color:#666; font-size:12px;",
+      "Formato: x,y; x,y; x,y"
+    ),
     selectizeInput(ns('comboEstrutura'),label = 'Estrutura',choices = estruturas$name_estrutura,
     selected = estrutura$name_estrutura,
     options  = list(
