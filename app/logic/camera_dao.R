@@ -392,6 +392,82 @@ selectFramesByCamera <- function(
 }
 
 #' @export
+get_frames_window <- function(con,
+                              cd_id_frame,
+                              janela = 35L,
+                              include_blob = TRUE,
+                              ascending = TRUE) {
+  cd_id_frame <- suppressWarnings(as.integer(cd_id_frame))
+  janela <- suppressWarnings(as.integer(janela))
+
+  stopifnot(length(cd_id_frame) == 1L, !is.na(cd_id_frame), !is.na(janela), janela >= 1L)
+
+  seed <- DBI::dbGetQuery(
+    con,
+    "
+    select
+      cd_id_camera,
+      dt_hr_local
+    from frame_camera
+    where cd_id_frame = $1
+    limit 1
+    ",
+    params = list(cd_id_frame)
+  )
+
+  if (!nrow(seed)) {
+    stop("cd_id_frame nao encontrado: ", cd_id_frame)
+  }
+
+  cam_id <- suppressWarnings(as.integer(seed$cd_id_camera[[1]]))
+  dt_ref <- as.POSIXct(seed$dt_hr_local[[1]], tz = "UTC")
+
+  select_blob <- if (isTRUE(include_blob)) ", fcb.id_frame_blob, fcb.data_frame" else ""
+  join_blob <- if (isTRUE(include_blob)) {
+    " left join frame_camera_blob fcb on fcb.cd_id_frame = fc.cd_id_frame "
+  } else {
+    ""
+  }
+
+  sql <- paste0(
+    "
+    select
+      fc.cd_id_frame,
+      fc.dt_hr_local,
+      fc.cd_id_camera",
+    select_blob,
+    "
+    from frame_camera fc",
+    join_blob,
+    "
+    where fc.cd_id_camera = $1
+      and fc.dt_hr_local <= $2
+    order by
+      fc.dt_hr_local desc,
+      fc.cd_id_frame desc
+    limit $3
+    "
+  )
+
+  out <- DBI::dbGetQuery(
+    con,
+    sql,
+    params = list(cam_id, dt_ref, janela)
+  )
+
+  if (nrow(out)) {
+    out$cd_id_frame <- suppressWarnings(as.integer(out$cd_id_frame))
+    out$cd_id_camera <- suppressWarnings(as.integer(out$cd_id_camera))
+    out$dt_hr_local <- as.POSIXct(out$dt_hr_local, tz = "UTC")
+    if (isTRUE(ascending)) {
+      out <- out[order(out$dt_hr_local, out$cd_id_frame), , drop = FALSE]
+    }
+  }
+
+  out
+}
+
+#' @export
 clearFramesByCamera <- function(con, cd_id_camera) {
   n1 <- DBI$dbExecute(
     con,

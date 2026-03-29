@@ -287,6 +287,480 @@ MAP_GROUP_COMPONENT_NAMES   <- "componentes_nomes"
   )
 }
 
+.objeto_contexto_raw_empty <- function() {
+  data.frame(
+    cd_id_oc = integer(0),
+    contexto = character(0),
+    momento = as.POSIXct(character(0), tz = "UTC"),
+    cd_id_frame = character(0),
+    cd_id_camera = character(0),
+    stringsAsFactors = FALSE
+  )
+}
+
+.objeto_contexto_parse_ids <- function(x) {
+  if (is.null(x) || !length(x)) return(integer(0))
+
+  x <- as.character(x[[1]])
+  if (is.na(x) || !nzchar(x)) return(integer(0))
+
+  vals <- stringr::str_extract_all(x, "\\d+")[[1]]
+  vals <- suppressWarnings(as.integer(vals))
+  vals <- vals[is.finite(vals)]
+
+  unique(vals)
+}
+
+.objeto_contexto_detect_mime <- function(raw) {
+  if (is.null(raw) || !length(raw)) return("application/octet-stream")
+  if (length(raw) >= 2 && raw[1] == as.raw(0xFF) && raw[2] == as.raw(0xD8)) return("image/jpeg")
+  if (length(raw) >= 8 && all(raw[1:8] == as.raw(c(0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A)))) return("image/png")
+  "application/octet-stream"
+}
+
+.objeto_contexto_to_data_url <- function(raw) {
+  if (is.null(raw) || !length(raw)) return(NULL)
+  paste0(
+    "data:",
+    .objeto_contexto_detect_mime(raw),
+    ";base64,",
+    base64enc::base64encode(raw)
+  )
+}
+
+.objeto_contexto_clip_ui <- function(ns, payload, missing_cameras = character(0)) {
+  if (is.null(payload) || !length(payload$cameras)) return(NULL)
+
+  player_id <- ns("objetoContextoClipPlayer")
+  root_json <- jsonlite::toJSON(player_id, auto_unbox = TRUE)
+  payload_json <- jsonlite::toJSON(payload, auto_unbox = TRUE, null = "null")
+  close_js <- sprintf(
+    "window.tvsObjCtxPlayerStop && window.tvsObjCtxPlayerStop(%s);",
+    root_json
+  )
+
+  tags$div(
+    id = player_id,
+    tags$style(HTML(sprintf(
+      "
+      #%1$s {
+        margin: 0 0 14px 0;
+        padding: 14px;
+        border: 1px solid #dbe3ea;
+        border-radius: 12px;
+        background: linear-gradient(180deg, #fbfdff 0%%, #f3f8fc 100%%);
+      }
+      #%1$s .tvs-ctxclip-head {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        gap: 12px;
+        flex-wrap: wrap;
+        margin-bottom: 12px;
+      }
+      #%1$s .tvs-ctxclip-title {
+        font-size: 16px;
+        font-weight: 700;
+        color: #1f2d3d;
+        line-height: 1.35;
+        word-break: break-word;
+      }
+      #%1$s .tvs-ctxclip-titlebar {
+        display: flex;
+        align-items: flex-start;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+      #%1$s .tvs-ctxclip-momento {
+        font-size: 12px;
+        font-weight: 600;
+        color: #475569;
+        background: #e8f1f8;
+        border: 1px solid #cdddea;
+        border-radius: 999px;
+        padding: 4px 10px;
+        white-space: nowrap;
+      }
+      #%1$s .tvs-ctxclip-subtitle {
+        font-size: 12px;
+        color: #6b7280;
+        margin-top: 2px;
+      }
+      #%1$s .tvs-ctxclip-actions {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        flex-wrap: wrap;
+      }
+      #%1$s .tvs-ctxclip-status {
+        min-width: 110px;
+        font-weight: 600;
+        color: #374151;
+      }
+      #%1$s .tvs-ctxclip-repeat {
+        min-width: 110px;
+      }
+      #%1$s .tvs-ctxclip-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+        gap: 12px;
+      }
+      #%1$s .tvs-ctxclip-card {
+        border: 1px solid #d8e2ea;
+        border-radius: 10px;
+        overflow: hidden;
+        background: #fff;
+        box-shadow: 0 3px 12px rgba(15, 23, 42, 0.04);
+      }
+      #%1$s .tvs-ctxclip-cardhead {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 10px;
+        padding: 10px 12px;
+        border-bottom: 1px solid #edf2f7;
+        background: #f9fbfd;
+      }
+      #%1$s .tvs-ctxclip-camname {
+        font-weight: 700;
+        color: #1f2d3d;
+      }
+      #%1$s .tvs-ctxclip-meta {
+        font-size: 12px;
+        color: #6b7280;
+        text-align: right;
+      }
+      #%1$s .tvs-ctxclip-stage {
+        background: #0f172a;
+        aspect-ratio: 16 / 9;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      #%1$s .tvs-ctxclip-stage img {
+        width: 100%%;
+        height: 100%%;
+        object-fit: contain;
+        display: block;
+      }
+      #%1$s .tvs-ctxclip-slider {
+        margin-top: 12px;
+      }
+      #%1$s .tvs-ctxclip-note {
+        margin-bottom: 12px;
+        padding: 10px 12px;
+        border-radius: 8px;
+        background: #fff7e6;
+        border: 1px solid #f0ad4e;
+        color: #8a6d3b;
+      }
+      ",
+      player_id
+    ))),
+    tags$div(
+      class = "tvs-ctxclip-head",
+      tags$div(
+        tags$div(
+          class = "tvs-ctxclip-titlebar",
+          tags$div(class = "tvs-ctxclip-title", as.character(payload$context_label %||% "Clip do contexto")),
+          if (!is.null(payload$moment_label) && nzchar(as.character(payload$moment_label))) {
+            tags$span(class = "tvs-ctxclip-momento", as.character(payload$moment_label))
+          }
+        ),
+        tags$div(
+          class = "tvs-ctxclip-subtitle",
+          paste0(payload$total_steps, " frame(s) carregado(s) para a inferencia.")
+        )
+      ),
+      tags$div(
+        class = "tvs-ctxclip-actions",
+        tags$span(id = paste0(player_id, "_status"), class = "tvs-ctxclip-status"),
+        tags$button(
+          type = "button",
+          class = "btn btn-default btn-sm",
+          title = "Frame anterior",
+          onclick = sprintf("window.tvsObjCtxClipControl && window.tvsObjCtxClipControl(%s, 'prev');", root_json),
+          icon("step-backward")
+        ),
+        tags$button(
+          type = "button",
+          class = "btn btn-default btn-sm",
+          title = "Play",
+          onclick = sprintf("window.tvsObjCtxClipControl && window.tvsObjCtxClipControl(%s, 'play');", root_json),
+          icon("play")
+        ),
+        tags$button(
+          type = "button",
+          class = "btn btn-default btn-sm",
+          title = "Pause",
+          onclick = sprintf("window.tvsObjCtxClipControl && window.tvsObjCtxClipControl(%s, 'pause');", root_json),
+          icon("pause")
+        ),
+        tags$button(
+          type = "button",
+          class = "btn btn-default btn-sm",
+          title = "Restart",
+          onclick = sprintf("window.tvsObjCtxClipControl && window.tvsObjCtxClipControl(%s, 'restart');", root_json),
+          icon("undo")
+        ),
+        tags$button(
+          id = paste0(player_id, "_repeat"),
+          type = "button",
+          class = "btn btn-success btn-sm tvs-ctxclip-repeat",
+          title = "Repeat",
+          onclick = sprintf("window.tvsObjCtxClipControl && window.tvsObjCtxClipControl(%s, 'repeat');", root_json),
+          "Repeat: On"
+        ),
+        tags$button(
+          type = "button",
+          class = "btn btn-default btn-sm",
+          title = "Proximo frame",
+          onclick = sprintf("window.tvsObjCtxClipControl && window.tvsObjCtxClipControl(%s, 'next');", root_json),
+          icon("step-forward")
+        ),
+        tags$span("FPS"),
+        tags$input(
+          id = paste0(player_id, "_fps"),
+          type = "number",
+          value = as.integer(payload$fps_default),
+          min = 1,
+          max = 60,
+          step = 1,
+          style = "width: 80px;"
+        ),
+        actionButton(
+          ns("btFecharContextoClip"),
+          label = "Fechar clip",
+          icon = icon("times"),
+          class = "btn btn-default btn-sm",
+          onclick = close_js
+        )
+      )
+    ),
+    if (length(missing_cameras)) {
+      tags$div(
+        class = "tvs-ctxclip-note",
+        paste0(
+          "Algumas cameras nao retornaram frames para este contexto: ",
+          paste(missing_cameras, collapse = ", "),
+          "."
+        )
+      )
+    },
+    tags$div(
+      class = "tvs-ctxclip-grid",
+      lapply(payload$cameras, function(cam) {
+        first_src <- ""
+        first_label <- "Sem frame"
+        if (length(cam$frames)) {
+          first_src <- as.character(cam$frames[[1]]$src)
+          first_src <- if (length(first_src) && !is.na(first_src[[1]])) first_src[[1]] else ""
+          first_label_tmp <- as.character(cam$frames[[1]]$label)
+          if (length(first_label_tmp) && !is.na(first_label_tmp[[1]]) && nzchar(first_label_tmp[[1]])) {
+            first_label <- first_label_tmp[[1]]
+          }
+        }
+
+        tags$div(
+          class = "tvs-ctxclip-card",
+          tags$div(
+            class = "tvs-ctxclip-cardhead",
+            tags$span(class = "tvs-ctxclip-camname", cam$name),
+            tags$span(id = paste0(player_id, "_meta_", cam$id), class = "tvs-ctxclip-meta", first_label)
+          ),
+          tags$div(
+            class = "tvs-ctxclip-stage",
+            tags$img(
+              id = paste0(player_id, "_img_", cam$id),
+              src = first_src,
+              alt = cam$name
+            )
+          )
+        )
+      })
+    ),
+    tags$div(
+      class = "tvs-ctxclip-slider",
+      tags$input(
+        id = paste0(player_id, "_slider"),
+        type = "range",
+        min = 1,
+        max = max(1L, as.integer(payload$total_steps)),
+        value = 1,
+        step = 1,
+        style = "width: 100%;"
+      )
+    ),
+    tags$script(HTML(sprintf(
+      "
+      (function() {
+        const rootId = %1$s;
+        const payload = %2$s;
+
+        window.tvsObjCtxPlayers = window.tvsObjCtxPlayers || {};
+
+        if (window.tvsObjCtxPlayers[rootId] && window.tvsObjCtxPlayers[rootId].timer) {
+          clearInterval(window.tvsObjCtxPlayers[rootId].timer);
+        }
+
+        const state = {
+          index: 0,
+          timer: null,
+          payload: payload,
+          repeat: payload.repeat_default !== false
+        };
+
+        function totalSteps() {
+          return Math.max(1, Number(payload.total_steps || 1));
+        }
+
+        function clampIndex(i) {
+          return Math.max(0, Math.min(totalSteps() - 1, Number(i || 0)));
+        }
+
+        function readFps() {
+          const fpsEl = document.getElementById(rootId + '_fps');
+          const value = fpsEl ? Number(fpsEl.value) : Number(payload.fps_default || 5);
+          if (!Number.isFinite(value)) return 5;
+          return Math.max(1, Math.min(60, Math.round(value)));
+        }
+
+        function frameAt(cam, idx) {
+          if (!cam || !cam.frames || !cam.frames.length) return null;
+          const pos = Math.max(0, Math.min(cam.frames.length - 1, idx));
+          return cam.frames[pos];
+        }
+
+        function render() {
+          state.index = clampIndex(state.index);
+
+          (payload.cameras || []).forEach(function(cam) {
+            const frame = frameAt(cam, state.index);
+            const img = document.getElementById(rootId + '_img_' + cam.id);
+            const meta = document.getElementById(rootId + '_meta_' + cam.id);
+
+            if (img) {
+              if (frame && frame.src) {
+                img.src = frame.src;
+                img.style.opacity = '1';
+              } else {
+                img.removeAttribute('src');
+                img.style.opacity = '0.35';
+              }
+            }
+
+            if (meta) {
+              meta.textContent = frame && frame.label ? frame.label : 'Sem frame';
+            }
+          });
+
+          const status = document.getElementById(rootId + '_status');
+          if (status) {
+            status.textContent = 'Frame ' + (state.index + 1) + ' / ' + totalSteps();
+          }
+
+          const repeatBtn = document.getElementById(rootId + '_repeat');
+          if (repeatBtn) {
+            repeatBtn.textContent = state.repeat ? 'Repeat: On' : 'Repeat: Off';
+            repeatBtn.className = state.repeat
+              ? 'btn btn-success btn-sm tvs-ctxclip-repeat'
+              : 'btn btn-default btn-sm tvs-ctxclip-repeat';
+          }
+
+          const slider = document.getElementById(rootId + '_slider');
+          if (slider) {
+            slider.max = String(totalSteps());
+            slider.value = String(state.index + 1);
+          }
+        }
+
+        function pause() {
+          if (state.timer) {
+            clearInterval(state.timer);
+            state.timer = null;
+          }
+        }
+
+        function play() {
+          pause();
+          state.timer = setInterval(function() {
+            if (state.index >= totalSteps() - 1) {
+              if (state.repeat) {
+                state.index = 0;
+                render();
+                return;
+              }
+              pause();
+              return;
+            }
+            state.index += 1;
+            render();
+          }, Math.max(16, Math.round(1000 / readFps())));
+        }
+
+        const slider = document.getElementById(rootId + '_slider');
+        if (slider) {
+          slider.oninput = function() {
+            pause();
+            state.index = clampIndex(Number(this.value || 1) - 1);
+            render();
+          };
+        }
+
+        window.tvsObjCtxClipControl = function(target, action) {
+          const st = window.tvsObjCtxPlayers[target];
+          if (!st || target !== rootId) return;
+
+          if (action === 'play') {
+            play();
+            return;
+          }
+
+          if (action === 'pause') {
+            pause();
+            return;
+          }
+
+          if (action === 'restart') {
+            pause();
+            state.index = 0;
+            render();
+            return;
+          }
+
+          if (action === 'repeat') {
+            state.repeat = !state.repeat;
+            render();
+            return;
+          }
+
+          pause();
+          if (action === 'prev') {
+            state.index = clampIndex(state.index - 1);
+          } else if (action === 'next') {
+            state.index = clampIndex(state.index + 1);
+          }
+          render();
+        };
+
+        window.tvsObjCtxPlayerStop = function(target) {
+          const st = window.tvsObjCtxPlayers[target];
+          if (st && st.timer) {
+            clearInterval(st.timer);
+            st.timer = null;
+          }
+        };
+
+        window.tvsObjCtxPlayers[rootId] = state;
+        render();
+      })();
+      ",
+      root_json,
+      payload_json
+    )))
+  )
+}
+
 #' @export
 uiObjetoContexto <- function(ns, input, output, session, callback) {
 
@@ -297,13 +771,38 @@ uiObjetoContexto <- function(ns, input, output, session, callback) {
   setores <- selectAllSetors(dbp$get_pool())
   objetos_lookup <- reactiveVal(data.frame())
   contextos <- reactiveVal(.objeto_contexto_dt_empty())
+  contextos_raw <- reactiveVal(.objeto_contexto_raw_empty())
   busca_realizada <- reactiveVal(FALSE)
+  contexto_clip_payload <- reactiveVal(NULL)
+  contexto_clip_missing <- reactiveVal(character(0))
 
   id <- ns("dialogObjetoContexto")
   cssStyle <- list()
   cssStyle[[paste0(" #parent", id, " .modal-dialog")]]  <- "width: 96% !important; height: 90% !important;"
   cssStyle[[paste0(" #parent", id, " .modal-content")]] <- "width: 100% !important; height: 100% !important;"
   cssStyle[[paste0(" #parent", id, " .modal-body")]]    <- "width: 100% !important; height: calc(100% - 57px - 65px) !important; overflow-y: auto; overflow-x: hidden;"
+
+  .clear_contexto_clip <- function(reset_table_selection = TRUE) {
+    shinyjs::runjs(sprintf(
+      "window.tvsObjCtxPlayerStop && window.tvsObjCtxPlayerStop(%s);",
+      jsonlite::toJSON(ns("objetoContextoClipPlayer"), auto_unbox = TRUE)
+    ))
+
+    contexto_clip_payload(NULL)
+    contexto_clip_missing(character(0))
+
+    if (isTRUE(reset_table_selection)) {
+      try(
+        DT::selectRows(
+          DT::dataTableProxy("tbObjetoContexto", session = session),
+          NULL
+        ),
+        silent = TRUE
+      )
+    }
+
+    invisible(NULL)
+  }
 
   .set_objetos_do_setor <- function(cd_id_setor = NULL, selected = "") {
     setor_id <- suppressWarnings(as.integer(cd_id_setor))
@@ -351,7 +850,9 @@ uiObjetoContexto <- function(ns, input, output, session, callback) {
     objeto_id <- suppressWarnings(as.integer(isolate(input$comboObjetoContexto)))
     if (is.na(objeto_id)) {
       busca_realizada(FALSE)
+      contextos_raw(.objeto_contexto_raw_empty())
       contextos(.objeto_contexto_dt_empty())
+      .clear_contexto_clip(reset_table_selection = TRUE)
       return(invisible(NULL))
     }
 
@@ -368,6 +869,7 @@ uiObjetoContexto <- function(ns, input, output, session, callback) {
           tz_local = tz_local
         )
 
+        contextos_raw(df)
         df_tbl <- if (nrow(df)) {
           data.frame(
             CONTEXTO = as.character(df$contexto),
@@ -379,11 +881,15 @@ uiObjetoContexto <- function(ns, input, output, session, callback) {
         }
 
         contextos(df_tbl)
+        .clear_contexto_clip(reset_table_selection = TRUE)
         busca_realizada(TRUE)
       })
 
       if (!isTRUE(ok)) {
         busca_realizada(FALSE)
+        contextos_raw(.objeto_contexto_raw_empty())
+        contextos(.objeto_contexto_dt_empty())
+        .clear_contexto_clip(reset_table_selection = TRUE)
         showNotification("Nao foi possivel carregar o contexto do objeto.", type = "error")
       }
     }
@@ -458,7 +964,15 @@ uiObjetoContexto <- function(ns, input, output, session, callback) {
                 readonly = TRUE,
                 dateFormat = "dd/MM/yyyy",
                 language = "pt-BR",
-                timepickerOpts = timepickerOptions(hoursStep = 1, minutesStep = 1),
+                timepickerOpts = timepickerOptions(
+                  timeFormat = "HH:mm",
+                  minHours = 0,
+                  maxHours = 23,
+                  minMinutes = 0,
+                  maxMinutes = 59,
+                  hoursStep = 1,
+                  minutesStep = 1
+                ),
                 placeholder = "Sem filtro",
                 addon = "none"
               )
@@ -475,7 +989,15 @@ uiObjetoContexto <- function(ns, input, output, session, callback) {
                 readonly = TRUE,
                 dateFormat = "dd/MM/yyyy",
                 language = "pt-BR",
-                timepickerOpts = timepickerOptions(hoursStep = 1, minutesStep = 1),
+                timepickerOpts = timepickerOptions(
+                  timeFormat = "HH:mm",
+                  minHours = 0,
+                  maxHours = 23,
+                  minMinutes = 0,
+                  maxMinutes = 59,
+                  hoursStep = 1,
+                  minutesStep = 1
+                ),
                 placeholder = "Sem filtro",
                 addon = "none"
               )
@@ -509,6 +1031,7 @@ uiObjetoContexto <- function(ns, input, output, session, callback) {
             )
           ),
           uiOutput(ns("uiResumoContexto")),
+          uiOutput(ns("uiObjetoContextoClip")),
           uiOutput(ns("uiTabelaContexto"))
         ),
         footer = tagList(
@@ -536,6 +1059,19 @@ uiObjetoContexto <- function(ns, input, output, session, callback) {
       style = "display:flex; justify-content:space-between; align-items:center; gap:12px;",
       tags$span(msg),
       tags$small(style = "color:#6b7280;", paste0("Horario exibido em ", tz_local))
+    )
+  })
+
+  output$uiObjetoContextoClip <- renderUI({
+    payload <- contexto_clip_payload()
+    if (is.null(payload) || !length(payload$cameras)) {
+      return(NULL)
+    }
+
+    .objeto_contexto_clip_ui(
+      ns,
+      payload,
+      missing_cameras = contexto_clip_missing()
     )
   })
 
@@ -574,28 +1110,219 @@ uiObjetoContexto <- function(ns, input, output, session, callback) {
         extra_options = list(autoWidth = FALSE)
       ),
       escape = TRUE,
-      selection = "none"
+      selection = list(mode = "single", target = "row", selected = NULL)
     ) |> DT$formatStyle(names(df), cursor = "pointer")
   })
 
   obs$add(observeEvent(input$comboSetorContexto, {
     .reload_objetos_lookup(input$comboSetorContexto, selected = "")
     busca_realizada(FALSE)
+    contextos_raw(.objeto_contexto_raw_empty())
     contextos(.objeto_contexto_dt_empty())
+    .clear_contexto_clip(reset_table_selection = TRUE)
   }, ignoreInit = TRUE, ignoreNULL = FALSE))
 
   obs$add(observeEvent(input$comboObjetoContexto, {
     busca_realizada(FALSE)
+    contextos_raw(.objeto_contexto_raw_empty())
     contextos(.objeto_contexto_dt_empty())
+    .clear_contexto_clip(reset_table_selection = TRUE)
   }, ignoreInit = TRUE, ignoreNULL = FALSE))
 
   obs$add(observeEvent(list(input$dtDeContexto, input$dtAteContexto), {
     busca_realizada(FALSE)
+    contextos_raw(.objeto_contexto_raw_empty())
     contextos(.objeto_contexto_dt_empty())
+    .clear_contexto_clip(reset_table_selection = TRUE)
   }, ignoreInit = TRUE))
 
   obs$add(observeEvent(input$btAtualizarContexto, {
     .load_contextos(use_loader = TRUE)
+  }, ignoreInit = TRUE))
+
+  obs$add(observeEvent(input$tbObjetoContexto_rows_selected, {
+    sel <- suppressWarnings(as.integer(input$tbObjetoContexto_rows_selected))
+    if (!length(sel) || is.na(sel[[1]])) {
+      return(invisible(NULL))
+    }
+
+    rows <- isolate(contextos_raw())
+    if (!is.data.frame(rows) || !nrow(rows) || sel[[1]] < 1L || sel[[1]] > nrow(rows)) {
+      .clear_contexto_clip(reset_table_selection = TRUE)
+      return(invisible(NULL))
+    }
+
+    row_sel <- rows[sel[[1]], , drop = FALSE]
+    .clear_contexto_clip(reset_table_selection = FALSE)
+
+    actionWebUser(function() {
+      payload_local <- NULL
+      missing_local <- character(0)
+
+      ok <- db$tryTransaction(function(conn) {
+        frame_ids <- .objeto_contexto_parse_ids(row_sel$cd_id_frame)
+        camera_ids_hint <- .objeto_contexto_parse_ids(row_sel$cd_id_camera)
+        moment_ref <- row_sel$momento[[1]]
+
+        if (!inherits(moment_ref, "POSIXct")) {
+          moment_ref <- as.POSIXct(moment_ref, tz = "UTC")
+        }
+
+        seqs_by_camera <- list()
+        loaded_order <- integer(0)
+
+        if (length(frame_ids)) {
+          for (frame_id in frame_ids) {
+            df_cam <- tryCatch(
+              get_frames_window(
+                conn,
+                cd_id_frame = frame_id,
+                janela = 35L,
+                include_blob = TRUE,
+                ascending = TRUE
+              ),
+              error = function(e) NULL
+            )
+
+            if (is.null(df_cam) || !nrow(df_cam)) next
+
+            cam_id <- suppressWarnings(as.integer(df_cam$cd_id_camera[[1]]))
+            if (!is.finite(cam_id)) next
+
+            seqs_by_camera[[as.character(cam_id)]] <- df_cam
+            loaded_order <- c(loaded_order, cam_id)
+          }
+        }
+
+        if (!length(seqs_by_camera) && length(camera_ids_hint)) {
+          for (cam_id in camera_ids_hint) {
+            df_cam <- tryCatch(
+              selectFramesByCamera(
+                conn,
+                camera = cam_id,
+                janela = 35L,
+                date_time = moment_ref,
+                chronological = TRUE
+              ),
+              error = function(e) NULL
+            )
+
+            if (is.null(df_cam) || !nrow(df_cam)) {
+              missing_local <<- c(missing_local, as.character(cam_id))
+              next
+            }
+
+            seqs_by_camera[[as.character(cam_id)]] <- df_cam
+            loaded_order <- c(loaded_order, cam_id)
+          }
+        }
+
+        if (!length(seqs_by_camera)) {
+          stop("Nenhum frame foi encontrado para o contexto selecionado.")
+        }
+
+        camera_ids_loaded <- suppressWarnings(as.integer(names(seqs_by_camera)))
+        camera_ids_loaded <- camera_ids_loaded[is.finite(camera_ids_loaded)]
+
+        all_cameras <- selectAllCameras(conn)
+        cam_names <- character(0)
+        if (is.data.frame(all_cameras) && nrow(all_cameras)) {
+          cam_names <- stats::setNames(
+            as.character(all_cameras$name_camera),
+            as.character(all_cameras$cd_id_camera)
+          )
+        }
+
+        if (length(camera_ids_hint)) {
+          missing_local <<- unique(c(
+            missing_local,
+            as.character(setdiff(camera_ids_hint, camera_ids_loaded))
+          ))
+        }
+
+        if (length(missing_local)) {
+          missing_local <<- unique(vapply(missing_local, function(cam_ref) {
+            cam_ref_chr <- as.character(cam_ref)
+            cam_ref_id <- suppressWarnings(as.integer(cam_ref_chr))
+            if (is.finite(cam_ref_id)) {
+              return(unname(cam_names[[as.character(cam_ref_id)]] %||% paste0("Camera ", cam_ref_id)))
+            }
+            cam_ref_chr
+          }, character(1L)))
+        }
+
+        display_order <- unique(c(camera_ids_hint, loaded_order, camera_ids_loaded))
+        display_order <- display_order[is.finite(display_order)]
+
+        cameras_payload <- Filter(Negate(is.null), lapply(display_order, function(cam_id) {
+          df_cam <- seqs_by_camera[[as.character(cam_id)]]
+          if (is.null(df_cam) || !nrow(df_cam)) {
+            return(NULL)
+          }
+
+          cam_label <- unname(cam_names[[as.character(cam_id)]] %||% paste0("Camera ", cam_id))
+
+          frames_payload <- lapply(seq_len(nrow(df_cam)), function(i) {
+            ts_frame <- as.POSIXct(df_cam$dt_hr_local[[i]], tz = "UTC")
+            ts_frame <- lubridate::with_tz(ts_frame, tzone = tz_local)
+            list(
+              src = .objeto_contexto_to_data_url(df_cam$data_frame[[i]]),
+              label = format(ts_frame, "%d/%m/%Y %H:%M:%S")
+            )
+          })
+
+          has_blob <- any(vapply(frames_payload, function(frame) {
+            src <- frame$src
+            !is.null(src) && length(src) && !is.na(src[[1]]) && nzchar(src[[1]])
+          }, logical(1L)))
+
+          if (!isTRUE(has_blob)) {
+            missing_local <<- c(missing_local, cam_label)
+            return(NULL)
+          }
+
+          list(
+            id = as.integer(cam_id),
+            name = cam_label,
+            frames = frames_payload
+          )
+        }))
+
+        if (!length(cameras_payload)) {
+          stop("Os blobs dos frames nao estao disponiveis para o contexto selecionado.")
+        }
+
+        context_label <- as.character(row_sel$contexto[[1]] %||% "")
+        if (is.na(context_label) || !nzchar(context_label)) {
+          context_label <- "Clip do contexto"
+        }
+
+        moment_label <- format(as.POSIXct(row_sel$momento[[1]]), "%d/%m/%Y %H:%M:%S")
+
+        payload_local <<- list(
+          context_label = context_label,
+          moment_label = moment_label,
+          fps_default = 5L,
+          repeat_default = TRUE,
+          total_steps = max(vapply(cameras_payload, function(cam) length(cam$frames), integer(1L))),
+          cameras = cameras_payload
+        )
+      })
+
+      .clear_contexto_clip(reset_table_selection = TRUE)
+
+      if (!isTRUE(ok) || is.null(payload_local) || !length(payload_local$cameras)) {
+        showNotification("Nao foi possivel carregar o clip do contexto.", type = "warning")
+        return(invisible(NULL))
+      }
+
+      contexto_clip_missing(unique(missing_local))
+      contexto_clip_payload(payload_local)
+    }, delay = 0, lock_id = "objeto_contexto_clip_load")
+  }, ignoreInit = TRUE))
+
+  obs$add(observeEvent(input$btFecharContextoClip, {
+    .clear_contexto_clip(reset_table_selection = TRUE)
   }, ignoreInit = TRUE))
 
   obs$add(observeEvent(input$btLimparPeriodoContexto, {

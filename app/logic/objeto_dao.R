@@ -36,6 +36,29 @@ box::use(
   tz
 }
 
+.table_has_column <- function(con, table_name, column_name, schema_name = NULL) {
+  schema_name <- as.character(schema_name)[1]
+  if (is.na(schema_name) || !nzchar(schema_name)) {
+    schema_name <- DBI::dbGetQuery(con, "select current_schema() as schema_name")$schema_name[[1]]
+  }
+
+  out <- DBI::dbGetQuery(
+    con,
+    "
+    select exists (
+      select 1
+      from information_schema.columns
+      where table_schema = $1
+        and table_name = $2
+        and column_name = $3
+    ) as has_column
+    ",
+    params = list(schema_name, as.character(table_name), as.character(column_name))
+  )
+
+  isTRUE(as.logical(out$has_column[[1]]))
+}
+
 # fg_ativo IN (...) com placeholders
 .in_placeholders <- function(n, start = 1L) {
   if (n <= 0L) return("null")
@@ -555,14 +578,29 @@ selectObjetoContexto <- function(con,
                                  tz_local = NULL) {
   stopifnot(!is.null(cd_id_objeto))
 
-  sql <- "
+  select_cols <- c(
+    "oc.cd_id_oc",
+    "oc.data_oc as contexto",
+    "oc.dt_hr_local as momento"
+  )
+
+  if (.table_has_column(con, "objeto_contexto", "cd_id_frame")) {
+    select_cols <- c(select_cols, "oc.cd_id_frame")
+  }
+  if (.table_has_column(con, "objeto_contexto", "cd_id_camera")) {
+    select_cols <- c(select_cols, "oc.cd_id_camera")
+  }
+
+  sql <- paste0(
+    "
     select
-      oc.cd_id_oc,
-      oc.data_oc    as contexto,
-      oc.dt_hr_local as momento
+      ",
+    paste(select_cols, collapse = ",\n      "),
+    "
     from objeto_contexto oc
     where oc.cd_id_objeto = $1
-  "
+    "
+  )
 
   params <- list(as.integer(cd_id_objeto[[1]]))
   p <- 2L
@@ -592,6 +630,16 @@ selectObjetoContexto <- function(con,
 
   if ("contexto" %in% names(out)) {
     out$contexto <- as.character(out$contexto)
+  }
+  if ("cd_id_frame" %in% names(out)) {
+    out$cd_id_frame <- as.character(out$cd_id_frame)
+  } else {
+    out$cd_id_frame <- NA_character_
+  }
+  if ("cd_id_camera" %in% names(out)) {
+    out$cd_id_camera <- as.character(out$cd_id_camera)
+  } else {
+    out$cd_id_camera <- NA_character_
   }
 
   if ("momento" %in% names(out)) {

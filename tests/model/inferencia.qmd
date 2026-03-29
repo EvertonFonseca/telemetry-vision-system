@@ -20,7 +20,7 @@ library(magick)
 # ------------------------------------------------------------
 get_frames_window <- function(con,
                               cd_id_frame,
-                              janela = 10L,
+                              janela = 35L,
                               include_blob = TRUE,
                               ascending = TRUE) {
   stopifnot(janela >= 1L)
