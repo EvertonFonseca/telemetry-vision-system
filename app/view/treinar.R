@@ -4699,7 +4699,7 @@ uiBuildTreinar <- function(ns, input, output, session, callback) {
 
     if (isTRUE(success)) {
       refresh_build_packages(preserve_checks = TRUE)
-      enqueue_build_notice("Arquivo .rds gerado com sucesso!", type = notify_type)
+      enqueue_build_notice("Arquivo .rds gerado com sucesso!", type = notify_type, duration = 6)
     } else {
       enqueue_build_notice("Falha ao gerar o arquivo .rds. Veja os logs do processo.", type = "error")
     }
@@ -5007,13 +5007,17 @@ uiBuildTreinar <- function(ns, input, output, session, callback) {
       )
     }
 
+    current_output_dir <- isolate(output_dir_value())
+    current_file_name <- isolate(file_name_value())
+    current_limit <- isolate(build_limit_value())
+
     tagList(
       splitLayout(
         cellWidths = c("78%", "22%"),
         textInput(
           ns("buildOutputDir"),
           "Pasta de saida",
-          value = output_dir_value(),
+          value = current_output_dir,
           width = "100%"
         ),
         shinyDirButton(
@@ -5028,13 +5032,13 @@ uiBuildTreinar <- function(ns, input, output, session, callback) {
       textInput(
         ns("buildFileName"),
         "Nome do arquivo .rds",
-        value = file_name_value(),
+        value = current_file_name,
         width = "100%"
       ),
       numericInput(
         ns("buildLimit"),
         "Limite de frames por camera",
-        value = build_limit_value(),
+        value = current_limit,
         min = 1L,
         step = 1L,
         width = "100%"
@@ -5289,6 +5293,18 @@ uiBuildTreinar <- function(ns, input, output, session, callback) {
     output_dir_value(if (nzchar(val)) val else "train")
   }, ignoreInit = TRUE))
 
+  obs$add(observeEvent(output_dir_value(), {
+    if (!isTRUE(show_output_widget())) return(invisible())
+
+    current_value <- isolate(input$buildOutputDir)
+    current_value <- if (length(current_value)) as.character(current_value)[1] else ""
+    target_value <- output_dir_value()
+
+    if (!identical(current_value, target_value)) {
+      updateTextInput(session, "buildOutputDir", value = target_value)
+    }
+  }, ignoreInit = TRUE))
+
   obs$add(observeEvent(input$buildOutputDirPicker, {
     selected_dir <- tryCatch(
       parseDirPath(build_dir_roots, input$buildOutputDirPicker),
@@ -5307,9 +5323,32 @@ uiBuildTreinar <- function(ns, input, output, session, callback) {
     file_name_touched(TRUE)
   }, ignoreInit = TRUE))
 
+  obs$add(observeEvent(file_name_value(), {
+    if (!isTRUE(show_output_widget())) return(invisible())
+
+    current_value <- isolate(input$buildFileName)
+    current_value <- if (length(current_value)) as.character(current_value)[1] else ""
+    target_value <- file_name_value()
+
+    if (!identical(current_value, target_value)) {
+      updateTextInput(session, "buildFileName", value = target_value)
+    }
+  }, ignoreInit = TRUE))
+
   obs$add(observeEvent(input$buildLimit, {
     val <- suppressWarnings(as.integer(input$buildLimit))
     if (is.finite(val) && val >= 1L) build_limit_value(val)
+  }, ignoreInit = TRUE))
+
+  obs$add(observeEvent(build_limit_value(), {
+    if (!isTRUE(show_output_widget())) return(invisible())
+
+    current_value <- suppressWarnings(as.integer(isolate(input$buildLimit)))
+    target_value <- suppressWarnings(as.integer(build_limit_value()))
+
+    if (!identical(current_value, target_value)) {
+      updateNumericInput(session, "buildLimit", value = target_value)
+    }
   }, ignoreInit = TRUE))
 
   obs$add(observeEvent(input$btAtualizarBuild, {

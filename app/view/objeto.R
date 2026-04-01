@@ -775,6 +775,7 @@ uiObjetoContexto <- function(ns, input, output, session, callback) {
   busca_realizada <- reactiveVal(FALSE)
   contexto_clip_payload <- reactiveVal(NULL)
   contexto_clip_missing <- reactiveVal(character(0))
+  contexto_page_length <- 100L
 
   id <- ns("dialogObjetoContexto")
   cssStyle <- list()
@@ -923,6 +924,12 @@ uiObjetoContexto <- function(ns, input, output, session, callback) {
           shinyjs::inlineCSS(paste0(
             "#", ns("tbObjetoContexto"), "_wrapper .dataTables_scrollBody {",
             "max-height: 52vh !important; height: 52vh !important;}",
+            "#", ns("tbObjetoContexto"), "_wrapper .tvs-dt-footer {",
+            "display:flex; justify-content:space-between; align-items:center; gap:12px;",
+            "margin-top:12px; flex-wrap:wrap;}",
+            "#", ns("tbObjetoContexto"), "_wrapper .tvs-dt-footer .dataTables_info,",
+            "#", ns("tbObjetoContexto"), "_wrapper .tvs-dt-footer .dataTables_paginate {",
+            "float:none !important; margin:0; padding-top:0;}",
             "#", ns("uiResumoContexto"), " {margin-bottom: 10px;}"
           )),
           fluidRow(
@@ -1051,6 +1058,13 @@ uiObjetoContexto <- function(ns, input, output, session, callback) {
       "Clique na lupa para carregar o contexto."
     } else if (qtd == 0) {
       "Nenhum contexto encontrado para o filtro atual."
+    } else if (qtd > contexto_page_length) {
+      paste0(
+        qtd,
+        " registro(s) carregado(s), paginados em lotes de ",
+        contexto_page_length,
+        ". Use Proximo/Anterior no rodape da tabela."
+      )
     } else {
       paste0(qtd, " registro(s) carregado(s).")
     }
@@ -1095,7 +1109,6 @@ uiObjetoContexto <- function(ns, input, output, session, callback) {
       df,
       rownames = TRUE,
       class = "cell-border stripe",
-      extensions = "Scroller",
       options = dtProfessionalOptions(
         columnDefs = list(
           list(className = "dt-center", targets = c(0)),
@@ -1107,12 +1120,19 @@ uiObjetoContexto <- function(ns, input, output, session, callback) {
         ),
         scrollY = "420px",
         search_placeholder = "Pesquisar contexto ou momento",
-        extra_options = list(autoWidth = FALSE)
+        extra_options = list(
+          autoWidth = FALSE,
+          dom = '<"tvs-dt-toolbar"f>t<"tvs-dt-footer"ip>',
+          paging = TRUE,
+          pagingType = "simple_numbers",
+          pageLength = contexto_page_length,
+          scrollCollapse = TRUE
+        )
       ),
       escape = TRUE,
       selection = list(mode = "single", target = "row", selected = NULL)
     ) |> DT$formatStyle(names(df), cursor = "pointer")
-  })
+  }, server = TRUE)
 
   obs$add(observeEvent(input$comboSetorContexto, {
     .reload_objetos_lookup(input$comboSetorContexto, selected = "")
