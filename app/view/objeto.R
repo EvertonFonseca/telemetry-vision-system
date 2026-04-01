@@ -29,6 +29,7 @@ box::use(
   .. / logic/camera_dao[...],
   .. / logic/setor_dao[...],
   ../ logic/estrutura_dao[...],
+  ../logic/treinar_dao[selectAllTypesPacote],
   stringr,
   dplyr[...],
   lubridate[...],
@@ -328,6 +329,473 @@ MAP_GROUP_COMPONENT_NAMES   <- "componentes_nomes"
   )
 }
 
+.objeto_contexto_first <- function(x, default = NULL) {
+  if (is.null(x) || !length(x)) return(default)
+  x[[1]]
+}
+
+.objeto_contexto_first_chr <- function(x, default = "") {
+  as.character(.objeto_contexto_first(x, default))
+}
+
+.objeto_contexto_train_attr_empty <- function() {
+  data.frame(
+    cd_id_componente = integer(0),
+    cd_id_atributo = integer(0),
+    name_componente = character(0),
+    name_atributo = character(0),
+    name_data = character(0),
+    VALUE = character(0),
+    stringsAsFactors = FALSE
+  )
+}
+
+.objeto_contexto_normalize_id_piece <- function(x) {
+  x <- as.character(x)
+  x <- gsub("\\s+", "_", x)
+  gsub("[^A-Za-z0-9_\\-]", "_", x)
+}
+
+.objeto_contexto_make_attr_ids <- function(prefix, comp_id, attr_id, idx) {
+  comp_id <- as.character(comp_id)
+  attr_id <- as.character(attr_id)
+  idx <- as.character(idx)
+
+  raw_id <- paste0(prefix, "_", comp_id, "_", attr_id, "_", idx)
+  norm_id <- paste0(
+    prefix, "_",
+    .objeto_contexto_normalize_id_piece(comp_id), "_",
+    .objeto_contexto_normalize_id_piece(attr_id), "_",
+    .objeto_contexto_normalize_id_piece(idx)
+  )
+
+  list(raw = raw_id, norm = norm_id)
+}
+
+.objeto_contexto_component_values <- function(values_map, comp_id, comp_name) {
+  if (is.null(values_map) || !length(values_map)) {
+    return(list())
+  }
+
+  by_id <- values_map$by_component_id %||% list()
+  by_name <- values_map$by_component_name %||% list()
+
+  out <- NULL
+  if (length(comp_id) == 1L && is.finite(comp_id)) {
+    out <- by_id[[as.character(comp_id)]]
+  }
+  if (is.null(out)) {
+    out <- by_name[[toupper(as.character(comp_name))]]
+  }
+  if (is.null(out)) out <- list()
+
+  out
+}
+
+.objeto_contexto_parse_inference_values <- function(contexto_txt) {
+  empty <- list(by_component_id = list(), by_component_name = list())
+
+  txt <- .objeto_contexto_first_chr(contexto_txt, "")
+  if (is.na(txt) || !nzchar(trimws(txt))) {
+    return(empty)
+  }
+
+  parsed <- tryCatch(
+    jsonlite::fromJSON(txt, simplifyVector = FALSE),
+    error = function(e) NULL
+  )
+  if (is.null(parsed) || !is.list(parsed) || !length(parsed)) {
+    return(empty)
+  }
+
+  merge_values <- function(target, key, values) {
+    key <- .objeto_contexto_first_chr(key, "")
+    if (!nzchar(key) || is.null(values) || !length(values)) {
+      return(target)
+    }
+
+    current <- target[[key]]
+    if (is.null(current)) current <- list()
+
+    for (nm in names(values)) {
+      current[[as.character(nm)]] <- values[[nm]]
+    }
+
+    target[[key]] <- current
+    target
+  }
+
+  normalize_value <- function(x) {
+    if (is.null(x) || !length(x)) return(NA_character_)
+    if (is.list(x) && length(x) == 1L) x <- x[[1]]
+    if (length(x) > 1L) x <- paste(as.character(unlist(x, use.names = FALSE)), collapse = ", ")
+
+    if (is.logical(x)) {
+      return(ifelse(is.na(x[[1]]), NA_character_, ifelse(isTRUE(x[[1]]), "TRUE", "FALSE")))
+    }
+    if (is.numeric(x)) {
+      return(as.character(x[[1]]))
+    }
+
+    as.character(x[[1]])
+  }
+
+  process_entry <- function(entry, acc) {
+    if (is.null(entry) || !is.list(entry) || !length(entry)) {
+      return(acc)
+    }
+
+    comp_id_raw <- .objeto_contexto_first(
+      entry$ID,
+      .objeto_contexto_first(
+        entry$id,
+        .objeto_contexto_first(
+          entry$cd_id_componente,
+          .objeto_contexto_first(entry$CD_ID_COMPONENTE, NA_integer_)
+        )
+      )
+    )
+    comp_id <- suppressWarnings(as.integer(comp_id_raw))
+    has_comp_id <- length(comp_id) == 1L && is.finite(comp_id)
+    comp_names <- setdiff(names(entry), c("ID", "id", "cd_id_componente", "CD_ID_COMPONENTE"))
+    if (!length(comp_names)) {
+      return(acc)
+    }
+
+    for (comp_name in comp_names) {
+      attrs <- entry[[comp_name]]
+      if (is.null(attrs) || !is.list(attrs) || !length(attrs)) next
+
+      values <- list()
+      for (attr_name in names(attrs)) {
+        values[[as.character(attr_name)]] <- normalize_value(attrs[[attr_name]])
+      }
+
+      if (isTRUE(has_comp_id)) {
+        acc$by_component_id <- merge_values(acc$by_component_id, as.character(comp_id), values)
+      }
+      acc$by_component_name <- merge_values(acc$by_component_name, toupper(as.character(comp_name)), values)
+    }
+
+    acc
+  }
+
+  entries <- if (!is.null(names(parsed)) && any(nzchar(names(parsed)))) {
+    list(parsed)
+  } else {
+    parsed
+  }
+
+  out <- empty
+  for (entry in entries) {
+    out <- process_entry(entry, out)
+  }
+
+  out
+}
+
+.objeto_contexto_train_attrs_ui <- function(ns, objeto, values_map = NULL, id_prefix = "objCtxTrain") {
+  if (is.null(objeto) || !is.data.frame(objeto) || !nrow(objeto)) {
+    return(tags$em("Nenhum objeto foi encontrado para carregar os atributos."))
+  }
+
+  componentes <- objeto$config[[1]]$componentes[[1]]
+  if (is.null(componentes) || !is.data.frame(componentes) || !nrow(componentes)) {
+    return(tags$em("Nenhum componente foi encontrado para este objeto."))
+  }
+
+  tagList(lapply(seq_len(nrow(componentes)), function(i) {
+    comp <- componentes[i, , drop = FALSE]
+    comp_id <- suppressWarnings(as.integer(comp$cd_id_componente[[1]]))
+    comp_name <- .objeto_contexto_first_chr(comp$name_componente, paste0("Componente ", i))
+
+    estrutura <- if ("estrutura" %in% names(comp) && length(comp$estrutura)) comp$estrutura[[1]] else NULL
+    estrutura_nome <- ""
+    attrs_df <- NULL
+
+    if (!is.null(estrutura) && is.data.frame(estrutura) && nrow(estrutura)) {
+      estrutura_nome <- .objeto_contexto_first_chr(estrutura$name_estrutura, "")
+      if (!is.null(estrutura$configs) && length(estrutura$configs) &&
+          !is.null(estrutura$configs[[1]]$atributos) && length(estrutura$configs[[1]]$atributos)) {
+        attrs_df <- estrutura$configs[[1]]$atributos[[1]]
+      }
+    }
+
+    comp_values <- .objeto_contexto_component_values(values_map, comp_id, comp_name)
+    inputs_ui <- if (is.null(attrs_df) || !is.data.frame(attrs_df) || !nrow(attrs_df)) {
+      tags$em("Sem atributos configurados para esta estrutura.")
+    } else {
+      tagList(lapply(seq_len(nrow(attrs_df)), function(k) {
+        att <- attrs_df[k, , drop = FALSE]
+        att_id <- suppressWarnings(as.integer(att$cd_id_atributo[[1]]))
+        att_name <- .objeto_contexto_first_chr(att$name_atributo, paste0("Atributo ", k))
+        att_type <- .objeto_contexto_first_chr(att$name_data, "")
+        att_vals <- .objeto_contexto_first_chr(att$value_atributo, "")
+        input_ids <- .objeto_contexto_make_attr_ids(id_prefix, comp_id, att_id, k)
+
+        cur_value <- comp_values[[att_name]]
+        if (is.null(cur_value)) cur_value <- comp_values[[toupper(att_name)]]
+        if (is.null(cur_value)) cur_value <- comp_values[[as.character(att_id)]]
+        cur_value_first <- .objeto_contexto_first(cur_value, NULL)
+
+        if (identical(att_type, "QUALITATIVE")) {
+          choices <- stringr::str_split(att_vals, ",")[[1]]
+          choices <- trimws(choices)
+          choices <- choices[nzchar(choices)]
+
+          return(
+            selectizeInput(
+              ns(input_ids$raw),
+              label = att_name,
+              choices = choices,
+              selected = if (!is.null(cur_value_first) && nzchar(as.character(cur_value_first))) as.character(cur_value_first) else NULL,
+              options = list(dropdownParent = "body", openOnFocus = TRUE, closeAfterSelect = TRUE)
+            )
+          )
+        }
+
+        cur_num <- suppressWarnings(as.numeric(.objeto_contexto_first(cur_value, NA_real_)))
+        numericInput(
+          ns(input_ids$raw),
+          label = att_name,
+          value = if (is.finite(cur_num)) cur_num else NA_real_,
+          step = 1
+        )
+      }))
+    }
+
+    panelTitle(
+      title = comp_name,
+      background.color.title = "white",
+      title.color = "black",
+      border.color = "lightgray",
+      children = div(
+        style = "padding: 12px;",
+        if (nzchar(estrutura_nome)) {
+          tags$div(
+            style = "margin-bottom:10px; color:#6b7280; font-size:12px; font-weight:600;",
+            paste0("Estrutura: ", estrutura_nome)
+          )
+        },
+        inputs_ui
+      )
+    )
+  }))
+}
+
+.objeto_contexto_collect_train_attrs <- function(input_source, objeto, id_prefix = "objCtxTrain") {
+  if (is.null(objeto) || !is.data.frame(objeto) || !nrow(objeto)) {
+    return(.objeto_contexto_train_attr_empty())
+  }
+
+  componentes <- objeto$config[[1]]$componentes[[1]]
+  if (is.null(componentes) || !is.data.frame(componentes) || !nrow(componentes)) {
+    return(.objeto_contexto_train_attr_empty())
+  }
+
+  read_input <- function(id_candidates) {
+    ids <- unlist(id_candidates, use.names = FALSE)
+    for (cid in ids) {
+      if (cid %in% names(input_source)) {
+        return(input_source[[cid]])
+      }
+    }
+    NA
+  }
+
+  rows <- list()
+
+  for (i in seq_len(nrow(componentes))) {
+    comp <- componentes[i, , drop = FALSE]
+    estrutura <- if ("estrutura" %in% names(comp) && length(comp$estrutura)) comp$estrutura[[1]] else NULL
+    attrs_df <- NULL
+
+    if (!is.null(estrutura) && is.data.frame(estrutura) && nrow(estrutura) &&
+        !is.null(estrutura$configs) && length(estrutura$configs) &&
+        !is.null(estrutura$configs[[1]]$atributos) && length(estrutura$configs[[1]]$atributos)) {
+      attrs_df <- estrutura$configs[[1]]$atributos[[1]]
+    }
+
+    if (is.null(attrs_df) || !is.data.frame(attrs_df) || !nrow(attrs_df)) next
+
+    comp_id <- suppressWarnings(as.integer(comp$cd_id_componente[[1]]))
+    comp_name <- .objeto_contexto_first_chr(comp$name_componente, paste0("Componente ", i))
+
+    for (k in seq_len(nrow(attrs_df))) {
+      att <- attrs_df[k, , drop = FALSE]
+      att_id <- suppressWarnings(as.integer(att$cd_id_atributo[[1]]))
+      att_name <- .objeto_contexto_first_chr(att$name_atributo, paste0("Atributo ", k))
+      att_type <- .objeto_contexto_first_chr(att$name_data, "")
+      ids <- .objeto_contexto_make_attr_ids(id_prefix, comp_id, att_id, k)
+      value <- read_input(ids)
+
+      if (is.numeric(value)) {
+        value <- as.character(value[[1]])
+      } else if (is.logical(value)) {
+        value <- ifelse(is.na(value[[1]]), NA_character_, ifelse(isTRUE(value[[1]]), "TRUE", "FALSE"))
+      } else {
+        value <- if (is.null(value) || !length(value)) NA_character_ else as.character(value[[1]])
+      }
+
+      rows[[length(rows) + 1L]] <- data.frame(
+        cd_id_componente = comp_id,
+        cd_id_atributo = att_id,
+        name_componente = comp_name,
+        name_atributo = att_name,
+        name_data = att_type,
+        VALUE = value,
+        stringsAsFactors = FALSE
+      )
+    }
+  }
+
+  if (!length(rows)) {
+    return(.objeto_contexto_train_attr_empty())
+  }
+
+  do.call(rbind, rows)
+}
+
+.objeto_contexto_validate_train_attrs <- function(attrs_df) {
+  if (is.null(attrs_df) || !is.data.frame(attrs_df) || !nrow(attrs_df)) {
+    return(list(ok = FALSE, missing = "Nenhum atributo foi encontrado para salvar."))
+  }
+
+  values <- as.character(attrs_df$VALUE)
+  missing <- unique(as.character(attrs_df$name_atributo[is.na(values) | !nzchar(trimws(values))]))
+  missing <- missing[!is.na(missing) & nzchar(missing)]
+
+  list(ok = !length(missing), missing = missing)
+}
+
+.objeto_contexto_build_output_json <- function(attrs_df) {
+  if (is.null(attrs_df) || !is.data.frame(attrs_df) || !nrow(attrs_df)) {
+    return("[]")
+  }
+
+  groups <- split(attrs_df, factor(attrs_df$cd_id_componente, levels = unique(attrs_df$cd_id_componente)))
+  items <- lapply(groups, function(df_comp) {
+    comp_name <- .objeto_contexto_first_chr(df_comp$name_componente, "COMPONENTE")
+    comp_id <- suppressWarnings(as.integer(df_comp$cd_id_componente[[1]]))
+
+    attrs <- stats::setNames(vector("list", nrow(df_comp)), as.character(df_comp$name_atributo))
+    for (i in seq_len(nrow(df_comp))) {
+      row <- df_comp[i, , drop = FALSE]
+      if (identical(as.character(row$name_data[[1]]), "QUALITATIVE")) {
+        attrs[[as.character(row$name_atributo[[1]])]] <- as.character(row$VALUE[[1]])
+      } else {
+        num_value <- suppressWarnings(as.numeric(row$VALUE[[1]]))
+        attrs[[as.character(row$name_atributo[[1]])]] <- if (is.finite(num_value)) num_value else as.character(row$VALUE[[1]])
+      }
+    }
+
+    item <- list()
+    item[[comp_name]] <- attrs
+    item$ID <- comp_id
+    item
+  })
+
+  jsonlite::toJSON(items, auto_unbox = TRUE, null = "null")
+}
+
+.objeto_contexto_build_input_ia <- function(objeto) {
+  if (is.null(objeto) || !is.data.frame(objeto) || !nrow(objeto)) {
+    return("OBJETO:  TIPO: ")
+  }
+
+  objeto_nome <- .objeto_contexto_first_chr(objeto$name_objeto, "")
+  tipo_nome <- .objeto_contexto_first_chr(objeto$name_objeto_tipo, "")
+  paste0("OBJETO: ", objeto_nome, " TIPO: ", tipo_nome)
+}
+
+.objeto_contexto_train_overlay_ui <- function(ns, payload, objeto, tipos_pacote, values_map = NULL) {
+  overlay_id <- ns("objetoContextoFinningTunnelOverlay")
+  tipos_choices <- if (is.data.frame(tipos_pacote) && nrow(tipos_pacote)) {
+    as.character(tipos_pacote$name_tipo_pacote)
+  } else {
+    character(0)
+  }
+
+  div(
+    id = overlay_id,
+    style = paste(
+      "position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 1060;",
+      "display: flex; align-items: center; justify-content: center;"
+    ),
+    div(
+      style = paste(
+        "background:#fff; border-radius:10px; width:min(1080px,96%);",
+        "height:90vh; min-height:420px; box-shadow:0 12px 30px rgba(0,0,0,.25);",
+        "display:flex; flex-direction:column;"
+      ),
+      div(
+        style = "padding:16px 18px; border-bottom:1px solid #eee; flex:0 0 auto;",
+        tags$h4("Finning Tunnel", style = "margin:0;"),
+        tags$div(
+          style = "margin-top:6px; color:#6b7280;",
+          "Corrija os valores inferidos e grave este clip como pacote de treino."
+        )
+      ),
+      div(
+        style = "padding:14px 16px; flex:1 1 auto; min-height:0; overflow-y:auto; overflow-x:hidden;",
+        fluidRow(
+          column(
+            6,
+            textInput(
+              ns("finningTunnelTitulo"),
+              label = "Titulo do clip",
+              value = as.character(payload$title_default %||% "Correcao do contexto")
+            )
+          ),
+          column(
+            6,
+            selectInput(
+              ns("finningTunnelTipoPacote"),
+              label = "Tipo de pacote",
+              choices = tipos_choices,
+              selected = if (length(tipos_choices)) tipos_choices[[1]] else character(0)
+            )
+          )
+        ),
+        panelTitle(
+          title = "Resumo",
+          background.color.title = "white",
+          title.color = "black",
+          border.color = "lightgray",
+          children = div(
+            style = "padding: 12px;",
+            tags$div(tags$b("Objeto: "), .objeto_contexto_first_chr(objeto$name_objeto, "-")),
+            tags$div(tags$b("Tipo: "), .objeto_contexto_first_chr(objeto$name_objeto_tipo, "-")),
+            tags$div(tags$b("Momento do contexto: "), as.character(payload$moment_label %||% "-")),
+            tags$div(tags$b("Periodo do clip: "), as.character(payload$clip_period_label %||% "-"))
+          )
+        ),
+        br(),
+        panelTitle(
+          title = "Atributos da Estrutura",
+          background.color.title = "white",
+          title.color = "black",
+          border.color = "lightgray",
+          children = div(
+            style = "padding: 12px;",
+            .objeto_contexto_train_attrs_ui(
+              ns = ns,
+              objeto = objeto,
+              values_map = values_map,
+              id_prefix = "objCtxTrain"
+            )
+          )
+        )
+      ),
+      div(
+        style = "padding:12px 18px; border-top:1px solid #eee; text-align:right; flex:0 0 auto;",
+        actionButton(ns("btFecharFinningTunnel"), "Fechar", class = "btn btn-default btn-sm"),
+        actionButton(ns("btSalvarFinningTunnel"), "Salvar", class = "btn btn-primary btn-sm", icon = icon("save"))
+      )
+    )
+  )
+}
+
 .objeto_contexto_clip_ui <- function(ns, payload, missing_cameras = character(0)) {
   if (is.null(payload) || !length(payload$cameras)) return(NULL)
 
@@ -528,6 +996,14 @@ MAP_GROUP_COMPONENT_NAMES   <- "componentes_nomes"
           step = 1,
           style = "width: 80px;"
         ),
+        if (isTRUE(payload$show_finning_tunnel)) {
+          actionButton(
+            ns("btFinningTunnel"),
+            label = "Finning Tunnel",
+            icon = icon("sliders"),
+            class = "btn btn-primary btn-sm"
+          )
+        },
         actionButton(
           ns("btFecharContextoClip"),
           label = "Fechar clip",
@@ -774,14 +1250,31 @@ uiObjetoContexto <- function(ns, input, output, session, callback) {
   contextos_raw <- reactiveVal(.objeto_contexto_raw_empty())
   busca_realizada <- reactiveVal(FALSE)
   contexto_clip_payload <- reactiveVal(NULL)
+  contexto_clip_meta <- reactiveVal(NULL)
   contexto_clip_missing <- reactiveVal(character(0))
   contexto_page_length <- 100L
+  tipos_pacote_contexto <- tryCatch(
+    selectAllTypesPacote(dbp$get_pool()),
+    error = function(e) data.frame()
+  )
 
   id <- ns("dialogObjetoContexto")
   cssStyle <- list()
   cssStyle[[paste0(" #parent", id, " .modal-dialog")]]  <- "width: 96% !important; height: 90% !important;"
   cssStyle[[paste0(" #parent", id, " .modal-content")]] <- "width: 100% !important; height: 100% !important;"
   cssStyle[[paste0(" #parent", id, " .modal-body")]]    <- "width: 100% !important; height: calc(100% - 57px - 65px) !important; overflow-y: auto; overflow-x: hidden;"
+
+  .clear_contexto_training_overlay <- function() {
+    try(
+      removeUI(
+        selector = paste0("#", ns("objetoContextoFinningTunnelOverlay")),
+        multiple = TRUE,
+        immediate = TRUE
+      ),
+      silent = TRUE
+    )
+    invisible(NULL)
+  }
 
   .clear_contexto_clip <- function(reset_table_selection = TRUE) {
     shinyjs::runjs(sprintf(
@@ -790,7 +1283,9 @@ uiObjetoContexto <- function(ns, input, output, session, callback) {
     ))
 
     contexto_clip_payload(NULL)
+    contexto_clip_meta(NULL)
     contexto_clip_missing(character(0))
+    .clear_contexto_training_overlay()
 
     if (isTRUE(reset_table_selection)) {
       try(
@@ -1174,14 +1669,21 @@ uiObjetoContexto <- function(ns, input, output, session, callback) {
 
     row_sel <- rows[sel[[1]], , drop = FALSE]
     .clear_contexto_clip(reset_table_selection = FALSE)
+    objeto_id_contexto <- suppressWarnings(as.integer(isolate(input$comboObjetoContexto)))
 
     actionWebUser(function() {
       payload_local <- NULL
+      meta_local <- NULL
       missing_local <- character(0)
 
       ok <- db$tryTransaction(function(conn) {
         frame_ids <- .objeto_contexto_parse_ids(row_sel$cd_id_frame)
         camera_ids_hint <- .objeto_contexto_parse_ids(row_sel$cd_id_camera)
+        objeto_ctx <- if (is.finite(objeto_id_contexto)) {
+          selectObjetoById(conn, objeto_id_contexto)
+        } else {
+          data.frame()
+        }
         moment_ref <- row_sel$momento[[1]]
 
         if (!inherits(moment_ref, "POSIXct")) {
@@ -1312,20 +1814,68 @@ uiObjetoContexto <- function(ns, input, output, session, callback) {
           stop("Os blobs dos frames nao estao disponiveis para o contexto selecionado.")
         }
 
-        context_label <- as.character(row_sel$contexto[[1]] %||% "")
+        context_label <- .objeto_contexto_first_chr(row_sel$contexto, "")
         if (is.na(context_label) || !nzchar(context_label)) {
           context_label <- "Clip do contexto"
         }
 
         moment_label <- format(as.POSIXct(row_sel$momento[[1]]), "%d/%m/%Y %H:%M:%S")
+        clip_moments_num <- unlist(lapply(seqs_by_camera, function(df_cam) {
+          as.numeric(as.POSIXct(df_cam$dt_hr_local, tz = "UTC"))
+        }), use.names = FALSE)
+        clip_moments_num <- clip_moments_num[is.finite(clip_moments_num)]
+        clip_start_utc <- if (length(clip_moments_num)) {
+          as.POSIXct(min(clip_moments_num), origin = "1970-01-01", tz = "UTC")
+        } else {
+          as.POSIXct(moment_ref, tz = "UTC")
+        }
+        clip_end_utc <- if (length(clip_moments_num)) {
+          as.POSIXct(max(clip_moments_num), origin = "1970-01-01", tz = "UTC")
+        } else {
+          as.POSIXct(moment_ref, tz = "UTC")
+        }
+        clip_start_local <- lubridate::with_tz(clip_start_utc, tzone = tz_local)
+        clip_end_local <- lubridate::with_tz(clip_end_utc, tzone = tz_local)
+        clip_period_label <- paste0(
+          format(clip_start_local, "%d/%m/%Y %H:%M:%S"),
+          " ate ",
+          format(clip_end_local, "%d/%m/%Y %H:%M:%S")
+        )
+        objeto_nome_ctx <- if (is.data.frame(objeto_ctx) && nrow(objeto_ctx)) {
+          .objeto_contexto_first_chr(objeto_ctx$name_objeto, paste0("#", objeto_id_contexto))
+        } else {
+          paste0("#", objeto_id_contexto)
+        }
+        objeto_tipo_ctx <- if (is.data.frame(objeto_ctx) && nrow(objeto_ctx)) {
+          suppressWarnings(as.integer(objeto_ctx$cd_id_objeto_tipo[[1]]))
+        } else {
+          NA_integer_
+        }
 
         payload_local <<- list(
           context_label = context_label,
           moment_label = moment_label,
           fps_default = 5L,
           repeat_default = TRUE,
+          clip_period_label = clip_period_label,
+          show_finning_tunnel = isTRUE(is.finite(objeto_tipo_ctx) && objeto_tipo_ctx == 1L),
           total_steps = max(vapply(cameras_payload, function(cam) length(cam$frames), integer(1L))),
           cameras = cameras_payload
+        )
+
+        meta_local <<- list(
+          objeto = objeto_ctx,
+          contexto = .objeto_contexto_first_chr(row_sel$contexto, ""),
+          moment_label = moment_label,
+          clip_start_utc = clip_start_utc,
+          clip_end_utc = clip_end_utc,
+          clip_period_label = clip_period_label,
+          title_default = paste0(
+            "Contexto ",
+            toupper(as.character(objeto_nome_ctx)),
+            " ",
+            format(as.POSIXct(row_sel$momento[[1]]), "%d/%m/%Y %H:%M:%S")
+          )
         )
       })
 
@@ -1338,11 +1888,131 @@ uiObjetoContexto <- function(ns, input, output, session, callback) {
 
       contexto_clip_missing(unique(missing_local))
       contexto_clip_payload(payload_local)
+      contexto_clip_meta(meta_local)
     }, delay = 0, lock_id = "objeto_contexto_clip_load")
   }, ignoreInit = TRUE))
 
   obs$add(observeEvent(input$btFecharContextoClip, {
     .clear_contexto_clip(reset_table_selection = TRUE)
+  }, ignoreInit = TRUE))
+
+  obs$add(observeEvent(input$btFinningTunnel, {
+    meta <- isolate(contexto_clip_meta())
+    if (is.null(meta) || is.null(meta$objeto) || !is.data.frame(meta$objeto) || !nrow(meta$objeto)) {
+      showNotification("Nao foi possivel identificar o objeto do clip selecionado.", type = "warning")
+      return(invisible(NULL))
+    }
+
+    objeto_ctx <- meta$objeto
+    tipo_objeto <- suppressWarnings(as.integer(objeto_ctx$cd_id_objeto_tipo[[1]]))
+    if (!is.finite(tipo_objeto) || tipo_objeto != 1L) {
+      showNotification("Finning Tunnel esta disponivel apenas para objeto estatico.", type = "warning")
+      return(invisible(NULL))
+    }
+
+    if (!is.data.frame(tipos_pacote_contexto) || !nrow(tipos_pacote_contexto)) {
+      showNotification("Nao foi possivel carregar os tipos de pacote.", type = "error")
+      return(invisible(NULL))
+    }
+
+    values_map <- .objeto_contexto_parse_inference_values(meta$contexto)
+    .clear_contexto_training_overlay()
+
+    insertUI(
+      selector = paste0("#parent", id, " .modal-content"),
+      where = "beforeEnd",
+      ui = .objeto_contexto_train_overlay_ui(
+        ns = ns,
+        payload = meta,
+        objeto = objeto_ctx,
+        tipos_pacote = tipos_pacote_contexto,
+        values_map = values_map
+      )
+    )
+  }, ignoreInit = TRUE))
+
+  obs$add(observeEvent(input$btFecharFinningTunnel, {
+    .clear_contexto_training_overlay()
+  }, ignoreInit = TRUE))
+
+  obs$add(observeEvent(input$btSalvarFinningTunnel, {
+    meta <- isolate(contexto_clip_meta())
+    if (is.null(meta) || is.null(meta$objeto) || !is.data.frame(meta$objeto) || !nrow(meta$objeto)) {
+      showNotification("Nenhum clip valido foi encontrado para salvar.", type = "warning")
+      return(invisible(NULL))
+    }
+
+    objeto_ctx <- meta$objeto
+    attrs_df <- .objeto_contexto_collect_train_attrs(
+      input_source = isolate(shiny::reactiveValuesToList(input)),
+      objeto = objeto_ctx,
+      id_prefix = "objCtxTrain"
+    )
+    attrs_status <- .objeto_contexto_validate_train_attrs(attrs_df)
+
+    if (!isTRUE(attrs_status$ok)) {
+      showNotification(
+        paste0(
+          "Preencha todos os atributos antes de salvar: ",
+          paste(unique(attrs_status$missing), collapse = ", ")
+        ),
+        type = "error"
+      )
+      return(invisible(NULL))
+    }
+
+    titulo <- trimws(as.character(isolate(input$finningTunnelTitulo) %||% ""))
+    if (!nzchar(titulo)) {
+      showNotification("Informe um titulo para o clip.", type = "warning")
+      return(invisible(NULL))
+    }
+
+    tipo_nome <- as.character(isolate(input$finningTunnelTipoPacote) %||% "")
+    tipo_pacote <- tipos_pacote_contexto |>
+      dplyr::filter(.data$name_tipo_pacote == tipo_nome)
+    if (!nrow(tipo_pacote)) {
+      showNotification("Selecione um tipo de pacote valido.", type = "warning")
+      return(invisible(NULL))
+    }
+
+    dt_begin <- as.POSIXct(meta$clip_start_utc, tz = "UTC")
+    dt_end <- as.POSIXct(meta$clip_end_utc, tz = "UTC")
+    if (is.na(dt_begin) || is.na(dt_end) || dt_begin > dt_end) {
+      showNotification("O periodo do clip selecionado e invalido.", type = "error")
+      return(invisible(NULL))
+    }
+
+    output_ia <- .objeto_contexto_build_output_json(attrs_df)
+    input_ia <- .objeto_contexto_build_input_ia(objeto_ctx)
+
+    actionWebUser(function() {
+      save_result <- db$tryTransaction(function(conn) {
+        objPacote <- list(
+          cd_id_objeto = as.integer(objeto_ctx$cd_id_objeto[[1]]),
+          titulo_ia = titulo,
+          input_ia = input_ia,
+          cd_id_tipo_pacote = as.integer(tipo_pacote$cd_id_tipo_pacote[[1]]),
+          output_ia = as.character(output_ia),
+          dt_hr_local_begin = dt_begin,
+          dt_hr_local_end = dt_end
+        )
+
+        db$insertTable(conn, "pacote_ia", objPacote)
+      })
+
+      if (!isTRUE(save_result)) {
+        save_err <- attr(save_result, "error_message", exact = TRUE)
+        msg <- "Nao foi possivel salvar a correcao do clip."
+        if (!is.null(save_err) && nzchar(save_err)) {
+          msg <- paste0(msg, " ", save_err)
+        }
+        showNotification(msg, type = "error")
+        return(invisible(NULL))
+      }
+
+      showNotification("Clip corrigido e salvo como pacote de treino.", type = "message")
+      .clear_contexto_training_overlay()
+    }, delay = 0, lock_id = "objeto_contexto_finning_save")
   }, ignoreInit = TRUE))
 
   obs$add(observeEvent(input$btLimparPeriodoContexto, {
@@ -1423,6 +2093,7 @@ uiObjetoContexto <- function(ns, input, output, session, callback) {
 
   obs$add(observeEvent(input$btSairContexto, {
     obs$destroy()
+    .clear_contexto_clip(reset_table_selection = TRUE)
     removeModal(session)
     callback()
   }, ignoreInit = TRUE))

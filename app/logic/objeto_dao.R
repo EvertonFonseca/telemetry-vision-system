@@ -571,6 +571,60 @@ selectObjetosLookup <- function(con, cd_id_setor = NULL) {
 }
 
 #' @export
+selectObjetoById <- function(con, cd_id_objeto) {
+  cd_id_objeto <- .ids_unique(cd_id_objeto)
+  if (!length(cd_id_objeto)) {
+    out <- data.frame()
+    out$config <- vector("list", 0L)
+    return(out)
+  }
+
+  sql <- "
+    select
+      o.*,
+      s.name_setor,
+      op.name_objeto_tipo
+    from objeto o
+    left join setor s
+      on s.cd_id_setor = o.cd_id_setor
+    left join objeto_tipo op
+      on op.cd_id_objeto_tipo = o.cd_id_objeto_tipo
+    where o.cd_id_objeto = $1
+    limit 1
+  "
+
+  objeto <- DBI::dbGetQuery(
+    con,
+    sql,
+    params = list(as.integer(cd_id_objeto[[1]]))
+  )
+  objeto <- .df_names_lower(objeto)
+
+  if (!nrow(objeto)) {
+    objeto$config <- vector("list", 0L)
+    return(objeto)
+  }
+
+  configs <- .load_latest_objeto_configs(con, objeto$cd_id_objeto)
+  cfg_by_obj <- if (nrow(configs)) {
+    split(configs, as.character(configs$cd_id_objeto))
+  } else {
+    list()
+  }
+  empty_cfg <- configs[0, , drop = FALSE]
+
+  objeto$config <- purrr::map(
+    objeto$cd_id_objeto,
+    function(id) {
+      out <- cfg_by_obj[[as.character(id)]]
+      if (is.null(out)) empty_cfg else out
+    }
+  )
+
+  objeto
+}
+
+#' @export
 selectObjetoContexto <- function(con,
                                  cd_id_objeto,
                                  dt_de_utc = NULL,
