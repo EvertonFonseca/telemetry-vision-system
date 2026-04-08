@@ -1,1 +1,1 @@
-UPDATE camera_view SET fg_ativo = true;
+SELECT id_objeto from objeto_pacote_ia

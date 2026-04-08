@@ -410,9 +410,9 @@ uiEditEstrutura <- function(ns,input,output,session,callback){
       output$titleTexto <- renderText({
         
         if(sliderPosition() == 1L){
-          'Registros câmeras'
+          'Registros estruturas'
         }else{
-          'Edição da câmera'
+          'Edição da estrutura'
         }
         
       })
@@ -425,7 +425,7 @@ uiEditEstrutura <- function(ns,input,output,session,callback){
           
           if(length(dataset) == 0) return(NULL)
           
-          colunaNames <- c('LINHA','ESTRUTURA','VISUALIZAR / EDITAR','REMOVER')
+          colunaNames <- c('LINHA','ESTRUTURA','GRUPO','VISUALIZAR / EDITAR','REMOVER')
           
           DT$datatable({
             
@@ -436,7 +436,8 @@ uiEditEstrutura <- function(ns,input,output,session,callback){
             mutate(
               !!colunaNames[1] := 1:nrow(dataset),
               !!colunaNames[2] :=  dataset$name_estrutura,
-              !!colunaNames[3] :=  sapply(dataset$cd_id_estrutura, function (x) {
+              !!colunaNames[3] := ifelse(dplyr::coalesce(as.logical(dataset$grupo), FALSE), "SIM", "NAO"),
+              !!colunaNames[4] :=  sapply(dataset$cd_id_estrutura, function (x) {
                 
                 as.character(
                   actionButton(
@@ -448,7 +449,7 @@ uiEditEstrutura <- function(ns,input,output,session,callback){
                   )
                 )
               }),
-              !!colunaNames[4] :=  sapply(dataset$cd_id_estrutura, function (x) {
+              !!colunaNames[5] :=  sapply(dataset$cd_id_estrutura, function (x) {
                 
                 as.character(
                   actionButton(
@@ -469,10 +470,10 @@ uiEditEstrutura <- function(ns,input,output,session,callback){
             columnDefs = list(
               list(visible = FALSE, targets = c(0)),
               list(className = 'dt-center', targets = "_all"),
-              list(width = '75px', targets = c(1)),
-              list(width = 'auto', targets = c(3))
+              list(width = '75px', targets = c(2, 3, 4)),
+              list(width = 'auto', targets = c(1))
             ),
-            search_placeholder = "Pesquisar estrutura"
+            search_placeholder = "Pesquisar estrutura ou grupo"
           ),
           escape = F,
           selection = 'none',

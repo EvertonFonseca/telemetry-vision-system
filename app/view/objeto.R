@@ -22,6 +22,7 @@ box::use(
       set_readonly_js,
       actionWebUser
     ],
+  treinar = ./treinar[uiNewTreinar],
   ../model/Swiper[...],
   DT,
   shinycssloaders,
@@ -237,23 +238,78 @@ MAP_GROUP_COMPONENT_NAMES   <- "componentes_nomes"
   NULL
 }
 
-.objeto_contexto_tz <- function() {
-  tz <- tryCatch(Sys.timezone(), error = function(e) "")
-  tz <- as.character(tz)[1]
-  if (is.na(tz) || !nzchar(tz)) tz <- "America/Sao_Paulo"
+.objeto_contexto_tz <- function(tz = NULL) {
+  tz <- trimws(as.character(tz)[1])
+  tz_choices <- OlsonNames()
+  tz_default <- "America/Sao_Paulo"
+
+  if (is.na(tz) || !nzchar(tz) || !(tz %in% tz_choices)) {
+    return(tz_default)
+  }
+
   tz
 }
 
-.objeto_contexto_to_utc <- function(x, tz_local = .objeto_contexto_tz()) {
-  if (is.null(x) || !length(x) || all(is.na(x))) return(NULL)
+.objeto_contexto_input_is_blank <- function(x) {
+  if (is.null(x) || !length(x)) return(TRUE)
+  if (inherits(x, "POSIXt")) return(all(is.na(x)))
 
-  x <- as.POSIXct(x)
-  tz_in <- attr(x, "tzone")
-  tz_in <- as.character(tz_in)[1]
+  x_chr <- trimws(as.character(x))
+  !length(x_chr) || all(is.na(x_chr) | !nzchar(x_chr))
+}
 
-  if (is.na(tz_in) || !nzchar(tz_in)) {
-    x <- lubridate::force_tz(x, tzone = tz_local)
+.objeto_contexto_parse_datetime <- function(x, tz_local = .objeto_contexto_tz()) {
+  if (.objeto_contexto_input_is_blank(x)) return(NULL)
+
+  if (inherits(x, "POSIXt")) {
+    out <- as.POSIXct(x[[1]])
+  } else {
+    txt <- trimws(as.character(x[[1]]))
+    txt_norm <- gsub("T", " ", txt, fixed = TRUE)
+    txt_norm <- sub("Z$", "", txt_norm, ignore.case = TRUE)
+    txt_norm <- sub("\\s+UTC$", "", txt_norm, ignore.case = TRUE)
+
+    attempts <- list(
+      suppressWarnings(dmy_hms(txt_norm, tz = tz_local)),
+      suppressWarnings(dmy_hm(txt_norm, tz = tz_local)),
+      suppressWarnings(dmy(txt_norm, tz = tz_local)),
+      suppressWarnings(ymd_hms(txt_norm, tz = tz_local)),
+      suppressWarnings(ymd_hm(txt_norm, tz = tz_local)),
+      suppressWarnings(ymd(txt_norm, tz = tz_local)),
+      suppressWarnings(as.POSIXct(txt, tz = tz_local)),
+      suppressWarnings(as.POSIXct(txt_norm, tz = tz_local))
+    )
+
+    out <- NULL
+    for (candidate in attempts) {
+      if (!is.null(candidate) && length(candidate) && !all(is.na(candidate))) {
+        out <- as.POSIXct(candidate[[1]])
+        break
+      }
+    }
   }
+
+  if (is.null(out) || !length(out) || any(is.na(out))) return(NULL)
+
+  tz_in <- attr(out, "tzone")
+  tz_in <- as.character(tz_in)[1]
+  if (is.na(tz_in) || !nzchar(tz_in)) {
+    out <- lubridate::force_tz(out, tzone = tz_local)
+  }
+
+  out
+}
+
+.objeto_contexto_format_local <- function(x, tz_local = .objeto_contexto_tz()) {
+  dt <- .objeto_contexto_parse_datetime(x, tz_local = tz_local)
+  if (is.null(dt) || !length(dt) || any(is.na(dt))) return("")
+
+  format(lubridate::with_tz(dt, tzone = tz_local), "%d/%m/%Y %H:%M:%S")
+}
+
+.objeto_contexto_to_utc <- function(x, tz_local = .objeto_contexto_tz()) {
+  x <- .objeto_contexto_parse_datetime(x, tz_local = tz_local)
+  if (is.null(x) || !length(x) || any(is.na(x))) return(NULL)
 
   lubridate::with_tz(x, tzone = "UTC")
 }
@@ -708,6 +764,101 @@ MAP_GROUP_COMPONENT_NAMES   <- "componentes_nomes"
   paste0("OBJETO: ", objeto_nome, " TIPO: ", tipo_nome)
 }
 
+.objeto_contexto_blob_frame_info <- function(blob,
+                                             default_width = .DEFAULT_FRAME_WIDTH,
+                                             default_height = .DEFAULT_FRAME_HEIGHT) {
+  width <- as.integer(default_width)
+  height <- as.integer(default_height)
+
+  raw_blob <- NULL
+  if (!is.null(blob) && length(blob)) {
+    raw_blob <- blob[[1]]
+  }
+  if (is.null(raw_blob)) {
+    return(list(width = width, height = height))
+  }
+
+  img <- tryCatch(image_read(raw_blob), error = function(e) NULL)
+  if (is.null(img)) {
+    return(list(width = width, height = height))
+  }
+
+  info <- tryCatch(image_info(img), error = function(e) NULL)
+  if (is.data.frame(info) && nrow(info)) {
+    info_w <- suppressWarnings(as.integer(info$width[[1]]))
+    info_h <- suppressWarnings(as.integer(info$height[[1]]))
+
+    if (is.finite(info_w) && info_w > 0L) width <- info_w
+    if (is.finite(info_h) && info_h > 0L) height <- info_h
+  }
+
+  list(width = width, height = height)
+}
+
+.objeto_contexto_clip_components_by_camera <- function(objeto, frame_info_by_camera = list()) {
+  out <- list()
+
+  if (is.null(objeto) || !is.data.frame(objeto) || !nrow(objeto)) {
+    return(out)
+  }
+
+  componentes <- tryCatch(objeto$config[[1]]$componentes[[1]], error = function(e) NULL)
+  if (is.null(componentes) || !is.data.frame(componentes) || !nrow(componentes)) {
+    return(out)
+  }
+
+  componentes <- .ensure_component_colors(componentes)
+
+  for (i in seq_len(nrow(componentes))) {
+    comp <- componentes[i, , drop = FALSE]
+    cam_id <- suppressWarnings(as.integer(comp$cd_id_camera[[1]]))
+    if (!is.finite(cam_id)) next
+
+    poly_df <- tryCatch(.component_polygon_as_df(comp$poligno_componente[[1]]), error = function(e) NULL)
+    if (is.null(poly_df) || !nrow(poly_df)) next
+
+    frame_info <- frame_info_by_camera[[as.character(cam_id)]]
+    frame_h <- suppressWarnings(as.numeric(frame_info$height %||% NA_real_))
+    if (is.finite(frame_h) && frame_h > 0) {
+      poly_df$y <- frame_h - poly_df$y
+    }
+
+    estrutura_nome <- ""
+    if ("estrutura" %in% names(comp) && length(comp$estrutura)) {
+      estrutura <- comp$estrutura[[1]]
+      if (is.data.frame(estrutura) && nrow(estrutura) && "name_estrutura" %in% names(estrutura)) {
+        estrutura_nome <- .objeto_contexto_first_chr(estrutura$name_estrutura, "")
+      }
+    }
+
+    cor <- if ("color_componente" %in% names(comp)) {
+      as.character(comp$color_componente[[1]] %||% "")
+    } else {
+      ""
+    }
+    if (is.na(cor) || !nzchar(cor)) cor <- "#38BDF8"
+
+    item <- list(
+      id = suppressWarnings(as.integer(comp$cd_id_componente[[1]])),
+      name = .objeto_contexto_first_chr(comp$name_componente, paste0("Componente ", i)),
+      structure = estrutura_nome,
+      color = cor,
+      points = lapply(seq_len(nrow(poly_df)), function(j) {
+        list(
+          x = as.numeric(poly_df$x[[j]]),
+          y = as.numeric(poly_df$y[[j]])
+        )
+      })
+    )
+
+    key <- as.character(cam_id)
+    if (is.null(out[[key]])) out[[key]] <- list()
+    out[[key]][[length(out[[key]]) + 1L]] <- item
+  }
+
+  out
+}
+
 .objeto_contexto_train_overlay_ui <- function(ns, payload, objeto, tipos_pacote, values_map = NULL) {
   overlay_id <- ns("objetoContextoFinningTunnelOverlay")
   tipos_choices <- if (is.data.frame(tipos_pacote) && nrow(tipos_pacote)) {
@@ -802,6 +953,9 @@ MAP_GROUP_COMPONENT_NAMES   <- "componentes_nomes"
   player_id <- ns("objetoContextoClipPlayer")
   root_json <- jsonlite::toJSON(player_id, auto_unbox = TRUE)
   payload_json <- jsonlite::toJSON(payload, auto_unbox = TRUE, null = "null")
+  has_components <- isTRUE(any(vapply(payload$cameras, function(cam) {
+    length(cam$components %||% list()) > 0L
+  }, logical(1L))))
   close_js <- sprintf(
     "window.tvsObjCtxPlayerStop && window.tvsObjCtxPlayerStop(%s);",
     root_json
@@ -904,12 +1058,27 @@ MAP_GROUP_COMPONENT_NAMES   <- "componentes_nomes"
         display: flex;
         align-items: center;
         justify-content: center;
+        position: relative;
+        overflow: hidden;
       }
-      #%1$s .tvs-ctxclip-stage img {
+      #%1$s .tvs-ctxclip-media {
+        position: relative;
         width: 100%%;
         height: 100%%;
+      }
+      #%1$s .tvs-ctxclip-stage img,
+      #%1$s .tvs-ctxclip-overlay {
+        position: absolute;
+        inset: 0;
+        width: 100%%;
+        height: 100%%;
+      }
+      #%1$s .tvs-ctxclip-stage img {
         object-fit: contain;
         display: block;
+      }
+      #%1$s .tvs-ctxclip-overlay {
+        pointer-events: none;
       }
       #%1$s .tvs-ctxclip-slider {
         margin-top: 12px;
@@ -979,6 +1148,16 @@ MAP_GROUP_COMPONENT_NAMES   <- "componentes_nomes"
           onclick = sprintf("window.tvsObjCtxClipControl && window.tvsObjCtxClipControl(%s, 'repeat');", root_json),
           "Repeat: On"
         ),
+        if (isTRUE(has_components)) {
+          tags$button(
+            id = paste0(player_id, "_components"),
+            type = "button",
+            class = "btn btn-info btn-sm",
+            title = "Mostrar ou ocultar componentes",
+            onclick = sprintf("window.tvsObjCtxClipControl && window.tvsObjCtxClipControl(%s, 'components');", root_json),
+            "Componentes: TRUE"
+          )
+        },
         tags$button(
           type = "button",
           class = "btn btn-default btn-sm",
@@ -1046,10 +1225,19 @@ MAP_GROUP_COMPONENT_NAMES   <- "componentes_nomes"
           ),
           tags$div(
             class = "tvs-ctxclip-stage",
-            tags$img(
-              id = paste0(player_id, "_img_", cam$id),
-              src = first_src,
-              alt = cam$name
+            tags$div(
+              class = "tvs-ctxclip-media",
+              tags$img(
+                id = paste0(player_id, "_img_", cam$id),
+                src = first_src,
+                alt = cam$name
+              ),
+              tags$svg(
+                id = paste0(player_id, "_overlay_", cam$id),
+                class = "tvs-ctxclip-overlay",
+                viewBox = "0 0 1 1",
+                preserveAspectRatio = "xMidYMid meet"
+              )
             )
           )
         )
@@ -1083,7 +1271,8 @@ MAP_GROUP_COMPONENT_NAMES   <- "componentes_nomes"
           index: 0,
           timer: null,
           payload: payload,
-          repeat: payload.repeat_default !== false
+          repeat: payload.repeat_default !== false,
+          componentsVisible: payload.components_visible_default !== false
         };
 
         function totalSteps() {
@@ -1107,6 +1296,61 @@ MAP_GROUP_COMPONENT_NAMES   <- "componentes_nomes"
           return cam.frames[pos];
         }
 
+        function svgEl(name) {
+          return document.createElementNS('http://www.w3.org/2000/svg', name);
+        }
+
+        function componentPoints(comp) {
+          const pts = Array.isArray(comp && comp.points) ? comp.points : [];
+          return pts
+            .map(function(pt) {
+              const x = Number(pt && pt.x);
+              const y = Number(pt && pt.y);
+              if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+              return String(x) + ',' + String(y);
+            })
+            .filter(Boolean)
+            .join(' ');
+        }
+
+        function syncOverlay(cam, frame, img, overlay) {
+          if (!overlay) return;
+
+          const comps = Array.isArray(cam && cam.components) ? cam.components : [];
+          overlay.style.display = (state.componentsVisible && comps.length) ? 'block' : 'none';
+          if (!state.componentsVisible || !comps.length) return;
+
+          const w = Number((frame && frame.width) || (cam && cam.frame_width) || (img && img.naturalWidth) || 0);
+          const h = Number((frame && frame.height) || (cam && cam.frame_height) || (img && img.naturalHeight) || 0);
+          if (!Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) return;
+
+          overlay.setAttribute('viewBox', '0 0 ' + w + ' ' + h);
+          overlay.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+          while (overlay.firstChild) overlay.removeChild(overlay.firstChild);
+
+          comps.forEach(function(comp) {
+            const points = componentPoints(comp);
+            if (!points) return;
+
+            const color = comp && comp.color ? String(comp.color) : '#38BDF8';
+            const poly = svgEl('polygon');
+            poly.setAttribute('points', points);
+            poly.setAttribute('fill', color);
+            poly.setAttribute('fill-opacity', '0.10');
+            poly.setAttribute('stroke', color);
+            poly.setAttribute('stroke-width', '2');
+            poly.setAttribute('vector-effect', 'non-scaling-stroke');
+
+            const title = svgEl('title');
+            const compName = comp && comp.name ? String(comp.name) : 'Componente';
+            const structName = comp && comp.structure ? String(comp.structure) : '';
+            title.textContent = structName ? (compName + ' | ' + structName) : compName;
+            poly.appendChild(title);
+
+            overlay.appendChild(poly);
+          });
+        }
+
         function render() {
           state.index = clampIndex(state.index);
 
@@ -1114,6 +1358,7 @@ MAP_GROUP_COMPONENT_NAMES   <- "componentes_nomes"
             const frame = frameAt(cam, state.index);
             const img = document.getElementById(rootId + '_img_' + cam.id);
             const meta = document.getElementById(rootId + '_meta_' + cam.id);
+            const overlay = document.getElementById(rootId + '_overlay_' + cam.id);
 
             if (img) {
               if (frame && frame.src) {
@@ -1123,11 +1368,17 @@ MAP_GROUP_COMPONENT_NAMES   <- "componentes_nomes"
                 img.removeAttribute('src');
                 img.style.opacity = '0.35';
               }
+
+              img.onload = function() {
+                syncOverlay(cam, frame, img, overlay);
+              };
             }
 
             if (meta) {
               meta.textContent = frame && frame.label ? frame.label : 'Sem frame';
             }
+
+            syncOverlay(cam, frame, img, overlay);
           });
 
           const status = document.getElementById(rootId + '_status');
@@ -1141,6 +1392,16 @@ MAP_GROUP_COMPONENT_NAMES   <- "componentes_nomes"
             repeatBtn.className = state.repeat
               ? 'btn btn-success btn-sm tvs-ctxclip-repeat'
               : 'btn btn-default btn-sm tvs-ctxclip-repeat';
+          }
+
+          const componentsBtn = document.getElementById(rootId + '_components');
+          if (componentsBtn) {
+            componentsBtn.textContent = state.componentsVisible
+              ? 'Componentes: TRUE'
+              : 'Componentes: FALSE';
+            componentsBtn.className = state.componentsVisible
+              ? 'btn btn-info btn-sm'
+              : 'btn btn-default btn-sm';
           }
 
           const slider = document.getElementById(rootId + '_slider');
@@ -1206,6 +1467,12 @@ MAP_GROUP_COMPONENT_NAMES   <- "componentes_nomes"
 
           if (action === 'repeat') {
             state.repeat = !state.repeat;
+            render();
+            return;
+          }
+
+          if (action === 'components') {
+            state.componentsVisible = !state.componentsVisible;
             render();
             return;
           }
@@ -1343,6 +1610,7 @@ uiObjetoContexto <- function(ns, input, output, session, callback) {
   }
 
   .load_contextos <- function(use_loader = FALSE) {
+    tz_use <- tz_local
     objeto_id <- suppressWarnings(as.integer(isolate(input$comboObjetoContexto)))
     if (is.na(objeto_id)) {
       busca_realizada(FALSE)
@@ -1352,8 +1620,34 @@ uiObjetoContexto <- function(ns, input, output, session, callback) {
       return(invisible(NULL))
     }
 
-    dt_de_utc <- .objeto_contexto_to_utc(isolate(input$dtDeContexto), tz_local = tz_local)
-    dt_ate_utc <- .objeto_contexto_to_utc(isolate(input$dtAteContexto), tz_local = tz_local)
+    dt_de_raw <- isolate(input$dtDeContexto)
+    dt_ate_raw <- isolate(input$dtAteContexto)
+    dt_de_local <- .objeto_contexto_parse_datetime(dt_de_raw, tz_local = tz_use)
+    dt_ate_local <- .objeto_contexto_parse_datetime(dt_ate_raw, tz_local = tz_use)
+
+    invalid_fields <- character(0)
+    if (!.objeto_contexto_input_is_blank(dt_de_raw) && is.null(dt_de_local)) invalid_fields <- c(invalid_fields, "De")
+    if (!.objeto_contexto_input_is_blank(dt_ate_raw) && is.null(dt_ate_local)) invalid_fields <- c(invalid_fields, "Ate")
+
+    if (length(invalid_fields)) {
+      showNotification(
+        paste0(
+          "Campo(s) ",
+          paste(invalid_fields, collapse = " e "),
+          " com data/hora invalida. Use o formato dd/MM/aaaa HH:mm."
+        ),
+        type = "warning"
+      )
+      return(invisible(NULL))
+    }
+
+    if (!is.null(dt_de_local) && !is.null(dt_ate_local) && dt_de_local > dt_ate_local) {
+      showNotification("O campo De nao pode ser maior que Ate.", type = "warning")
+      return(invisible(NULL))
+    }
+
+    dt_de_utc <- .objeto_contexto_to_utc(dt_de_local, tz_local = tz_use)
+    dt_ate_utc <- .objeto_contexto_to_utc(dt_ate_local, tz_local = tz_use)
 
     runner <- function() {
       ok <- db$tryTransaction(function(conn) {
@@ -1362,7 +1656,7 @@ uiObjetoContexto <- function(ns, input, output, session, callback) {
           cd_id_objeto = objeto_id,
           dt_de_utc = dt_de_utc,
           dt_ate_utc = dt_ate_utc,
-          tz_local = tz_local
+          tz_local = tz_use
         )
 
         contextos_raw(df)
@@ -1503,11 +1797,13 @@ uiObjetoContexto <- function(ns, input, output, session, callback) {
                 placeholder = "Sem filtro",
                 addon = "none"
               )
-            ),
+            )
+          ),
+          fluidRow(
             column(
-              2,
+              12,
               div(
-                style = "padding-top: 25px; display:flex; gap:6px; justify-content:flex-end;",
+                style = "padding-top: 10px; display:flex; gap:6px; justify-content:flex-end;",
                 actionButton(
                   ns("btAtualizarContexto"),
                   label = NULL,
@@ -1564,11 +1860,7 @@ uiObjetoContexto <- function(ns, input, output, session, callback) {
       paste0(qtd, " registro(s) carregado(s).")
     }
 
-    div(
-      style = "display:flex; justify-content:space-between; align-items:center; gap:12px;",
-      tags$span(msg),
-      tags$small(style = "color:#6b7280;", paste0("Horario exibido em ", tz_local))
-    )
+    div(msg)
   })
 
   output$uiObjetoContextoClip <- renderUI({
@@ -1656,6 +1948,7 @@ uiObjetoContexto <- function(ns, input, output, session, callback) {
   }, ignoreInit = TRUE))
 
   obs$add(observeEvent(input$tbObjetoContexto_rows_selected, {
+    tz_use <- tz_local
     sel <- suppressWarnings(as.integer(input$tbObjetoContexto_rows_selected))
     if (!length(sel) || is.na(sel[[1]])) {
       return(invisible(NULL))
@@ -1775,6 +2068,22 @@ uiObjetoContexto <- function(ns, input, output, session, callback) {
 
         display_order <- unique(c(camera_ids_hint, loaded_order, camera_ids_loaded))
         display_order <- display_order[is.finite(display_order)]
+        frame_info_by_camera <- lapply(seqs_by_camera, function(df_cam) {
+          if (is.null(df_cam) || !is.data.frame(df_cam) || !nrow(df_cam) || !("data_frame" %in% names(df_cam))) {
+            return(.objeto_contexto_blob_frame_info(NULL))
+          }
+
+          idx_blob <- which(vapply(df_cam$data_frame, function(blob) {
+            !is.null(blob) && length(blob) > 0L && !all(is.na(blob))
+          }, logical(1L)))
+
+          blob <- if (length(idx_blob)) df_cam$data_frame[idx_blob[[1]]] else NULL
+          .objeto_contexto_blob_frame_info(blob)
+        })
+        components_by_camera <- .objeto_contexto_clip_components_by_camera(
+          objeto_ctx,
+          frame_info_by_camera = frame_info_by_camera
+        )
 
         cameras_payload <- Filter(Negate(is.null), lapply(display_order, function(cam_id) {
           df_cam <- seqs_by_camera[[as.character(cam_id)]]
@@ -1783,13 +2092,16 @@ uiObjetoContexto <- function(ns, input, output, session, callback) {
           }
 
           cam_label <- unname(cam_names[[as.character(cam_id)]] %||% paste0("Camera ", cam_id))
+          frame_info <- frame_info_by_camera[[as.character(cam_id)]] %||% .objeto_contexto_blob_frame_info(NULL)
 
           frames_payload <- lapply(seq_len(nrow(df_cam)), function(i) {
             ts_frame <- as.POSIXct(df_cam$dt_hr_local[[i]], tz = "UTC")
-            ts_frame <- lubridate::with_tz(ts_frame, tzone = tz_local)
+            ts_frame <- lubridate::with_tz(ts_frame, tzone = tz_use)
             list(
               src = .objeto_contexto_to_data_url(df_cam$data_frame[[i]]),
-              label = format(ts_frame, "%d/%m/%Y %H:%M:%S")
+              label = format(ts_frame, "%d/%m/%Y %H:%M:%S"),
+              width = as.integer(frame_info$width %||% .DEFAULT_FRAME_WIDTH),
+              height = as.integer(frame_info$height %||% .DEFAULT_FRAME_HEIGHT)
             )
           })
 
@@ -1806,7 +2118,10 @@ uiObjetoContexto <- function(ns, input, output, session, callback) {
           list(
             id = as.integer(cam_id),
             name = cam_label,
-            frames = frames_payload
+            frame_width = as.integer(frame_info$width %||% .DEFAULT_FRAME_WIDTH),
+            frame_height = as.integer(frame_info$height %||% .DEFAULT_FRAME_HEIGHT),
+            frames = frames_payload,
+            components = components_by_camera[[as.character(cam_id)]] %||% list()
           )
         }))
 
@@ -1834,8 +2149,8 @@ uiObjetoContexto <- function(ns, input, output, session, callback) {
         } else {
           as.POSIXct(moment_ref, tz = "UTC")
         }
-        clip_start_local <- lubridate::with_tz(clip_start_utc, tzone = tz_local)
-        clip_end_local <- lubridate::with_tz(clip_end_utc, tzone = tz_local)
+        clip_start_local <- lubridate::with_tz(clip_start_utc, tzone = tz_use)
+        clip_end_local <- lubridate::with_tz(clip_end_utc, tzone = tz_use)
         clip_period_label <- paste0(
           format(clip_start_local, "%d/%m/%Y %H:%M:%S"),
           " ate ",
@@ -1857,8 +2172,9 @@ uiObjetoContexto <- function(ns, input, output, session, callback) {
           moment_label = moment_label,
           fps_default = 5L,
           repeat_default = TRUE,
+          components_visible_default = TRUE,
           clip_period_label = clip_period_label,
-          show_finning_tunnel = isTRUE(is.finite(objeto_tipo_ctx) && objeto_tipo_ctx == 1L),
+          show_finning_tunnel = isTRUE(is.finite(objeto_tipo_ctx) && objeto_tipo_ctx %in% c(1L, 2L)),
           total_steps = max(vapply(cameras_payload, function(cam) length(cam$frames), integer(1L))),
           cameras = cameras_payload
         )
@@ -1905,8 +2221,34 @@ uiObjetoContexto <- function(ns, input, output, session, callback) {
 
     objeto_ctx <- meta$objeto
     tipo_objeto <- suppressWarnings(as.integer(objeto_ctx$cd_id_objeto_tipo[[1]]))
-    if (!is.finite(tipo_objeto) || tipo_objeto != 1L) {
-      showNotification("Finning Tunnel esta disponivel apenas para objeto estatico.", type = "warning")
+    if (!is.finite(tipo_objeto) || !(tipo_objeto %in% c(1L, 2L))) {
+      showNotification("Finning Tunnel esta disponivel apenas para objetos estaticos e dinamicos.", type = "warning")
+      return(invisible(NULL))
+    }
+
+    if (isTRUE(tipo_objeto == 2L)) {
+      treinar$uiNewTreinar(
+        ns,
+        input,
+        output,
+        session,
+        callback = function() {},
+        dialogTitle = paste0(
+          "Finning Tunnel - ",
+          .objeto_contexto_first_chr(objeto_ctx$name_objeto, "Objeto Dinamico")
+        ),
+        context_prefill = list(
+          objeto_id = suppressWarnings(as.integer(objeto_ctx$cd_id_objeto[[1]])),
+          dt_begin = as.POSIXct(meta$clip_start_utc, tz = "UTC"),
+          dt_end = as.POSIXct(meta$clip_end_utc, tz = "UTC")
+        )
+      )
+
+      showNotification(
+        "Treinar aberto com o objeto e o periodo do contexto preenchidos. Clique na lupa para carregar os frames e seguir com o tracking.",
+        type = "message",
+        duration = 7
+      )
       return(invisible(NULL))
     }
 
@@ -2021,22 +2363,30 @@ uiObjetoContexto <- function(ns, input, output, session, callback) {
   }, ignoreInit = TRUE))
 
   obs$add(observeEvent(input$btExcluirPeriodoContexto, {
+    tz_use <- tz_local
     objeto_id <- suppressWarnings(as.integer(isolate(input$comboObjetoContexto)))
     if (is.na(objeto_id)) {
       showNotification("Selecione um objeto para excluir o contexto.", type = "warning")
       return()
     }
 
-    dt_de_local <- isolate(input$dtDeContexto)
-    dt_ate_local <- isolate(input$dtAteContexto)
+    dt_de_raw <- isolate(input$dtDeContexto)
+    dt_ate_raw <- isolate(input$dtAteContexto)
+    dt_de_local <- .objeto_contexto_parse_datetime(dt_de_raw, tz_local = tz_use)
+    dt_ate_local <- .objeto_contexto_parse_datetime(dt_ate_raw, tz_local = tz_use)
 
-    if (is.null(dt_de_local) || any(is.na(dt_de_local)) || is.null(dt_ate_local) || any(is.na(dt_ate_local))) {
+    if (.objeto_contexto_input_is_blank(dt_de_raw) || .objeto_contexto_input_is_blank(dt_ate_raw)) {
       showNotification("Informe os filtros De e Ate para excluir o periodo.", type = "warning")
       return()
     }
 
-    dt_de_utc <- .objeto_contexto_to_utc(dt_de_local, tz_local = tz_local)
-    dt_ate_utc <- .objeto_contexto_to_utc(dt_ate_local, tz_local = tz_local)
+    if (is.null(dt_de_local) || is.null(dt_ate_local)) {
+      showNotification("Informe os filtros De e Ate em um formato valido: dd/MM/aaaa HH:mm.", type = "warning")
+      return()
+    }
+
+    dt_de_utc <- .objeto_contexto_to_utc(dt_de_local, tz_local = tz_use)
+    dt_ate_utc <- .objeto_contexto_to_utc(dt_ate_local, tz_local = tz_use)
 
     if (is.null(dt_de_utc) || is.null(dt_ate_utc) || dt_de_utc > dt_ate_utc) {
       showNotification("O periodo informado e invalido.", type = "warning")
@@ -2061,9 +2411,9 @@ uiObjetoContexto <- function(ns, input, output, session, callback) {
       message = paste0(
         "Deseja remover ", qtd, " registro(s) do objeto ", nome_objeto,
         " entre ",
-        format(as.POSIXct(dt_de_local), "%d/%m/%Y %H:%M:%S"),
+        .objeto_contexto_format_local(dt_de_local, tz_local = tz_use),
         " e ",
-        format(as.POSIXct(dt_ate_local), "%d/%m/%Y %H:%M:%S"),
+        .objeto_contexto_format_local(dt_ate_local, tz_local = tz_use),
         "?"
       ),
       callback.no = function() {
@@ -2947,7 +3297,7 @@ uiEditObjeto <- function(ns,input,output,session,callback){
         
         output$tableDinamicaObjeto <- DT$renderDataTable({
           
-          colunaNames <- c('LINHA','OBJETO','TIPO','ID GRUPO','VISUALIZAR / EDITAR','REMOVER')
+          colunaNames <- c('LINHA','OBJETO','TIPO','ID GRUPO','ATIVO','VISUALIZAR / EDITAR','REMOVER')
           
           DT$datatable({
             
@@ -2960,7 +3310,8 @@ uiEditObjeto <- function(ns,input,output,session,callback){
               !!colunaNames[2] :=  dataset$name_objeto,
               !!colunaNames[3] :=  dataset$name_objeto_tipo,
               !!colunaNames[4] := if ("id_grupo" %in% names(dataset)) dplyr::coalesce(as.character(dataset$id_grupo), "") else rep("", nrow(dataset)),
-              !!colunaNames[5] :=  sapply(dataset$cd_id_objeto, function (x) {
+              !!colunaNames[5] := ifelse(as.logical(dataset$fg_ativo), "SIM", "NAO"),
+              !!colunaNames[6] :=  sapply(dataset$cd_id_objeto, function (x) {
                 
                 as.character(
                   actionButton(
@@ -2972,7 +3323,7 @@ uiEditObjeto <- function(ns,input,output,session,callback){
                   )
                 )
               }),
-              !!colunaNames[6] :=  sapply(dataset$cd_id_objeto,function (x) {
+              !!colunaNames[7] :=  sapply(dataset$cd_id_objeto,function (x) {
                 
                 as.character(
                   actionButton(
@@ -2993,10 +3344,10 @@ uiEditObjeto <- function(ns,input,output,session,callback){
             columnDefs = list(
               list(visible = FALSE, targets = c(0)),
               list(className = 'dt-center', targets = "_all"),
-              list(width = '75px', targets = c(1, 3, 4, 5)),
+              list(width = '75px', targets = c(1, 3, 4, 5, 6)),
               list(width = 'auto', targets = c(2))
             ),
-            search_placeholder = "Pesquisar objeto, tipo ou ID grupo"
+            search_placeholder = "Pesquisar objeto, tipo, ID grupo ou status"
           ),
           escape = F,
           selection = 'none',

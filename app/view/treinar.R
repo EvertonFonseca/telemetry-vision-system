@@ -107,8 +107,10 @@ SYNC_TOL_MS_DEFAULT <- 120L
 DYN_INTERPOLATE_DEFAULT <- TRUE
 DYN_RECT_COLOR_DEFAULT  <- "#FF0000"
 DYN_RECT_COLOR_SELECTED <- "#00A65A"
+DYN_RECT_COLOR_HIDDEN   <- "#FFFFFF"
 DYN_RECT_FILL_DEFAULT   <- 0.08
 DYN_RECT_FILL_SELECTED  <- 0.20
+DYN_RECT_FILL_HIDDEN    <- 0.00
 
 # ==================================================
 # Utils: MIME / Data URL / Dimensões de imagem
@@ -676,8 +678,16 @@ dynrect_next_free_id <- function(used_ids) {
   cand
 }
 
+dyntrack_next_uid <- function(used_ids) {
+  used_ids <- as.integer(used_ids)
+  used_ids <- used_ids[is.finite(used_ids) & used_ids > 0L]
+  if (!length(used_ids)) return(1L)
+  as.integer(max(unique(used_ids)) + 1L)
+}
+
 dynrect_empty_df <- function() {
   tibble::tibble(
+    track_uid  = integer(0),
     rect_id    = integer(0),
     leaflet_id = character(0),
     cam_id     = integer(0),
@@ -685,6 +695,7 @@ dynrect_empty_df <- function() {
     last_ts_utc    = as.POSIXct(character(0), tz = "UTC"),
     last_poly      = list(),
     tracking_active = logical(0),
+    visible        = logical(0),
     estrutura_id   = integer(0),
     estrutura_nome = character(0),
     attrs      = list()
@@ -693,6 +704,7 @@ dynrect_empty_df <- function() {
 
 dyntrack_empty_df <- function() {
   tibble::tibble(
+    track_uid  = integer(0),
     rect_id    = integer(0),
     leaflet_id = character(0),
     cam_id     = integer(0),
@@ -778,6 +790,188 @@ dynrect_attrs_ui <- function(ns, attrs_df, values = NULL, locked = FALSE) {
     }
   }
   out
+}
+
+dynrect_attr_candidate_keys <- function(att_name, att_id = NA_integer_) {
+  att_name <- trimws(as.character(att_name)[1])
+  att_id   <- suppressWarnings(as.integer(att_id)[1])
+
+  keys <- character(0)
+
+  if (!is.na(att_name) && nzchar(att_name)) {
+    keys <- c(
+      keys,
+      att_name,
+      toupper(att_name),
+      tolower(att_name)
+    )
+  }
+
+  if (is.finite(att_id)) {
+    att_id_chr <- as.character(att_id)
+    keys <- c(
+      keys,
+      att_id_chr,
+      paste0(att_name, "__", att_id_chr),
+      paste0(toupper(att_name), "__", att_id_chr),
+      paste0(tolower(att_name), "__", att_id_chr)
+    )
+  }
+
+  unique(keys[nzchar(keys)])
+}
+
+dynrect_get_attr_value <- function(attrs, att_name, att_id = NA_integer_) {
+  if (is.null(attrs)) return(NULL)
+  if (!is.list(attrs)) attrs <- as.list(attrs)
+  if (!length(attrs)) return(NULL)
+
+  nm <- names(attrs)
+  if (is.null(nm)) nm <- rep("", length(attrs))
+
+  keys <- dynrect_attr_candidate_keys(att_name, att_id)
+  if (!length(keys)) return(NULL)
+
+  for (key in keys) {
+    hit <- which(nm == key)
+    if (length(hit)) return(attrs[[hit[1]]])
+  }
+
+  NULL
+}
+
+dynrect_output_attr_key <- function(att_name, att_id = NA_integer_, existing_keys = character(0)) {
+  key <- trimws(as.character(att_name)[1])
+  if (is.na(key) || !nzchar(key)) {
+    key <- as.character(suppressWarnings(as.integer(att_id)[1]))
+  }
+  if (!length(existing_keys) || !key %in% existing_keys) return(key)
+  paste0(key, "__", as.character(suppressWarnings(as.integer(att_id)[1])))
+}
+
+dynrect_context_label <- function(rect_id, ts_utc = NULL) {
+  label <- paste0("Retangulo #", as.integer(rect_id))
+
+  ts_utc <- as.POSIXct(ts_utc, tz = "UTC")
+  if (!is.na(ts_utc)) {
+    label <- paste0(label, " / keyframe ", fmt_ts_utc_br(ts_utc, digits = 3L), " UTC")
+  }
+
+  label
+}
+
+dynrect_resolve_structure_row <- function(struct_df, estrutura_id = NA_integer_, estrutura_nome = "") {
+  if (is.null(struct_df) || !nrow(struct_df)) return(NULL)
+
+  estrutura_id <- suppressWarnings(as.integer(estrutura_id)[1])
+  if (is.finite(estrutura_id)) {
+    row <- struct_df |> dplyr::filter(.data$cd_id_estrutura == estrutura_id)
+    if (nrow(row)) return(row[1, , drop = FALSE])
+  }
+
+  estrutura_nome <- as.character(estrutura_nome)[1]
+  if (is.na(estrutura_nome)) estrutura_nome <- ""
+  estrutura_nome <- trimws(estrutura_nome)
+  if (nzchar(estrutura_nome)) {
+    row <- struct_df |>
+      dplyr::filter(toupper(as.character(.data$name_estrutura)) == toupper(estrutura_nome))
+    if (nrow(row)) return(row[1, , drop = FALSE])
+  }
+
+  NULL
+}
+
+dynrect_normalize_attrs_against_structure <- function(attrs, attrs_df, rect_id, ts_utc = NULL, estrutura_nome = "") {
+  if (is.null(attrs)) attrs <- list()
+  if (!is.list(attrs)) attrs <- as.list(attrs)
+
+  if (is.null(attrs_df) || !nrow(attrs_df)) {
+    return(list(ok = TRUE, attrs = list(), message = ""))
+  }
+
+  out <- list()
+  missing <- character(0)
+  invalid <- character(0)
+
+  for (k in seq_len(nrow(attrs_df))) {
+    att <- attrs_df[k, , drop = FALSE]
+    att_id   <- suppressWarnings(as.integer(att$cd_id_atributo[[1]]))
+    att_name <- as.character(att$name_atributo[[1]])
+    att_type <- toupper(trimws(as.character(att$name_data[[1]])))
+
+    raw_value <- dynrect_get_attr_value(attrs, att_name, att_id)
+    if (is.logical(raw_value)) {
+      value <- ifelse(is.na(raw_value[[1]]), NA_character_, ifelse(isTRUE(raw_value[[1]]), "TRUE", "FALSE"))
+    } else if (is.null(raw_value) || !length(raw_value)) {
+      value <- NA_character_
+    } else if (is.numeric(raw_value)) {
+      value <- as.character(raw_value[[1]])
+    } else {
+      value <- trimws(as.character(raw_value[[1]]))
+    }
+
+    key_out <- dynrect_output_attr_key(att_name, att_id, names(out))
+
+    if (identical(att_type, "QUALITATIVE")) {
+      allowed_raw <- if ("value_atributo" %in% names(att)) as.character(att$value_atributo[[1]]) else ""
+      allowed <- trimws(unlist(strsplit(allowed_raw, ",", fixed = TRUE), use.names = FALSE))
+      allowed <- allowed[nzchar(allowed)]
+
+      if (is.na(value) || !nzchar(value)) {
+        missing <- c(missing, att_name)
+        out[[key_out]] <- ""
+        next
+      }
+
+      if (length(allowed) && !value %in% allowed) {
+        invalid <- c(invalid, paste0(att_name, "='", value, "'"))
+      }
+
+      out[[key_out]] <- value
+      next
+    }
+
+    value_num <- suppressWarnings(as.numeric(value))
+    if (is.na(value) || !nzchar(value)) {
+      missing <- c(missing, att_name)
+      out[[key_out]] <- ""
+      next
+    }
+
+    if (!is.finite(value_num)) {
+      invalid <- c(invalid, paste0(att_name, "='", value, "'"))
+      out[[key_out]] <- ""
+      next
+    }
+
+    out[[key_out]] <- as.character(value_num)
+  }
+
+  if (!length(missing) && !length(invalid)) {
+    return(list(ok = TRUE, attrs = out, message = ""))
+  }
+
+  ctx <- dynrect_context_label(rect_id, ts_utc = ts_utc)
+  estrutura_nome_txt <- as.character(estrutura_nome)[1]
+  if (is.na(estrutura_nome_txt)) estrutura_nome_txt <- ""
+  estrutura_nome_txt <- trimws(estrutura_nome_txt)
+  if (nzchar(estrutura_nome_txt)) {
+    ctx <- paste0(ctx, " [", estrutura_nome_txt, "]")
+  }
+
+  parts <- character(0)
+  if (length(missing)) {
+    parts <- c(parts, paste0("atributos sem valor: ", paste(unique(missing), collapse = ", ")))
+  }
+  if (length(invalid)) {
+    parts <- c(parts, paste0("valores invalidos: ", paste(unique(invalid), collapse = ", ")))
+  }
+
+  list(
+    ok = FALSE,
+    attrs = out,
+    message = paste0(ctx, " nao corresponde mais a estrutura salva no banco (", paste(parts, collapse = "; "), ").")
+  )
 }
 
 # ==================================================
@@ -1127,19 +1321,31 @@ ui_js_handlers <- function() {
             if(lid === null || lid === undefined) return;
             var layer = findLayerByLeafletId(map, lid);
             if(layer && layer.setStyle){
+              var weight = (msg.weight === null || msg.weight === undefined) ? 3 : Number(msg.weight);
+              if(!isFinite(weight)) weight = 3;
+              var opacity = (msg.opacity === null || msg.opacity === undefined) ? 1 : Number(msg.opacity);
+              if(!isFinite(opacity)) opacity = 1;
+              var fillOpacity = (msg.fillOpacity === null || msg.fillOpacity === undefined) ? 0.1 : Number(msg.fillOpacity);
+              if(!isFinite(fillOpacity)) fillOpacity = 0.1;
               var style = {
                 color: msg.color || 'red',
                 fillColor: msg.fillColor || msg.color || 'red',
-                weight: msg.weight || 3,
-                opacity: (msg.opacity === null || msg.opacity === undefined) ? 1 : msg.opacity,
-                fillOpacity: (msg.fillOpacity === null || msg.fillOpacity === undefined) ? 0.1 : msg.fillOpacity
+                weight: weight,
+                opacity: opacity,
+                fillOpacity: fillOpacity
               };
               layer.setStyle(style);
+              if(layer._path && layer._path.style){
+                layer._path.style.pointerEvents = (msg.pointerEvents === 'none') ? 'none' : 'auto';
+              }
               if(layer.bringToFront) layer.bringToFront();
               if(layer.redraw) layer.redraw();
               setTimeout(function(){
                 try{
                   layer.setStyle(style);
+                  if(layer._path && layer._path.style){
+                    layer._path.style.pointerEvents = (msg.pointerEvents === 'none') ? 'none' : 'auto';
+                  }
                   if(layer.bringToFront) layer.bringToFront();
                   if(layer.redraw) layer.redraw();
                 } catch(err){}
@@ -1625,6 +1831,60 @@ uiNewTreinar <- function(ns, input, output, session, callback, dialogTitle = "No
   tiposPacotes <- selectAllTypesPacote(dbp$get_pool())
   objeto      <- NULL
 
+  refresh_objetos_cache <- function(silent = FALSE) {
+    latest <- tryCatch(
+      selectAllObjetos(dbp$get_pool()),
+      error = function(e) {
+        if (!isTRUE(silent)) {
+          showNotification(
+            paste0("Nao foi possivel atualizar os objetos do banco: ", conditionMessage(e)),
+            type = "warning"
+          )
+        }
+        NULL
+      }
+    )
+
+    if (!is.null(latest) && is.data.frame(latest)) {
+      objetos <<- latest
+    }
+
+    invisible(objetos)
+  }
+
+  resolve_selected_objeto <- function(refresh = FALSE, prefer_current = TRUE) {
+    if (isTRUE(refresh)) refresh_objetos_cache(silent = TRUE)
+
+    objs <- objetos
+    if (is.null(objs) || !is.data.frame(objs) || !nrow(objs)) return(objs)
+
+    current_name <- isolate(input$comboObjeto)
+    current_name <- if (is.null(current_name) || !length(current_name)) "" else as.character(current_name[[1]])
+    if (is.na(current_name)) current_name <- ""
+
+    current_id <- NA_integer_
+    if (!is.null(objeto) && is.data.frame(objeto) && nrow(objeto)) {
+      current_id <- suppressWarnings(as.integer(objeto$cd_id_objeto[[1]]))
+    }
+
+    if (!isTRUE(prefer_current) && nzchar(current_name)) {
+      out <- objs |> dplyr::filter(.data$name_objeto == current_name)
+      if (nrow(out)) return(out)
+    }
+
+    if (is.finite(current_id)) {
+      out <- objs |> dplyr::filter(.data$cd_id_objeto == current_id)
+      if (nrow(out)) return(out)
+    }
+
+    if (isTRUE(prefer_current) && nzchar(current_name)) {
+      out <- objs |> dplyr::filter(.data$name_objeto == current_name)
+      if (nrow(out)) return(out)
+    }
+
+    objs[0, , drop = FALSE]
+  }
+
   if (nrow(objetos) == 0) {
     obs$destroy()
     showNotification("Nenhum registro de objeto foi encontrado!", type = "error")
@@ -1642,7 +1902,7 @@ uiNewTreinar <- function(ns, input, output, session, callback, dialogTitle = "No
   loop_on   <- FALSE
   play_dir  <- reactiveVal(+1L)
 
-  clips <- reactiveVal(
+  empty_clips_df <- function() {
     data.frame(
       id = integer(0),
       title = character(0),
@@ -1653,9 +1913,49 @@ uiNewTreinar <- function(ns, input, output, session, callback, dialogTitle = "No
       estrutura_ok = logical(0),
       stringsAsFactors = FALSE
     )
-  )
+  }
+
+  clips <- reactiveVal(empty_clips_df())
   next_clip_id <- reactiveVal(1L)
   current_clip_view_id <- reactiveVal(NA_integer_)
+
+  reset_clip_workspace <- function(clear_ui = TRUE) {
+    playing(FALSE); loop_on <<- FALSE
+    session$userData$lru_cache$clear()
+    dyn_reset()
+
+    rv$seq <- NULL
+    rv$i <- 1L
+    rv$timeline_rows <- integer(0)
+    rv$timeline_pos <- NA_integer_
+    rv$id_by_cam <- NULL
+    rv$w <- 512L
+    rv$h <- 512L
+
+    if (isTRUE(rv$clip_active)) {
+      rv$clip_active <- FALSE
+      rv$clip_t0 <- NULL
+      rv$clip_i0 <- NA_integer_
+    }
+    try(removeUI(selector = paste0("#", ns("clip_summary_overlay")), immediate = TRUE), silent = TRUE)
+
+    clips(empty_clips_df())
+    next_clip_id(1L)
+    current_clip_view_id(NA_integer_)
+
+    clipOverlayPlayer$playing <- FALSE
+    clipOverlayPlayer$seq <- NULL
+    clipOverlayPlayer$timeline_rows <- integer(0)
+    clipOverlayPlayer$timeline_pos <- NA_integer_
+    clipOverlayPlayer$i <- 1L
+    clipOverlayPlayer$dir <- +1L
+
+    if (isTRUE(clear_ui)) {
+      output$uiCamerasFrames <- NULL
+    }
+
+    invisible(TRUE)
+  }
 
   updateClipsTable <- function(df) {
     if (!"estrutura_ok" %in% names(df)) {
@@ -1864,6 +2164,7 @@ uiNewTreinar <- function(ns, input, output, session, callback, dialogTitle = "No
     tracks = dyntrack_empty_df(),
     pending = new.env(parent = emptyenv()),
     selected_leaflet_id    = NA_character_,
+    selected_track_uid     = NA_integer_,
     selected_rect_id       = NA_integer_,
     highlighted_leaflet_id = NA_character_,
     deleting = FALSE,
@@ -1888,8 +2189,68 @@ uiNewTreinar <- function(ns, input, output, session, callback, dialogTitle = "No
     invisible(TRUE)
   }
 
-  dyn_track_key <- function(rect_id, cam_id) {
-    paste0(as.integer(rect_id), "|", as.integer(cam_id))
+  dyn_track_key <- function(track_uid, cam_id) {
+    paste0(as.integer(track_uid), "|", as.integer(cam_id))
+  }
+
+  dyn_rects_normalize <- function(df) {
+    if (is.null(df) || !nrow(df)) return(df)
+
+    if (!"track_uid" %in% names(df)) {
+      df$track_uid <- suppressWarnings(as.integer(df$rect_id))
+    } else {
+      uid <- suppressWarnings(as.integer(df$track_uid))
+      rid <- suppressWarnings(as.integer(df$rect_id))
+      miss_uid <- !is.finite(uid) & is.finite(rid)
+      if (any(miss_uid)) {
+        uid[miss_uid] <- rid[miss_uid]
+        df$track_uid <- uid
+      }
+    }
+
+    if (!"visible" %in% names(df)) {
+      df$visible <- rep(TRUE, nrow(df))
+    } else {
+      vis <- as.logical(df$visible)
+      vis[is.na(vis)] <- TRUE
+      df$visible <- vis
+    }
+
+    df
+  }
+
+  dyn_selected_row_index <- function(df = dyn$rects) {
+    df <- dyn_rects_normalize(df)
+    if (is.null(df) || !nrow(df)) return(integer(0))
+
+    track_uid <- suppressWarnings(as.integer(dyn$selected_track_uid))
+    if (is.finite(track_uid) && "track_uid" %in% names(df)) {
+      idx <- which(as.integer(df$track_uid) == track_uid)
+      if (length(idx)) return(as.integer(idx[1]))
+    }
+
+    rect_id <- suppressWarnings(as.integer(dyn$selected_rect_id))
+    if (is.finite(rect_id)) {
+      idx <- which(as.integer(df$rect_id) == rect_id)
+      if (length(idx)) return(as.integer(idx[1]))
+    }
+
+    integer(0)
+  }
+
+  dyn_set_selected_row <- function(row) {
+    if (is.null(row) || !nrow(row)) return(invisible(FALSE))
+    dyn$selected_leaflet_id <- if (isTRUE(dyn_is_row_tracking_active(row))) as.character(row$leaflet_id[[1]]) else NA_character_
+    dyn$selected_track_uid  <- suppressWarnings(as.integer(row$track_uid[[1]]))
+    dyn$selected_rect_id    <- suppressWarnings(as.integer(row$rect_id[[1]]))
+    invisible(TRUE)
+  }
+
+  dyn_clear_selection <- function() {
+    dyn$selected_leaflet_id <- NA_character_
+    dyn$selected_track_uid  <- NA_integer_
+    dyn$selected_rect_id    <- NA_integer_
+    invisible(TRUE)
   }
 
   dyn_cache_clear_boxes <- function() {
@@ -1921,11 +2282,13 @@ uiNewTreinar <- function(ns, input, output, session, callback, dialogTitle = "No
     }
 
     tr2 <- tr
+    if (!"track_uid" %in% names(tr2)) tr2$track_uid <- tr2$rect_id
+    tr2$track_uid <- suppressWarnings(as.integer(tr2$track_uid))
     tr2$rect_id <- suppressWarnings(as.integer(tr2$rect_id))
     tr2$cam_id  <- suppressWarnings(as.integer(tr2$cam_id))
     tr2$ts_utc  <- as.POSIXct(tr2$ts_utc, tz = "UTC")
 
-    ok <- is.finite(tr2$rect_id) & is.finite(tr2$cam_id) & !is.na(tr2$ts_utc)
+    ok <- is.finite(tr2$track_uid) & is.finite(tr2$cam_id) & !is.na(tr2$ts_utc)
     if (!any(ok)) {
       dyn_track_cache$index <- list()
       dyn_track_cache$built_rev <- dyn_track_cache$rev
@@ -1934,7 +2297,7 @@ uiNewTreinar <- function(ns, input, output, session, callback, dialogTitle = "No
     }
     tr2 <- tr2[ok, , drop = FALSE]
 
-    keys <- paste0(tr2$rect_id, "|", tr2$cam_id)
+    keys <- paste0(tr2$track_uid, "|", tr2$cam_id)
     grp <- split(seq_len(nrow(tr2)), keys)
 
     out <- vector("list", length(grp))
@@ -1980,21 +2343,29 @@ uiNewTreinar <- function(ns, input, output, session, callback, dialogTitle = "No
   }
 
   dyn_has_leaflet_id <- function(leaflet_id) {
-    df <- dyn$rects
+    df <- dyn_rects_normalize(dyn$rects)
     if (is.null(df) || !nrow(df)) return(FALSE)
     any(as.character(df$leaflet_id) == as.character(leaflet_id))
   }
 
   dyn_get_by_leaflet <- function(leaflet_id) {
-    df <- dyn$rects
+    df <- dyn_rects_normalize(dyn$rects)
     if (is.null(df) || !nrow(df)) return(NULL)
     idx <- which(as.character(df$leaflet_id) == as.character(leaflet_id))
     if (!length(idx)) return(NULL)
     df[idx[1], , drop = FALSE]
   }
 
+  dyn_get_by_track_uid <- function(track_uid) {
+    df <- dyn_rects_normalize(dyn$rects)
+    if (is.null(df) || !nrow(df)) return(NULL)
+    idx <- which(as.integer(df$track_uid) == as.integer(track_uid))
+    if (!length(idx)) return(NULL)
+    df[idx[1], , drop = FALSE]
+  }
+
   dyn_get_by_rect <- function(rect_id) {
-    df <- dyn$rects
+    df <- dyn_rects_normalize(dyn$rects)
     if (is.null(df) || !nrow(df)) return(NULL)
     idx <- which(as.integer(df$rect_id) == as.integer(rect_id))
     if (!length(idx)) return(NULL)
@@ -2015,7 +2386,33 @@ uiNewTreinar <- function(ns, input, output, session, callback, dialogTitle = "No
     isTRUE(vals[[1]])
   }
 
+  dyn_visible_vec <- function(df) {
+    df <- dyn_rects_normalize(df)
+    if (is.null(df) || !nrow(df)) return(logical(0))
+    if (!"visible" %in% names(df)) return(rep(TRUE, nrow(df)))
+    out <- as.logical(df$visible)
+    out[is.na(out)] <- TRUE
+    out
+  }
+
+  dyn_is_row_visible <- function(row) {
+    vals <- dyn_visible_vec(row)
+    if (!length(vals)) return(TRUE)
+    isTRUE(vals[[1]])
+  }
+
   dyn_tracks_by_rect <- function(rect_id) {
+    df <- dyn_rects_normalize(dyn$rects)
+    if (!is.null(df) && nrow(df)) {
+      idx <- which(as.integer(df$rect_id) == as.integer(rect_id))
+      if (length(idx)) {
+        active_idx <- idx[dyn_tracking_active_vec(df)[idx]]
+        pick <- if (length(active_idx)) active_idx[1] else idx[1]
+        track_uid <- suppressWarnings(as.integer(df$track_uid[[pick]]))
+        if (is.finite(track_uid)) return(dyn_tracks_by_uid(track_uid))
+      }
+    }
+
     tr <- dyn$tracks
     if (is.null(tr) || !nrow(tr)) return(NULL)
     out <- tr |>
@@ -2025,32 +2422,43 @@ uiNewTreinar <- function(ns, input, output, session, callback, dialogTitle = "No
     out
   }
 
-  dyn_first_kf <- function(rect_id) {
-    tr <- dyn_tracks_by_rect(rect_id)
+  dyn_tracks_by_uid <- function(track_uid) {
+    tr <- dyn$tracks
+    if (is.null(tr) || !nrow(tr)) return(NULL)
+    if (!"track_uid" %in% names(tr)) tr$track_uid <- tr$rect_id
+    out <- tr |>
+      dplyr::filter(as.integer(.data$track_uid) == as.integer(.env$track_uid)) |>
+      dplyr::arrange(as.POSIXct(.data$ts_utc, tz = "UTC"))
+    if (!nrow(out)) return(NULL)
+    out
+  }
+
+  dyn_first_kf <- function(track_uid) {
+    tr <- dyn_tracks_by_uid(track_uid)
     if (is.null(tr) || !nrow(tr)) return(NULL)
     tr[1, , drop = FALSE]
   }
 
-  dyn_last_kf <- function(rect_id) {
-    tr <- dyn_tracks_by_rect(rect_id)
+  dyn_last_kf <- function(track_uid) {
+    tr <- dyn_tracks_by_uid(track_uid)
     if (is.null(tr) || !nrow(tr)) return(NULL)
     tr[nrow(tr), , drop = FALSE]
   }
 
-  dyn_has_keyframe <- function(rect_id) {
-    tr <- dyn_tracks_by_rect(rect_id)
+  dyn_has_keyframe <- function(track_uid) {
+    tr <- dyn_tracks_by_uid(track_uid)
     !is.null(tr) && nrow(tr) > 0
   }
 
-  dyn_sync_rect_from_keyframes <- function(rect_id) {
-    df <- dyn$rects
+  dyn_sync_rect_from_keyframes <- function(track_uid) {
+    df <- dyn_rects_normalize(dyn$rects)
     if (is.null(df) || !nrow(df)) return(invisible(FALSE))
-    idx <- which(as.integer(df$rect_id) == as.integer(rect_id))
+    idx <- which(as.integer(df$track_uid) == as.integer(track_uid))
     if (!length(idx)) return(invisible(FALSE))
     i <- idx[1]
 
-    first_kf <- dyn_first_kf(rect_id)
-    last_kf  <- dyn_last_kf(rect_id)
+    first_kf <- dyn_first_kf(track_uid)
+    last_kf  <- dyn_last_kf(track_uid)
     changed <- FALSE
 
     if (!is.null(first_kf) && nrow(first_kf)) {
@@ -2102,6 +2510,7 @@ uiNewTreinar <- function(ns, input, output, session, callback, dialogTitle = "No
     dyn_cache_invalidate_tracks()
     dyn_reset_pending()
     dyn$selected_leaflet_id    <- NA_character_
+    dyn$selected_track_uid     <- NA_integer_
     dyn$selected_rect_id       <- NA_integer_
     dyn$highlighted_leaflet_id <- NA_character_
     dyn$deleting <- FALSE
@@ -2124,7 +2533,7 @@ uiNewTreinar <- function(ns, input, output, session, callback, dialogTitle = "No
   }
 
   dyn_dt_select_by_leaflet <- function(leaflet_id) {
-    df <- dyn$rects
+    df <- dyn_rects_normalize(dyn$rects)
     if (is.null(df) || !nrow(df)) return(invisible(FALSE))
     idx <- which(as.character(df$leaflet_id) == as.character(leaflet_id))
     if (!length(idx)) {
@@ -2166,20 +2575,28 @@ uiNewTreinar <- function(ns, input, output, session, callback, dialogTitle = "No
   dyn_send_style <- function(cam_id, leaflet_id,
     color = DYN_RECT_COLOR_DEFAULT,
     fill_opacity = DYN_RECT_FILL_DEFAULT,
-    weight = 3
+    weight = 3,
+    opacity = 1,
+    pointer_events = "auto"
   ) {
     if (is.null(cam_id) || !is.finite(cam_id) || is.null(leaflet_id) || !nzchar(leaflet_id)) return(invisible(FALSE))
     fill_opacity <- suppressWarnings(as.numeric(fill_opacity))
     if (!is.finite(fill_opacity)) fill_opacity <- DYN_RECT_FILL_DEFAULT
     weight <- suppressWarnings(as.numeric(weight))
     if (!is.finite(weight)) weight <- 3
+    opacity <- suppressWarnings(as.numeric(opacity))
+    if (!is.finite(opacity)) opacity <- 1
+    pointer_events <- as.character(pointer_events)[1]
+    if (is.na(pointer_events) || !nzchar(pointer_events)) pointer_events <- "auto"
     session$sendCustomMessage("set_draw_style", list(
       map_id = ns(paste0("map_", as.integer(cam_id))),
       leaflet_id = as.character(leaflet_id),
       color = color,
       fillColor = color,
       weight = weight,
-      fillOpacity = fill_opacity
+      opacity = opacity,
+      fillOpacity = fill_opacity,
+      pointerEvents = pointer_events
     ))
     TRUE
   }
@@ -2223,9 +2640,63 @@ uiNewTreinar <- function(ns, input, output, session, callback, dialogTitle = "No
     TRUE
   }
 
-  dyn_get_box_at_ts <- function(rect_id, cam_id, ts_utc, interpolate = DYN_INTERPOLATE_DEFAULT) {
+  dyn_apply_row_style <- function(row, force = FALSE) {
+    if (is.null(row) || !nrow(row)) return(invisible(FALSE))
+
+    cam_id <- suppressWarnings(as.integer(row$cam_id[[1]]))
+    leaflet_id <- as.character(row$leaflet_id[[1]])
+    if (!is.finite(cam_id) || !nzchar(leaflet_id)) return(invisible(FALSE))
+
+    if (!isTRUE(dyn_is_row_tracking_active(row))) {
+      return(invisible(FALSE))
+    }
+
+    if (!isTRUE(dyn_is_row_visible(row))) {
+      dyn_send_style(
+        cam_id, leaflet_id,
+        color = DYN_RECT_COLOR_HIDDEN,
+        fill_opacity = DYN_RECT_FILL_HIDDEN,
+        weight = 0,
+        opacity = 0,
+        pointer_events = "none"
+      )
+      if (identical(dyn$highlighted_leaflet_id, leaflet_id)) {
+        dyn$highlighted_leaflet_id <- NA_character_
+      }
+      return(invisible(TRUE))
+    }
+
+    is_selected <- identical(as.character(dyn$selected_leaflet_id), leaflet_id)
+    if (isTRUE(is_selected)) {
+      dyn_send_style(
+        cam_id, leaflet_id,
+        color = dyn_get_selected_color(),
+        fill_opacity = DYN_RECT_FILL_SELECTED,
+        weight = 4,
+        opacity = 1,
+        pointer_events = "auto"
+      )
+      dyn$highlighted_leaflet_id <- leaflet_id
+      return(invisible(TRUE))
+    }
+
+    dyn_send_style(
+      cam_id, leaflet_id,
+      color = DYN_RECT_COLOR_DEFAULT,
+      fill_opacity = DYN_RECT_FILL_DEFAULT,
+      weight = 3,
+      opacity = 1,
+      pointer_events = "auto"
+    )
+    if (identical(dyn$highlighted_leaflet_id, leaflet_id)) {
+      dyn$highlighted_leaflet_id <- NA_character_
+    }
+    invisible(TRUE)
+  }
+
+  dyn_get_box_at_ts <- function(track_uid, cam_id, ts_utc, interpolate = DYN_INTERPOLATE_DEFAULT) {
     idx_all <- dyn_get_track_index()
-    key <- dyn_track_key(rect_id, cam_id)
+    key <- dyn_track_key(track_uid, cam_id)
     idx <- idx_all[[key]]
     if (is.null(idx) || !length(idx$ts)) return(NULL)
 
@@ -2279,7 +2750,7 @@ uiNewTreinar <- function(ns, input, output, session, callback, dialogTitle = "No
 
   dyn_update_view_on_ts <- function(ts_utc) {
     if (is.null(objeto) || !isTRUE(objeto$cd_id_objeto_tipo == 2L)) return(invisible(FALSE))
-    df <- dyn$rects
+    df <- dyn_rects_normalize(dyn$rects)
     if (is.null(df) || !nrow(df)) return(invisible(FALSE))
     ts_utc <- as.POSIXct(ts_utc, tz = "UTC")
     if (is.na(ts_utc)) return(invisible(FALSE))
@@ -2290,12 +2761,12 @@ uiNewTreinar <- function(ns, input, output, session, callback, dialogTitle = "No
     for (k in seq_len(nrow(df))) {
       lid <- as.character(df$leaflet_id[[k]])
       cam <- as.integer(df$cam_id[[k]])
-      rid <- as.integer(df$rect_id[[k]])
+      uid <- as.integer(df$track_uid[[k]])
       if (!tracking_active[[k]]) next
-      if (!nzchar(lid) || !is.finite(cam) || !is.finite(rid)) next
+      if (!nzchar(lid) || !is.finite(cam) || !is.finite(uid)) next
       live_lids <- c(live_lids, lid)
 
-      box <- dyn_get_box_at_ts(rid, cam, ts_utc, interpolate = DYN_INTERPOLATE_DEFAULT)
+      box <- dyn_get_box_at_ts(uid, cam, ts_utc, interpolate = DYN_INTERPOLATE_DEFAULT)
       if (is.null(box)) next
 
       sig <- dyn_box_signature(box)
@@ -2328,12 +2799,7 @@ uiNewTreinar <- function(ns, input, output, session, callback, dialogTitle = "No
     if (!is.null(prev) && nzchar(prev) && !identical(prev, cur)) {
       prev_row <- dyn_get_by_leaflet(prev)
       if (!is.null(prev_row) && nrow(prev_row)) {
-        dyn_send_style(
-          prev_row$cam_id[[1]], prev,
-          color = DYN_RECT_COLOR_DEFAULT,
-          fill_opacity = DYN_RECT_FILL_DEFAULT,
-          weight = 3
-        )
+        dyn_apply_row_style(prev_row, force = TRUE)
       }
     }
 
@@ -2341,53 +2807,77 @@ uiNewTreinar <- function(ns, input, output, session, callback, dialogTitle = "No
 
     row <- dyn_get_by_leaflet(cur)
     if (!is.null(row) && nrow(row) && isTRUE(dyn_is_row_tracking_active(row))) {
-      selected_color <- dyn_get_selected_color()
-      dyn_send_style(
-        row$cam_id[[1]], cur,
-        color = selected_color,
-        fill_opacity = DYN_RECT_FILL_SELECTED,
-        weight = 4
-      )
-      dyn$highlighted_leaflet_id <- cur
+      dyn_apply_row_style(row, force = TRUE)
     } else {
       dyn$highlighted_leaflet_id <- NA_character_
     }
     TRUE
   }
 
+  dyn_toggle_visibility <- function(track_uid) {
+    track_uid <- suppressWarnings(as.integer(track_uid))
+    if (!is.finite(track_uid)) return(invisible(FALSE))
+
+    df <- dyn_rects_normalize(dyn$rects)
+    if (is.null(df) || !nrow(df)) return(invisible(FALSE))
+
+    idx <- which(as.integer(df$track_uid) == track_uid)
+    if (!length(idx)) return(invisible(FALSE))
+    i <- idx[1]
+
+    cur_visible <- dyn_visible_vec(df)[[i]]
+    df$visible[[i]] <- !isTRUE(cur_visible)
+    dyn$rects <- df
+
+    row <- df[i, , drop = FALSE]
+    if (isTRUE(dyn_is_row_tracking_active(row))) {
+      dyn_apply_row_style(row, force = TRUE)
+    }
+
+    dyn_touch_editor()
+    invisible(TRUE)
+  }
+
   dyn_select_by_leaflet <- function(leaflet_id) {
     if (is.null(leaflet_id) || !nzchar(leaflet_id)) return(invisible(FALSE))
-    df <- dyn$rects
+    df <- dyn_rects_normalize(dyn$rects)
     if (is.null(df) || !nrow(df)) return(invisible(FALSE))
     idx <- which(as.character(df$leaflet_id) == as.character(leaflet_id))
     if (!length(idx)) return(invisible(FALSE))
-    rid <- as.integer(df$rect_id[idx[1]])
-    if (is.finite(rid)) dyn_sync_rect_from_keyframes(rid)
-    dyn$selected_leaflet_id <- as.character(df$leaflet_id[idx[1]])
-    dyn$selected_rect_id    <- rid
+    row <- df[idx[1], , drop = FALSE]
+    uid <- suppressWarnings(as.integer(row$track_uid[[1]]))
+    if (is.finite(uid)) dyn_sync_rect_from_keyframes(uid)
+    dyn_set_selected_row(row)
     dyn_touch_editor()
     dyn_dt_select_by_leaflet(leaflet_id)
     dyn_highlight_selected(force = TRUE)
     TRUE
   }
   
-  dyn_select_by_rect <- function(rect_id) {
-    if (is.null(rect_id) || !is.finite(rect_id)) return(invisible(FALSE))
-    df <- dyn$rects
-    if (is.null(df) || !nrow(df)) return(invisible(FALSE))
-    idx <- which(as.integer(df$rect_id) == as.integer(rect_id))
-    if (!length(idx)) return(invisible(FALSE))
-    row <- df[idx[1], , drop = FALSE]
-    rid <- as.integer(row$rect_id[[1]])
-    if (is.finite(rid)) dyn_sync_rect_from_keyframes(rid)
-    dyn$selected_leaflet_id <- if (isTRUE(dyn_is_row_tracking_active(row))) as.character(row$leaflet_id[[1]]) else NA_character_
-    dyn$selected_rect_id    <- rid
+  dyn_select_by_track_uid <- function(track_uid) {
+    if (is.null(track_uid) || !is.finite(track_uid)) return(invisible(FALSE))
+    row <- dyn_get_by_track_uid(track_uid)
+    if (is.null(row) || !nrow(row)) return(invisible(FALSE))
+    uid <- suppressWarnings(as.integer(row$track_uid[[1]]))
+    if (is.finite(uid)) dyn_sync_rect_from_keyframes(uid)
+    dyn_set_selected_row(row)
     dyn_touch_editor()
     dyn_highlight_selected(force = TRUE)
     TRUE
   }
+
+  dyn_select_by_rect <- function(rect_id) {
+    if (is.null(rect_id) || !is.finite(rect_id)) return(invisible(FALSE))
+    df <- dyn_rects_normalize(dyn$rects)
+    if (is.null(df) || !nrow(df)) return(invisible(FALSE))
+    idx <- which(as.integer(df$rect_id) == as.integer(rect_id))
+    if (!length(idx)) return(invisible(FALSE))
+    active_idx <- idx[dyn_tracking_active_vec(df)[idx]]
+    pick <- if (length(active_idx)) active_idx[1] else idx[1]
+    dyn_select_by_track_uid(as.integer(df$track_uid[[pick]]))
+  }
   
-  dyn_track_upsert <- function(rect_id, leaflet_id, cam_id, ts_utc, poly,
+  dyn_track_upsert <- function(track_uid, rect_id, leaflet_id, cam_id, ts_utc, poly,
     box = NULL,
     estrutura_id = NA_integer_,
     estrutura_nome = "",
@@ -2417,7 +2907,8 @@ uiNewTreinar <- function(ns, input, output, session, callback, dialogTitle = "No
       tr <- dyn$tracks
 
       if (!is.null(tr) && nrow(tr)) {
-        idx_rect <- which(as.integer(tr$rect_id) == as.integer(rect_id))
+        if (!"track_uid" %in% names(tr)) tr$track_uid <- tr$rect_id
+        idx_rect <- which(as.integer(tr$track_uid) == as.integer(track_uid))
         if (length(idx_rect)) {
           ord <- idx_rect[order(as.POSIXct(tr$ts_utc[idx_rect], tz = "UTC"))]
           lock_id <- suppressWarnings(as.integer(tr$estrutura_id[ord[1]]))
@@ -2430,6 +2921,7 @@ uiNewTreinar <- function(ns, input, output, session, callback, dialogTitle = "No
       }
       
       if (!is.null(tr) && nrow(tr)) {
+        if (!"track_uid" %in% names(tr)) tr$track_uid <- tr$rect_id
         if (!"attrs" %in% names(tr)) tr$attrs <- replicate(nrow(tr), list(list()))
         if (!"box" %in% names(tr)) tr$box <- replicate(nrow(tr), list(NULL))
         if (!"estrutura_id" %in% names(tr)) tr$estrutura_id <- rep(NA_integer_, nrow(tr))
@@ -2438,6 +2930,7 @@ uiNewTreinar <- function(ns, input, output, session, callback, dialogTitle = "No
       
       if (is.null(tr) || !nrow(tr)) {
         dyn$tracks <- tibble::tibble(
+          track_uid = as.integer(track_uid),
           rect_id = as.integer(rect_id),
           leaflet_id = as.character(leaflet_id),
           cam_id = as.integer(cam_id),
@@ -2453,7 +2946,7 @@ uiNewTreinar <- function(ns, input, output, session, callback, dialogTitle = "No
       }
       
       idx <- which(
-        as.integer(tr$rect_id) == as.integer(rect_id) &
+        as.integer(tr$track_uid) == as.integer(track_uid) &
         as.POSIXct(tr$ts_utc, tz = "UTC") == ts_utc
       )
       
@@ -2466,6 +2959,7 @@ uiNewTreinar <- function(ns, input, output, session, callback, dialogTitle = "No
         tr$attrs[[j]] <- attrs
       } else {
         tr <- dplyr::bind_rows(tr, tibble::tibble(
+          track_uid = as.integer(track_uid),
           rect_id = as.integer(rect_id),
           leaflet_id = as.character(leaflet_id),
           cam_id = as.integer(cam_id),
@@ -2506,12 +3000,20 @@ uiNewTreinar <- function(ns, input, output, session, callback, dialogTitle = "No
   }
 
   dyn_add_rect <- function(leaflet_id, cam_id, ts_utc, poly) {
-    used   <- dyn$rects$rect_id
+    rects_df <- dyn_rects_normalize(dyn$rects)
+    active_ids <- if (!is.null(rects_df) && nrow(rects_df)) {
+      rects_df$rect_id[dyn_tracking_active_vec(rects_df)]
+    } else {
+      integer(0)
+    }
+    used   <- active_ids
     new_id <- dynrect_next_free_id(used)
+    new_uid <- dyntrack_next_uid(rects_df$track_uid)
 
     ts_utc <- as.POSIXct(ts_utc, tz = "UTC")
 
     new_row <- tibble::tibble(
+      track_uid = as.integer(new_uid),
       rect_id = as.integer(new_id),
       leaflet_id = as.character(leaflet_id),
       cam_id = as.integer(cam_id),
@@ -2519,14 +3021,16 @@ uiNewTreinar <- function(ns, input, output, session, callback, dialogTitle = "No
       last_ts_utc    = ts_utc,
       last_poly      = list(poly),
       tracking_active = TRUE,
+      visible        = TRUE,
       estrutura_id   = as.integer(NA),
       estrutura_nome = "",
       attrs          = list(list())
     )
 
-    dyn$rects <- dplyr::bind_rows(dyn$rects, new_row)
+    dyn$rects <- dplyr::bind_rows(rects_df, new_row)
 
     dyn$selected_leaflet_id <- as.character(leaflet_id)
+    dyn$selected_track_uid  <- as.integer(new_uid)
     dyn$selected_rect_id    <- as.integer(new_id)
 
     dyn_set_pending_poly(leaflet_id, ts_utc, poly)
@@ -2547,7 +3051,7 @@ uiNewTreinar <- function(ns, input, output, session, callback, dialogTitle = "No
   
   dyn_update_poly <- function(leaflet_id, ts_utc, poly) {
     if (!isTRUE(rv$clip_active)) return(invisible(FALSE))
-    df <- dyn$rects
+    df <- dyn_rects_normalize(dyn$rects)
     if (is.null(df) || !nrow(df)) return(invisible(FALSE))
     idx <- which(as.character(df$leaflet_id) == as.character(leaflet_id))
     if (!length(idx)) return(invisible(FALSE))
@@ -2558,9 +3062,15 @@ uiNewTreinar <- function(ns, input, output, session, callback, dialogTitle = "No
   }
   
   dyn_apply_tracking <- function(rv) {
-    rid <- dyn$selected_rect_id
-    lid <- dyn$selected_leaflet_id
-    if (is.null(rid) || !is.finite(rid) || is.null(lid) || !nzchar(lid)) return(invisible(FALSE))
+    df <- dyn_rects_normalize(dyn$rects)
+    if (is.null(df) || !nrow(df)) return(invisible(FALSE))
+
+    idx <- dyn_selected_row_index(df)
+    if (!length(idx)) return(invisible(FALSE))
+    rid <- suppressWarnings(as.integer(df$rect_id[idx[1]]))
+    uid <- suppressWarnings(as.integer(df$track_uid[idx[1]]))
+    lid <- as.character(df$leaflet_id[idx[1]])
+    if (is.null(rid) || !is.finite(rid) || is.null(uid) || !is.finite(uid) || is.null(lid) || !nzchar(lid)) return(invisible(FALSE))
     
     if (!isTRUE(rv$clip_active)) {
       showNotification("Ative um Clip para aplicar tracking.", type = "error")
@@ -2576,7 +3086,8 @@ uiNewTreinar <- function(ns, input, output, session, callback, dialogTitle = "No
     
     tr0 <- dyn$tracks
     if (!is.null(tr0) && nrow(tr0)) {
-      hits <- which(as.integer(tr0$rect_id) == as.integer(rid) &
+      if (!"track_uid" %in% names(tr0)) tr0$track_uid <- tr0$rect_id
+      hits <- which(as.integer(tr0$track_uid) == as.integer(uid) &
       as.POSIXct(tr0$ts_utc, tz = "UTC") == base_ts)
       if (length(hits)) ts_final <- base_ts + (0.001 * length(hits))
     }
@@ -2597,8 +3108,8 @@ uiNewTreinar <- function(ns, input, output, session, callback, dialogTitle = "No
       return(invisible(FALSE))
     }
     
-    df <- dyn$rects
-    idx <- which(as.integer(df$rect_id) == as.integer(rid))
+    df <- dyn_rects_normalize(dyn$rects)
+    idx <- which(as.integer(df$track_uid) == as.integer(uid))
     if (!length(idx)) return(invisible(FALSE))
     if (!dyn_tracking_active_vec(df)[[idx[1]]]) {
       showNotification("O rastreamento deste retângulo já foi parado.", type = "warning")
@@ -2623,7 +3134,7 @@ uiNewTreinar <- function(ns, input, output, session, callback, dialogTitle = "No
     dyn$rects <- df
     
     dyn_track_upsert(
-      rid, lid, df$cam_id[idx[1]], ts_final,
+      uid, rid, lid, df$cam_id[idx[1]], ts_final,
       poly,
       box = box,
       estrutura_id = estr_id,
@@ -2636,13 +3147,10 @@ uiNewTreinar <- function(ns, input, output, session, callback, dialogTitle = "No
   }
 
   dyn_stop_tracking_selected <- function() {
-    rid <- suppressWarnings(as.integer(dyn$selected_rect_id))
-    if (!is.finite(rid)) return(invisible(FALSE))
-
-    df <- dyn$rects
+    df <- dyn_rects_normalize(dyn$rects)
     if (is.null(df) || !nrow(df)) return(invisible(FALSE))
 
-    idx <- which(as.integer(df$rect_id) == rid)
+    idx <- dyn_selected_row_index(df)
     if (!length(idx)) return(invisible(FALSE))
     i <- idx[1]
 
@@ -2668,10 +3176,7 @@ uiNewTreinar <- function(ns, input, output, session, callback, dialogTitle = "No
   }
 
   dyn_delete_selected_record <- function() {
-    rid <- suppressWarnings(as.integer(dyn$selected_rect_id))
-    if (!is.finite(rid)) return(invisible(FALSE))
-
-    row <- dyn_get_by_rect(rid)
+    row <- dyn_get_by_track_uid(dyn$selected_track_uid)
     if (is.null(row) || !nrow(row)) return(invisible(FALSE))
 
     leaflet_id <- as.character(row$leaflet_id[[1]])
@@ -2685,9 +3190,9 @@ uiNewTreinar <- function(ns, input, output, session, callback, dialogTitle = "No
   }
   
   dyn_delete_leaflet_ids <- function(leaflet_ids) {
-    df <- dyn$rects
+    df <- dyn_rects_normalize(dyn$rects)
     if (is.null(df) || !nrow(df)) return(invisible(FALSE))
-    removed_rect_ids <- suppressWarnings(as.integer(df$rect_id[as.character(df$leaflet_id) %in% as.character(leaflet_ids)]))
+    removed_track_uids <- suppressWarnings(as.integer(df$track_uid[as.character(df$leaflet_id) %in% as.character(leaflet_ids)]))
     leaf_keep <- !as.character(df$leaflet_id) %in% as.character(leaflet_ids)
     df2 <- df[leaf_keep, , drop = FALSE]
     dyn$rects <- df2
@@ -2703,16 +3208,14 @@ uiNewTreinar <- function(ns, input, output, session, callback, dialogTitle = "No
     }
     
     if (!nrow(df2)) {
-      dyn$selected_leaflet_id    <- NA_character_
-      dyn$selected_rect_id       <- NA_integer_
+      dyn_clear_selection()
       dyn$highlighted_leaflet_id <- NA_character_
       dyn_editor_last_rect <<- NA_integer_
       dyn_editor_last_touch <<- NA_integer_
     } else {
-      selected_rect_id <- suppressWarnings(as.integer(dyn$selected_rect_id))
-      if (dyn$selected_leaflet_id %in% as.character(leaflet_ids) || selected_rect_id %in% removed_rect_ids) {
-        dyn$selected_leaflet_id    <- NA_character_
-        dyn$selected_rect_id       <- NA_integer_
+      selected_track_uid <- suppressWarnings(as.integer(dyn$selected_track_uid))
+      if (dyn$selected_leaflet_id %in% as.character(leaflet_ids) || selected_track_uid %in% removed_track_uids) {
+        dyn_clear_selection()
         dyn$highlighted_leaflet_id <- NA_character_
         dyn_editor_last_rect <<- NA_integer_
         dyn_editor_last_touch <<- NA_integer_
@@ -2723,14 +3226,14 @@ uiNewTreinar <- function(ns, input, output, session, callback, dialogTitle = "No
   }
   
   dyn_apply_meta <- function(struct_df) {
-    rid <- dyn$selected_rect_id
-    if (is.null(rid) || !is.finite(rid)) return(invisible(FALSE))
-    df <- dyn$rects
+    df <- dyn_rects_normalize(dyn$rects)
     if (is.null(df) || !nrow(df)) return(invisible(FALSE))
-    idx <- which(as.integer(df$rect_id) == as.integer(rid))
+    idx <- dyn_selected_row_index(df)
     if (!length(idx)) return(invisible(FALSE))
+    rid <- suppressWarnings(as.integer(df$rect_id[idx[1]]))
+    uid <- suppressWarnings(as.integer(df$track_uid[idx[1]]))
     
-    first_kf <- dyn_first_kf(rid)
+    first_kf <- dyn_first_kf(uid)
     locked_estr_id <- NA_integer_
     locked_estr_nome <- ""
     if (!is.null(first_kf) && nrow(first_kf)) {
@@ -2845,23 +3348,21 @@ uiNewTreinar <- function(ns, input, output, session, callback, dialogTitle = "No
   ))
 
   obs$add(observeEvent(input$comboSetor, {
+    refresh_objetos_cache(silent = TRUE)
     setor <- setores |> dplyr::filter(name_setor == input$comboSetor)
     if (!nrow(setor)) return()
     objs_setor <- objetos |> dplyr::filter(cd_id_setor == setor$cd_id_setor)
-    updateSelectizeInput(session, "comboObjeto", choices = objs_setor$name_objeto)
+    selected_obj <- if (nrow(objs_setor)) as.character(objs_setor$name_objeto[[1]]) else character(0)
+    updateSelectizeInput(session, "comboObjeto", choices = objs_setor$name_objeto, selected = selected_obj)
 
-    output$uiCamerasFrames <- NULL
-    playing(FALSE); loop_on <<- FALSE
-    session$userData$lru_cache$clear()
-    dyn_reset()
-    rv$timeline_rows <- integer(0)
-    rv$timeline_pos <- NA_integer_
-
-    if (isTRUE(rv$clip_active)) {
-      rv$clip_active <- FALSE; rv$clip_t0 <- NULL; rv$clip_i0 <- NA_integer_
-      try(removeUI(selector = paste0("#", ns("clip_summary_overlay")), immediate = TRUE), silent = TRUE)
-    }
+    objeto <<- NULL
+    reset_clip_workspace(clear_ui = TRUE)
   }, ignoreNULL = TRUE))
+
+  obs$add(observeEvent(input$comboObjeto, {
+    objeto <<- NULL
+    reset_clip_workspace(clear_ui = TRUE)
+  }, ignoreInit = TRUE, ignoreNULL = TRUE))
 
   obs$add(observeEvent(input$btBuscar, {
     loader_started <- FALSE
@@ -2872,12 +3373,13 @@ uiNewTreinar <- function(ns, input, output, session, callback, dialogTitle = "No
       }
     }, add = TRUE)
 
-    objeto <<- objetos |> dplyr::filter(name_objeto == isolate(input$comboObjeto))
+    objeto <<- resolve_selected_objeto(refresh = TRUE, prefer_current = FALSE)
     if (!nrow(objeto)) {
       showNotification("Selecione um objeto válido.", type = "warning")
       return(invisible())
     }
 
+    dyn_touch_editor()
     time_begin <- isolate(input$datetimeBegin)
     time_end   <- isolate(input$datetimeEnd)
 
@@ -2893,6 +3395,8 @@ uiNewTreinar <- function(ns, input, output, session, callback, dialogTitle = "No
     time_end    <- as.POSIXct(time_end, tz = "UTC")
     componentes <- objeto$config[[1]]$componentes[[1]]
     cameras_ids <- unique(purrr::map_int(componentes$camera, "cd_id_camera"))
+
+    reset_clip_workspace(clear_ui = TRUE)
 
     newProgressLoader(session)
     loader_started <- TRUE
@@ -2910,7 +3414,6 @@ uiNewTreinar <- function(ns, input, output, session, callback, dialogTitle = "No
 
     res_cam <- uiCamerasComponentes(ns, input, output, objeto, componentes)
     rv$id_by_cam <- res_cam$id_by_cam
-    dyn_reset()
 
     output$uiCamerasFrames <- renderUI({
       output$titleClock <- renderText({
@@ -2926,11 +3429,6 @@ uiNewTreinar <- function(ns, input, output, session, callback, dialogTitle = "No
       )
     })
 
-    session$userData$lru_cache$clear()
-    if (isTRUE(rv$clip_active)) {
-      rv$clip_active <- FALSE; rv$clip_t0 <- NULL; rv$clip_i0 <- NA_integer_
-      try(removeUI(selector = paste0("#", ns("clip_summary_overlay")), immediate = TRUE), silent = TRUE)
-    }
     timeline_rows <- seq_timeline_rows(frames_idx)
     rv$seq <- frames_idx
     rv$timeline_rows <- timeline_rows
@@ -3274,8 +3772,8 @@ uiNewTreinar <- function(ns, input, output, session, callback, dialogTitle = "No
     if (!isTRUE(objeto$cd_id_objeto_tipo == 2L)) {
       return(DT::datatable(data.frame(), options = list(dom = "t")))
     }
-    df <- dyn$rects
-    rid_sel <- suppressWarnings(as.integer(dyn$selected_rect_id))
+    df <- dyn_rects_normalize(dyn$rects)
+    uid_sel <- suppressWarnings(as.integer(dyn$selected_track_uid))
     if (is.null(df) || !nrow(df)) {
       return(DT::datatable(
         data.frame(
@@ -3284,6 +3782,7 @@ uiNewTreinar <- function(ns, input, output, session, callback, dialogTitle = "No
           Camera = integer(0),
           Estrutura = character(0),
           UltimoFrame = character(0),
+          Visivel = character(0),
           stringsAsFactors = FALSE
         ),
         selection = "single",
@@ -3299,12 +3798,30 @@ uiNewTreinar <- function(ns, input, output, session, callback, dialogTitle = "No
       exists(lid, envir = dyn$pending, inherits = FALSE)
     }, logical(1L))
     tracking_active <- dyn_tracking_active_vec(df)
+    visible_vec <- dyn_visible_vec(df)
+    toggle_input_id <- ns("dynrectToggleVisible")
 
     selected_row <- integer(0)
-    if (is.finite(rid_sel)) {
-      idx_sel <- which(as.integer(df$rect_id) == as.integer(rid_sel))
+    if (is.finite(uid_sel)) {
+      idx_sel <- which(as.integer(df$track_uid) == as.integer(uid_sel))
       if (length(idx_sel)) selected_row <- as.integer(idx_sel[1])
     }
+
+    visible_buttons <- vapply(seq_len(nrow(df)), function(i) {
+      uid <- suppressWarnings(as.integer(df$track_uid[[i]]))
+      is_visible <- visible_vec[[i]]
+      icon_name <- if (isTRUE(is_visible)) "eye" else "eye-slash"
+      title_txt <- if (isTRUE(is_visible)) "Ocultar no mapa" else "Mostrar no mapa"
+      class_txt <- if (isTRUE(is_visible)) "btn btn-default btn-xs" else "btn btn-warning btn-xs"
+      sprintf(
+        "<button class='%s' title='%s' onclick=\"Shiny.setInputValue('%s',{track_uid:%d,nonce:Math.random()},{priority:'event'}); return false;\"><i class='fa fa-%s'></i></button>",
+        class_txt,
+        title_txt,
+        toggle_input_id,
+        uid,
+        icon_name
+      )
+    }, character(1))
 
     out <- df |>
       dplyr::mutate(
@@ -3316,19 +3833,23 @@ uiNewTreinar <- function(ns, input, output, session, callback, dialogTitle = "No
         ),
         Camera = .data$cam_id,
         Estrutura = ifelse(nzchar(.data$estrutura_nome), .data$estrutura_nome, "(nao definido)"),
-        UltimoFrame = format(.data$last_ts_utc, tz = Sys.timezone(), format = "%d/%m/%y %H:%M:%S")
+        UltimoFrame = format(.data$last_ts_utc, tz = Sys.timezone(), format = "%d/%m/%y %H:%M:%S"),
+        Visivel = visible_buttons
       ) |>
-      dplyr::select(.data$ID, .data$Status, .data$`Camera`, .data$Estrutura, .data$UltimoFrame)
+      dplyr::select(.data$ID, .data$Status, .data$`Camera`, .data$Estrutura, .data$UltimoFrame, .data$Visivel)
 
     DT::datatable(
       out,
       rownames = FALSE,
       selection = list(mode = "single", selected = selected_row),
-      escape = TRUE,
+      escape = c(1, 2, 3, 4, 5),
       options = list(
         dom = "t",
         paging = FALSE,
-        ordering = FALSE
+        ordering = FALSE,
+        columnDefs = list(
+          list(className = "dt-center", targets = c(0, 1, 2, 5))
+        )
       )
     )
   })
@@ -3338,8 +3859,8 @@ uiNewTreinar <- function(ns, input, output, session, callback, dialogTitle = "No
 
     if (isTRUE(dyn$selecting_from_map)) {
       dyn$selecting_from_map <- FALSE
-      rid_cur <- suppressWarnings(as.integer(dyn$selected_rect_id))
-      if (is.finite(rid_cur)) dyn_sync_rect_from_keyframes(rid_cur)
+      uid_cur <- suppressWarnings(as.integer(dyn$selected_track_uid))
+      if (is.finite(uid_cur)) dyn_sync_rect_from_keyframes(uid_cur)
       dyn_touch_editor()
       dyn_highlight_selected(force = TRUE)
       return(invisible())
@@ -3348,20 +3869,30 @@ uiNewTreinar <- function(ns, input, output, session, callback, dialogTitle = "No
     sel <- input$dynrectTable_rows_selected
     if (is.null(sel) || !length(sel)) return(invisible())
 
-    df <- dyn$rects
+    df <- dyn_rects_normalize(dyn$rects)
     if (is.null(df) || !nrow(df)) return(invisible())
 
-    rid <- suppressWarnings(as.integer(df$rect_id[sel[1]]))
-    if (!is.finite(rid)) return(invisible())
+    uid <- suppressWarnings(as.integer(df$track_uid[sel[1]]))
+    if (!is.finite(uid)) return(invisible())
 
-    if (isTRUE(!is.null(dyn$selected_rect_id)) && isTRUE(as.integer(dyn$selected_rect_id) == rid)) {
-      dyn_sync_rect_from_keyframes(rid)
+    if (isTRUE(!is.null(dyn$selected_track_uid)) && isTRUE(as.integer(dyn$selected_track_uid) == uid)) {
+      dyn_sync_rect_from_keyframes(uid)
       dyn_touch_editor()
       dyn_highlight_selected(force = TRUE)
       return(invisible())
     }
 
-    dyn_select_by_rect(rid)
+    dyn_select_by_track_uid(uid)
+  }, ignoreInit = TRUE))
+
+  obs$add(observeEvent(input$dynrectToggleVisible, {
+    req(!is.null(objeto), isTRUE(objeto$cd_id_objeto_tipo == 2L))
+
+    info <- input$dynrectToggleVisible
+    uid <- suppressWarnings(as.integer(info$track_uid))
+    if (!is.finite(uid)) return(invisible())
+
+    dyn_toggle_visibility(uid)
   }, ignoreInit = TRUE))
 
   obs$add(observeEvent(input$dynrect_selected_color, {
@@ -3375,19 +3906,20 @@ uiNewTreinar <- function(ns, input, output, session, callback, dialogTitle = "No
     editor_touch <- suppressWarnings(as.integer(dyn$editor_refresh))
     if (!is.finite(editor_touch)) editor_touch <- 0L
 
-    df <- dyn$rects
+    df <- dyn_rects_normalize(dyn$rects)
     if (is.null(df) || !nrow(df)) {
       return(div(tags$em("Crie um retângulo vermelho em qualquer Camera para começar.")))
     }
 
-    rid <- dyn$selected_rect_id
-    if (is.null(rid) || !isTRUE(is.finite(as.numeric(rid)))) {
+    idx <- dyn_selected_row_index(df)
+    if (!length(idx)) {
       return(div(tags$em("Clique em um retângulo vermelho para editar Estrutura e Atributos.")))
     }
 
-    idx <- which(as.integer(df$rect_id) == as.integer(rid))
-    if (!length(idx)) return(div(tags$em("Clique em um retângulo vermelho para editar.")))
     row <- df[idx[1], , drop = FALSE]
+    rid <- suppressWarnings(as.integer(row$rect_id[[1]]))
+    uid <- suppressWarnings(as.integer(row$track_uid[[1]]))
+    if (!is.finite(rid) || !is.finite(uid)) return(div(tags$em("Clique em um retangulo vermelho para editar.")))
     tracking_active <- dyn_is_row_tracking_active(row)
 
     struct_df <- dynrect_structures_df(objeto)
@@ -3402,8 +3934,8 @@ uiNewTreinar <- function(ns, input, output, session, callback, dialogTitle = "No
       isTRUE(is.finite(x)) && !is.na(x)
     }
 
-    first_kf <- dyn_first_kf(rid)
-    last_kf  <- dyn_last_kf(rid)
+    first_kf <- dyn_first_kf(uid)
+    last_kf  <- dyn_last_kf(uid)
     prev_editor_rect <- suppressWarnings(as.integer(dyn_editor_last_rect))
     rect_changed <- !is_ok_int(prev_editor_rect) || as.integer(prev_editor_rect) != as.integer(rid)
     dyn_editor_last_rect <<- as.integer(rid)
@@ -3530,10 +4062,12 @@ uiNewTreinar <- function(ns, input, output, session, callback, dialogTitle = "No
       return(DT::datatable(data.frame(), options = list(dom = "t")))
     }
 
-    rid <- dyn$selected_rect_id
-    if (is.null(rid) || !is.finite(rid)) {
+    row <- dyn_get_by_track_uid(dyn$selected_track_uid)
+    if (is.null(row) || !nrow(row)) {
       return(DT::datatable(data.frame(), options = list(dom = "t")))
     }
+    rid <- suppressWarnings(as.integer(row$rect_id[[1]]))
+    uid <- suppressWarnings(as.integer(row$track_uid[[1]]))
 
     tr <- dyn$tracks
     if (is.null(tr) || !nrow(tr)) {
@@ -3543,9 +4077,10 @@ uiNewTreinar <- function(ns, input, output, session, callback, dialogTitle = "No
         options = list(dom = "t")
       ))
     }
+    if (!"track_uid" %in% names(tr)) tr$track_uid <- tr$rect_id
 
     kf <- tr |>
-      dplyr::filter(as.integer(rect_id) == as.integer(rid)) |>
+      dplyr::filter(as.integer(track_uid) == as.integer(uid)) |>
       dplyr::arrange(as.POSIXct(ts_utc, tz = "UTC"))
 
     if (!nrow(kf)) {
@@ -3585,10 +4120,10 @@ uiNewTreinar <- function(ns, input, output, session, callback, dialogTitle = "No
   obs$add(observeEvent(input$dynrectKf_delete, {
     req(!is.null(objeto), isTRUE(objeto$cd_id_objeto_tipo == 2L))
 
-    rid <- dyn$selected_rect_id
-    if (is.null(rid) || !is.finite(rid)) return(invisible())
-    row <- dyn_get_by_rect(rid)
+    row <- dyn_get_by_track_uid(dyn$selected_track_uid)
     if (is.null(row) || !nrow(row)) return(invisible())
+    rid <- suppressWarnings(as.integer(row$rect_id[[1]]))
+    uid <- suppressWarnings(as.integer(row$track_uid[[1]]))
     if (!isTRUE(dyn_is_row_tracking_active(row))) {
       showNotification("Registro travado. Exclua o registro inteiro para remover seus keyframes.", type = "warning")
       return(invisible())
@@ -3602,9 +4137,10 @@ uiNewTreinar <- function(ns, input, output, session, callback, dialogTitle = "No
 
     tr <- dyn$tracks
     if (is.null(tr) || !nrow(tr)) return(invisible())
+    if (!"track_uid" %in% names(tr)) tr$track_uid <- tr$rect_id
 
     kf <- tr |>
-      dplyr::filter(as.integer(rect_id) == as.integer(rid)) |>
+      dplyr::filter(as.integer(track_uid) == as.integer(uid)) |>
       dplyr::arrange(as.POSIXct(ts_utc, tz = "UTC")) |>
       dplyr::mutate(ts_raw = fmt_ts_utc_iso(as.POSIXct(ts_utc, tz = "UTC"), digits = 3L))
 
@@ -3616,7 +4152,7 @@ uiNewTreinar <- function(ns, input, output, session, callback, dialogTitle = "No
 
     tr2 <- tr |>
       dplyr::mutate(ts_raw = fmt_ts_utc_iso(as.POSIXct(ts_utc, tz = "UTC"), digits = 3L)) |>
-      dplyr::filter(!(as.integer(rect_id) == as.integer(rid) & ts_raw %in% ts_del)) |>
+      dplyr::filter(!(as.integer(track_uid) == as.integer(uid) & ts_raw %in% ts_del)) |>
       dplyr::select(-ts_raw)
 
     dyn$tracks <- tr2
@@ -3631,10 +4167,10 @@ uiNewTreinar <- function(ns, input, output, session, callback, dialogTitle = "No
   obs$add(observeEvent(input$dynrectKf_clear, {
     req(!is.null(objeto), isTRUE(objeto$cd_id_objeto_tipo == 2L))
 
-    rid <- dyn$selected_rect_id
-    if (is.null(rid) || !is.finite(rid)) return(invisible())
-    row <- dyn_get_by_rect(rid)
+    row <- dyn_get_by_track_uid(dyn$selected_track_uid)
     if (is.null(row) || !nrow(row)) return(invisible())
+    rid <- suppressWarnings(as.integer(row$rect_id[[1]]))
+    uid <- suppressWarnings(as.integer(row$track_uid[[1]]))
     if (!isTRUE(dyn_is_row_tracking_active(row))) {
       showNotification("Registro travado. Exclua o registro inteiro para remover seus keyframes.", type = "warning")
       return(invisible())
@@ -3642,9 +4178,10 @@ uiNewTreinar <- function(ns, input, output, session, callback, dialogTitle = "No
 
     tr <- dyn$tracks
     if (is.null(tr) || !nrow(tr)) return(invisible())
+    if (!"track_uid" %in% names(tr)) tr$track_uid <- tr$rect_id
 
     dyn$tracks <- tr |>
-      dplyr::filter(as.integer(rect_id) != as.integer(rid))
+      dplyr::filter(as.integer(track_uid) != as.integer(uid))
     dyn_cache_invalidate_tracks()
 
     showNotification(
@@ -3656,7 +4193,7 @@ uiNewTreinar <- function(ns, input, output, session, callback, dialogTitle = "No
   obs$add(observeEvent(input$dynrect_apply, {
     req(!is.null(objeto), isTRUE(objeto$cd_id_objeto_tipo == 2L))
 
-    row <- dyn_get_by_rect(dyn$selected_rect_id)
+    row <- dyn_get_by_track_uid(dyn$selected_track_uid)
     if (is.null(row) || !nrow(row)) return(invisible())
     if (!isTRUE(dyn_is_row_tracking_active(row))) {
       showNotification("O rastreamento deste retângulo foi parado. Os keyframes já salvos foram mantidos.", type = "warning")
@@ -4000,15 +4537,30 @@ uiNewTreinar <- function(ns, input, output, session, callback, dialogTitle = "No
       return(invisible())
     }
 
+    objeto_save <- objeto
+    if (isTRUE(!is.null(objeto_save) && is.data.frame(objeto_save) && nrow(objeto_save) &&
+               objeto_save$cd_id_objeto_tipo == 2L)) {
+      objeto_save <- resolve_selected_objeto(refresh = TRUE)
+      if (!nrow(objeto_save)) {
+        showNotification(
+          "Nao foi possivel recarregar do banco a configuracao atual do objeto dinamico para validar o tracking.",
+          type = "error"
+        )
+        return(invisible())
+      }
+      objeto <<- objeto_save
+      dyn_touch_editor()
+    }
+
     input_snapshot <- isolate(shiny::reactiveValuesToList(input))
     dyn_rects_snapshot <- isolate(list(rects = dyn$rects, tracks = dyn$tracks))
 
-    if (isTRUE(!is.null(objeto) && objeto$cd_id_objeto_tipo == 1L)) {
+    if (isTRUE(!is.null(objeto_save) && objeto_save$cd_id_objeto_tipo == 1L)) {
       df_status <- updateClipsTable(df)
       df_status$estrutura_ok <- vapply(seq_len(nrow(df_status)), function(i) {
         clip_static_values_complete(
           input_source = input_snapshot,
-          objeto = objeto,
+          objeto = objeto_save,
           id_clip = df_status$id[i],
           t0 = df_status$t0[i],
           t1 = df_status$t1[i]
@@ -4020,7 +4572,7 @@ uiNewTreinar <- function(ns, input, output, session, callback, dialogTitle = "No
 
     actionWebUser({
       info <- tryCatch(
-        build_objeto_descricao(input_snapshot, df, objeto, tiposPacotes, dyn_rects = dyn_rects_snapshot),
+        build_objeto_descricao(input_snapshot, df, objeto_save, tiposPacotes, dyn_rects = dyn_rects_snapshot),
         error = function(e) {
           showNotification(
             paste0("Falha ao preparar o pacote antes de salvar: ", conditionMessage(e)),
@@ -4060,7 +4612,7 @@ uiNewTreinar <- function(ns, input, output, session, callback, dialogTitle = "No
           }
 
           objPacote <- list()
-          objPacote$cd_id_objeto       <- objeto$cd_id_objeto
+          objPacote$cd_id_objeto       <- objeto_save$cd_id_objeto
           objPacote$titulo_ia          <- as.character(descricao$titulo)
           objPacote$input_ia           <- as.character(descricao$input)
           objPacote$cd_id_tipo_pacote  <- tipo_pacote
@@ -4236,12 +4788,20 @@ collect_clip_attributes <- function(input, objeto, id_clip, t0, t1) {
 # ==================================================
 # NOVO: Serialização dos retângulos dinâmicos para o output_ia
 # ==================================================
-dynrects_to_json <- function(dyn_rects, dyn_tracks, t0, t1) {
+dynrects_to_json <- function(dyn_rects, dyn_tracks, t0, t1, objeto = NULL) {
   if (is.null(dyn_rects) || !nrow(dyn_rects)) return(NULL)
   if (is.null(dyn_tracks) || !nrow(dyn_tracks)) return(NULL)
 
+  if (!"track_uid" %in% names(dyn_rects)) dyn_rects$track_uid <- dyn_rects$rect_id
+  if (!"track_uid" %in% names(dyn_tracks)) dyn_tracks$track_uid <- dyn_tracks$rect_id
+
   t0 <- as.POSIXct(t0, tz = "UTC"); t1 <- as.POSIXct(t1, tz = "UTC")
   if (is.na(t0) || is.na(t1)) return(NULL)
+
+  struct_df <- NULL
+  if (!is.null(objeto) && is.data.frame(objeto) && nrow(objeto)) {
+    struct_df <- dynrect_structures_df(objeto)
+  }
 
   sanitize_attrs <- function(a) {
     if (is.null(a)) return(list())
@@ -4266,8 +4826,12 @@ dynrects_to_json <- function(dyn_rects, dyn_tracks, t0, t1) {
     list(x_min = x_min, y_min = y_min, x_max = x_max, y_max = y_max)
   }
 
-  tracks_all <- dyn_tracks |>
+  tracks_all <- dyn_tracks
+  if (!"track_uid" %in% names(tracks_all)) tracks_all$track_uid <- tracks_all$rect_id
+
+  tracks_all <- tracks_all |>
     dplyr::mutate(
+      track_uid = as.integer(.data$track_uid),
       rect_id = as.integer(.data$rect_id),
       ts_utc  = as.POSIXct(.data$ts_utc, tz = "UTC")
     )
@@ -4277,39 +4841,134 @@ dynrects_to_json <- function(dyn_rects, dyn_tracks, t0, t1) {
 
   if (!nrow(in_rng)) return(NULL)
 
-  rect_ids_in <- unique(in_rng$rect_id)
+  if (!is.null(struct_df) && !nrow(struct_df)) {
+    stop("O objeto dinamico selecionado nao possui estruturas validas na configuracao atual salva no banco.")
+  }
+
+  track_uids_in <- unique(in_rng$track_uid)
 
   last_before <- tracks_all |>
-    dplyr::filter(.data$ts_utc < t0, .data$rect_id %in% rect_ids_in) |>
-    dplyr::group_by(.data$rect_id) |>
+    dplyr::filter(.data$ts_utc < t0, .data$track_uid %in% track_uids_in) |>
+    dplyr::group_by(.data$track_uid) |>
     dplyr::slice_max(.data$ts_utc, with_ties = FALSE) |>
     dplyr::ungroup()
 
   if (nrow(last_before)) in_rng <- dplyr::bind_rows(last_before, in_rng)
 
   in_rng <- in_rng |>
-    dplyr::arrange(.data$rect_id, .data$ts_utc) |>
-    dplyr::distinct(.data$rect_id, .data$ts_utc, .keep_all = TRUE)
+    dplyr::arrange(.data$track_uid, .data$ts_utc) |>
+    dplyr::distinct(.data$track_uid, .data$ts_utc, .keep_all = TRUE)
 
-  rect_ids <- unique(in_rng$rect_id)
+  track_uids <- unique(in_rng$track_uid)
 
-  items <- lapply(rect_ids, function(rid) {
+  items <- lapply(track_uids, function(track_uid) {
     meta <- dyn_rects |>
-      dplyr::filter(as.integer(.data$rect_id) == as.integer(rid)) |>
+      dplyr::filter(as.integer(.data$track_uid) == as.integer(track_uid)) |>
       dplyr::slice(1)
 
     if (!nrow(meta)) return(NULL)
 
+    rid <- suppressWarnings(as.integer(meta$rect_id[[1]]))
+
     kf <- in_rng |>
-      dplyr::filter(.data$rect_id == rid) |>
+      dplyr::filter(as.integer(.data$track_uid) == as.integer(track_uid)) |>
       dplyr::arrange(.data$ts_utc)
 
     if (!nrow(kf)) return(NULL)
 
-    meta_attrs <- sanitize_attrs(meta$attrs[[1]])
+    meta_sid <- suppressWarnings(as.integer(meta$estrutura_id[[1]]))
+    meta_snm <- as.character(meta$estrutura_nome[[1]])
+    if (is.na(meta_snm)) meta_snm <- ""
+
+    kf_sids <- integer(0)
+    if ("estrutura_id" %in% names(kf)) {
+      kf_sids <- suppressWarnings(as.integer(kf$estrutura_id))
+      kf_sids <- unique(kf_sids[is.finite(kf_sids)])
+    }
+
+    kf_snms <- character(0)
+    if ("estrutura_nome" %in% names(kf)) {
+      kf_snms <- trimws(as.character(kf$estrutura_nome))
+      kf_snms <- unique(kf_snms[!is.na(kf_snms) & nzchar(kf_snms)])
+    }
+
+    struct_row <- NULL
+    if (!is.null(struct_df)) {
+      struct_row <- dynrect_resolve_structure_row(struct_df, meta_sid, meta_snm)
+      if ((is.null(struct_row) || !nrow(struct_row)) && length(kf_sids)) {
+        struct_row <- dynrect_resolve_structure_row(
+          struct_df,
+          estrutura_id = kf_sids[[1]],
+          estrutura_nome = if (length(kf_snms)) kf_snms[[1]] else ""
+        )
+      }
+
+      if (is.null(struct_row) || !nrow(struct_row)) {
+        stop(
+          paste0(
+            "O retangulo #", as.integer(rid),
+            " referencia uma estrutura de tracking que nao existe mais na configuracao atual salva no banco."
+          )
+        )
+      }
+    }
+
+    estrutura_id_out <- if (!is.null(struct_row) && nrow(struct_row)) {
+      as.integer(struct_row$cd_id_estrutura[[1]])
+    } else if (is.finite(meta_sid)) {
+      meta_sid
+    } else if (length(kf_sids)) {
+      kf_sids[[1]]
+    } else {
+      NA_integer_
+    }
+
+    estrutura_nome_out <- if (!is.null(struct_row) && nrow(struct_row)) {
+      as.character(struct_row$name_estrutura[[1]])
+    } else if (nzchar(meta_snm)) {
+      meta_snm
+    } else if (length(kf_snms)) {
+      kf_snms[[1]]
+    } else {
+      ""
+    }
+
+    attrs_df <- NULL
+    if (!is.null(struct_row) && nrow(struct_row) && "atributos" %in% names(struct_row)) {
+      attrs_df <- struct_row$atributos[[1]]
+    }
+
+    meta_attrs_src <- meta$attrs[[1]]
+    if ((is.null(meta_attrs_src) || !length(meta_attrs_src)) && "attrs" %in% names(kf) && nrow(kf)) {
+      meta_attrs_src <- kf$attrs[[nrow(kf)]]
+    }
+
+    meta_attrs <- sanitize_attrs(meta_attrs_src)
+    if (!is.null(attrs_df) && nrow(attrs_df)) {
+      meta_norm <- dynrect_normalize_attrs_against_structure(
+        attrs = meta_attrs_src,
+        attrs_df = attrs_df,
+        rect_id = rid,
+        estrutura_nome = estrutura_nome_out
+      )
+      if (!isTRUE(meta_norm$ok)) stop(meta_norm$message)
+      meta_attrs <- meta_norm$attrs
+    }
 
     keyframes <- lapply(seq_len(nrow(kf)), function(i) {
       r <- kf[i, ]
+
+      if (is.finite(estrutura_id_out) && "estrutura_id" %in% names(r)) {
+        kf_sid <- suppressWarnings(as.integer(r$estrutura_id[[1]]))
+        if (is.finite(kf_sid) && kf_sid != estrutura_id_out) {
+          stop(
+            paste0(
+              dynrect_context_label(rid, r$ts_utc[[1]]),
+              " usa uma estrutura diferente da estrutura atualmente definida para este tracking."
+            )
+          )
+        }
+      }
 
       b <- NULL
       if ("box" %in% names(r)) b <- r$box[[1]]
@@ -4321,20 +4980,33 @@ dynrects_to_json <- function(dyn_rects, dyn_tracks, t0, t1) {
         b <- sanitize_box(poly_to_box(poly))
       }
 
+      kf_attrs_src <- if ("attrs" %in% names(r)) r$attrs[[1]] else meta_attrs_src
+      kf_attrs <- sanitize_attrs(kf_attrs_src)
+      if (!is.null(attrs_df) && nrow(attrs_df)) {
+        kf_norm <- dynrect_normalize_attrs_against_structure(
+          attrs = kf_attrs_src,
+          attrs_df = attrs_df,
+          rect_id = rid,
+          ts_utc = r$ts_utc[[1]],
+          estrutura_nome = estrutura_nome_out
+        )
+        if (!isTRUE(kf_norm$ok)) stop(kf_norm$message)
+        kf_attrs <- kf_norm$attrs
+      }
+
       list(
         TS_UTC = fmt_ts_utc_iso(r$ts_utc[[1]], digits = 3L),
         BOX    = b,
-        atributos = sanitize_attrs(
-          if ("attrs" %in% names(r)) r$attrs[[1]] else meta_attrs
-        )
+        atributos = kf_attrs
       )
     })
 
     list(
+      TRACK_UID = as.integer(meta$track_uid[[1]]),
       RECT_ID   = as.integer(meta$rect_id[[1]]),
       CAMERA_ID = as.integer(meta$cam_id[[1]]),
-      cd_id_estrutura = ifelse(is.finite(meta$estrutura_id[[1]]), as.integer(meta$estrutura_id[[1]]), NA_integer_),
-      name_estrutura  = as.character(meta$estrutura_nome[[1]]),
+      cd_id_estrutura = ifelse(is.finite(estrutura_id_out), as.integer(estrutura_id_out), NA_integer_),
+      name_estrutura  = estrutura_nome_out,
       atributos = meta_attrs,
       KEYFRAMES = keyframes
     )
@@ -4408,7 +5080,15 @@ build_objeto_descricao <- function(input, df, objeto, tiposPacotes, dyn_rects = 
    
     if (isTRUE(objeto$cd_id_objeto_tipo == 2L) && is.list(dyn_rects) &&
         !is.null(dyn_rects$rects) && !is.null(dyn_rects$tracks)) {
-      dyn_json <- dynrects_to_json(dyn_rects$rects, dyn_rects$tracks, df_tmp$t0, df_tmp$t1)
+      dyn_json <- tryCatch(
+        dynrects_to_json(dyn_rects$rects, dyn_rects$tracks, df_tmp$t0, df_tmp$t1, objeto = objeto),
+        error = function(e) {
+          status <<- FALSE
+          message <<- conditionMessage(e)
+          NULL
+        }
+      )
+      if (!isTRUE(status)) break
       if (!is.null(dyn_json) && nzchar(dyn_json)) {
         output_parts <- c(output_parts, paste0("{\"DYN_RECTS\": ", dyn_json, "}"))
       }

@@ -27,6 +27,60 @@ box::use(
   x
 }
 
+.table_column_type <- function(con, table_name, column_name, schema_name = NULL) {
+  schema_name <- as.character(schema_name)[1]
+  if (is.na(schema_name) || !nzchar(schema_name)) {
+    schema_name <- DBI::dbGetQuery(con, "select current_schema() as schema_name")$schema_name[[1]]
+  }
+
+  out <- DBI::dbGetQuery(
+    con,
+    "
+    select
+      lower(coalesce(data_type, '')) as data_type,
+      lower(coalesce(udt_name, '')) as udt_name
+    from information_schema.columns
+    where table_schema = $1
+      and table_name = $2
+      and column_name = $3
+    limit 1
+    ",
+    params = list(schema_name, table_name, column_name)
+  )
+
+  if (!nrow(out)) {
+    return(list(
+      data_type = "",
+      udt_name = ""
+    ))
+  }
+
+  data_type <- as.character(out$data_type[[1]])
+  udt_name <- as.character(out$udt_name[[1]])
+  if (is.na(data_type) || !nzchar(data_type)) data_type <- ""
+  if (is.na(udt_name) || !nzchar(udt_name)) udt_name <- ""
+
+  list(
+    data_type = data_type,
+    udt_name = udt_name
+  )
+}
+
+.utc_column_param_spec <- function(con, table_name, column_name, schema_name = NULL) {
+  type_info <- .table_column_type(con, table_name, column_name, schema_name = schema_name)
+  is_timestamptz <- identical(type_info$data_type, "timestamp with time zone") ||
+    identical(type_info$udt_name, "timestamptz")
+
+  list(
+    cast = if (isTRUE(is_timestamptz)) "timestamptz" else "timestamp",
+    format = if (isTRUE(is_timestamptz)) "%Y-%m-%d %H:%M:%S+00" else "%Y-%m-%d %H:%M:%S"
+  )
+}
+
+.fmt_sql_dt_utc <- function(x_utc, fmt = "%Y-%m-%d %H:%M:%S") {
+  format(as.POSIXct(x_utc, tz = "UTC"), fmt)
+}
+
 #' @export
 checkifExistNameCamera <- function(con, name_camera) {
   df <- DBI$dbGetQuery(
@@ -347,6 +401,8 @@ selectFramesByCamera <- function(
   stopifnot(length(camera_id) == 1L, !is.na(camera_id), janela > 0L)
   if (inherits(date_time, "character")) date_time <- as.POSIXct(date_time, tz = Sys.timezone())
   stopifnot(inherits(date_time, "POSIXct"))
+  dt_param_spec <- .utc_column_param_spec(con, "frame_camera", "dt_hr_local")
+  date_time_sql <- .fmt_sql_dt_utc(date_time[[1]], fmt = dt_param_spec$format)
 
   op <- if (isTRUE(include_anchor)) "<=" else "<"
 
@@ -364,7 +420,7 @@ selectFramesByCamera <- function(
       where cd_id_camera = $1
         and dt_hr_local is not null
       order by
-        abs(extract(epoch from (dt_hr_local - $2))) asc,
+        abs(extract(epoch from (dt_hr_local - $2::%s))) asc,
         dt_hr_local desc
       limit 1
     ) a on 1=1
@@ -374,11 +430,11 @@ selectFramesByCamera <- function(
       and fc.dt_hr_local %s a.t0
     order by fc.dt_hr_local desc
     limit $4
-  ", op)
+  ", dt_param_spec$cast, op)
 
   rs <- DBI$dbSendQuery(con, sql)
   on.exit(try(DBI$dbClearResult(rs), silent = TRUE), add = TRUE)
-  DBI$dbBind(rs, list(camera_id, date_time, camera_id, janela))
+  DBI$dbBind(rs, list(camera_id, date_time_sql, camera_id, janela))
   out <- DBI$dbFetch(rs)
 
   if (nrow(out) > 0) {
@@ -421,6 +477,8 @@ get_frames_window <- function(con,
 
   cam_id <- suppressWarnings(as.integer(seed$cd_id_camera[[1]]))
   dt_ref <- as.POSIXct(seed$dt_hr_local[[1]], tz = "UTC")
+  dt_param_spec <- .utc_column_param_spec(con, "frame_camera", "dt_hr_local")
+  dt_ref_sql <- .fmt_sql_dt_utc(dt_ref[[1]], fmt = dt_param_spec$format)
 
   select_blob <- if (isTRUE(include_blob)) ", fcb.id_frame_blob, fcb.data_frame" else ""
   join_blob <- if (isTRUE(include_blob)) {
@@ -441,7 +499,7 @@ get_frames_window <- function(con,
     join_blob,
     "
     where fc.cd_id_camera = $1
-      and fc.dt_hr_local <= $2
+      and fc.dt_hr_local <= $2::", dt_param_spec$cast, "
     order by
       fc.dt_hr_local desc,
       fc.cd_id_frame desc
@@ -452,7 +510,7 @@ get_frames_window <- function(con,
   out <- DBI::dbGetQuery(
     con,
     sql,
-    params = list(cam_id, dt_ref, janela)
+    params = list(cam_id, dt_ref_sql, janela)
   )
 
   if (nrow(out)) {
