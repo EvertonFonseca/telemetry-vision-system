@@ -1,1 +1,0 @@
-SELECT id_objeto from objeto_pacote_ia

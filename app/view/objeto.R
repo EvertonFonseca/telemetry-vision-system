@@ -2473,6 +2473,19 @@ uiObjetoContexto <- function(ns, input, output, session, callback) {
   estruturas         <- selectAllEstrutura(dbp$get_pool())
   updateObjDynamic   <- reactiveVal(FALSE)
   visiveisPrevPorCamera <- reactiveVal(list())
+  componentesCurrent <- reactiveVal(.empty_componentes_df())
+
+  sync_componentes_current <- function(componentes = NULL) {
+    if (is.null(componentes)) {
+      if (is.null(frame_data) || is.null(frame_data$componente) || is.null(frame_data$componente[[1]])) {
+        componentesCurrent(.empty_componentes_df())
+      } else {
+        componentesCurrent(.componentes_safe_df(frame_data$componente[[1]]))
+      }
+    } else {
+      componentesCurrent(.componentes_safe_df(componentes))
+    }
+  }
    
    if(nrow(cameras) == 0){
     obs$destroy()
@@ -2572,6 +2585,17 @@ uiObjetoContexto <- function(ns, input, output, session, callback) {
 
         camera <- cameras |> filter(name_camera == input$comboCameras)
         .camera_frame_alert(frame_data, camera)
+      })
+
+      output$uiDynamicComponentNames <- renderUI({
+        req(sliderPosition() == 2L)
+
+        tipoObjeto <- tiposObjeto |> filter(name_objeto_tipo == isolate(input$comboTipoObjeto))
+        if (!nrow(tipoObjeto) || !isTRUE(tipoObjeto$cd_id_objeto_tipo == 2L)) {
+          return(NULL)
+        }
+
+        .dynamic_component_names_ui(ns, componentesCurrent(), input_source = input)
       })
       
       output$slider1 <- renderUI({
@@ -2686,6 +2710,7 @@ uiObjetoContexto <- function(ns, input, output, session, callback) {
           } else {
             frame_data$componente[[1]] <<- bind_rows(componentes_atual, row_new)
           }
+          sync_componentes_current()
           update_visible_componentes()
         
           #objetos dinamicos apenas 1 compomentes
@@ -2735,6 +2760,7 @@ uiObjetoContexto <- function(ns, input, output, session, callback) {
           
           df <- .ensure_component_colors(df)
           frame_data$componente[[1]] <<- df
+          sync_componentes_current()
           update_visible_componentes()
 
           camera          <- cameras |> filter(name_camera == input$comboCameras)
@@ -2764,6 +2790,7 @@ uiObjetoContexto <- function(ns, input, output, session, callback) {
           }
           
           frame_data$componente[[1]] <<- .ensure_component_colors(df)
+          sync_componentes_current()
           update_visible_componentes()
 
           camera          <- cameras |> filter(name_camera == input$comboCameras)
@@ -2840,9 +2867,7 @@ uiObjetoContexto <- function(ns, input, output, session, callback) {
           changetextPlaceHolder()
           estruturas_dinamicos <- tagList(
             br(),
-            inlineCSS(paste0("#", ns("textNameComponente"), " {text-transform: uppercase;}")),
-            textInput(ns("textNameComponente"), label = "Nome",
-            placeholder = "Digite o nome para o componente",value = ""),
+            uiOutput(ns("uiDynamicComponentNames")),
             multiInput(
               inputId = ns('multiEstruturaComp'),
               width = '100%',
@@ -2944,6 +2969,7 @@ uiObjetoContexto <- function(ns, input, output, session, callback) {
             estrutura  <- isolate(estruturas |> filter(name_estrutura == input$comboEstrutura))
             df_p$estrutura[[1]] <- estrutura
             frame_data$componente[[1]][index,] <<- df_p
+            sync_componentes_current()
             
             camera      <- cameras |> filter(name_camera == isolate(input$comboCameras))
             componentes <- frame_data$componente[[1]] 
@@ -3017,6 +3043,7 @@ uiObjetoContexto <- function(ns, input, output, session, callback) {
           }
           
           frame_data <<- searchFramesByCamerasSelected(dbp$get_pool(),camerasTargets,cameras)
+          sync_componentes_current()
           
           sliderPosition(isolate(sliderPosition()) + 1L)
           swiperSlideNext(idSwiper)
@@ -3027,13 +3054,13 @@ uiObjetoContexto <- function(ns, input, output, session, callback) {
           componentes <- frame_data$componente[[1]]
           
           if(tipoObjeto$cd_id_objeto_tipo == 2L){
-            componentes$name_componente <- toupper(isolate(input$textNameComponente))
+            componentes <- .dynamic_component_collect_names(input, componentes)
             multiEstruturas <- estruturas |> filter(name_estrutura %in% isolate(input$multiEstruturaComp))
             if(nrow(multiEstruturas) == 0){
               showNotification("Nenhuma estrutura foi selecionada para o componente!", type = "warning")
               return()
             }
-            componentes$estrutura <- list(multiEstruturas)
+            componentes <- .dynamic_component_bind_structures(componentes, multiEstruturas)
           }
           
           if(is.null(componentes)){
@@ -3044,6 +3071,14 @@ uiObjetoContexto <- function(ns, input, output, session, callback) {
             return()
           }
           
+          if(any(stringi$stri_isempty(componentes$name_componente))){
+            showNotification("Existe componente com nomes vazios!", type = "warning")
+            return()
+          }else if(any(duplicated(componentes$name_componente))){
+            showNotification("Existe componente com nomes duplicados!", type = "warning")
+            return()
+          }
+
           actionWebUser({
             if(!db$tryTransaction(function(conn){
             
@@ -3173,9 +3208,22 @@ uiEditObjeto <- function(ns,input,output,session,callback){
   idSwiper        <- ns('swiperMain')
   frame_data         <- NULL
   componenteReactive <- reactiveVal(NULL)
-  estruturas         <- selectAllEstrutura(dbp$get_pool())  
+  estruturas         <- selectAllEstrutura(dbp$get_pool())
   updateObjDynamic   <- reactiveVal(FALSE)
   visiveisPrevPorCamera <- reactiveVal(list())
+  componentesCurrent <- reactiveVal(.empty_componentes_df())
+
+  sync_componentes_current <- function(componentes = NULL) {
+    if (is.null(componentes)) {
+      if (is.null(frame_data) || is.null(frame_data$componente) || is.null(frame_data$componente[[1]])) {
+        componentesCurrent(.empty_componentes_df())
+      } else {
+        componentesCurrent(.componentes_safe_df(frame_data$componente[[1]]))
+      }
+    } else {
+      componentesCurrent(.componentes_safe_df(componentes))
+    }
+  }
   
   if(nrow(cameras) == 0){
     obs$destroy()
@@ -3279,6 +3327,17 @@ uiEditObjeto <- function(ns,input,output,session,callback){
 
         camera <- cameras |> filter(name_camera == input$comboCameras)
         .camera_frame_alert(frame_data, camera)
+      })
+
+      output$uiDynamicComponentNames <- renderUI({
+        req(sliderPosition() == 3L)
+
+        tipoObjeto <- tiposObjeto |> filter(name_objeto_tipo == isolate(input$comboTipoObjeto))
+        if (!nrow(tipoObjeto) || !isTRUE(tipoObjeto$cd_id_objeto_tipo == 2L)) {
+          return(NULL)
+        }
+
+        .dynamic_component_names_ui(ns, componentesCurrent(), input_source = input)
       })
       
       output$slider1 <- renderUI({
@@ -3467,6 +3526,7 @@ uiEditObjeto <- function(ns,input,output,session,callback){
         } else {
           frame_data$componente[[1]] <<- bind_rows(componentes_atual, row_new)
         }
+        sync_componentes_current()
         update_visible_componentes()
         #objetos dinamicos apenas 1 compomentes
         if(tipoObjeto$cd_id_objeto_tipo == 2L && nrow(frame_data$componente[[1]]) == 1L){
@@ -3509,6 +3569,7 @@ uiEditObjeto <- function(ns,input,output,session,callback){
         
         df <- .ensure_component_colors(df)
         frame_data$componente[[1]] <<- df
+        sync_componentes_current()
         update_visible_componentes()
 
         camera          <- cameras |> filter(name_camera == input$comboCameras)
@@ -3533,6 +3594,7 @@ uiEditObjeto <- function(ns,input,output,session,callback){
           df <- filter(df, .data$cd_id_componente != id_)
         }
         frame_data$componente[[1]] <<- .ensure_component_colors(df)
+        sync_componentes_current()
         update_visible_componentes()
 
         camera          <- cameras |> filter(name_camera == input$comboCameras)
@@ -3616,16 +3678,12 @@ uiEditObjeto <- function(ns,input,output,session,callback){
       estruturas_dinamicos <- NULL
       visibilidade_estaticos <- NULL
       if(tipoObjeto$cd_id_objeto_tipo == 2L){
-
-        componente     <- objetoSelect$config[[1]]$componentes[[1]]
-        estruturasComp <- purrr::map_df(componente$estrutura,~ .x)
+        estruturasComp <- .dynamic_component_selected_structures(componentesCurrent())
      
         changetextPlaceHolder()
         estruturas_dinamicos <- tagList(
           br(),
-          inlineCSS(paste0("#", ns("textNameComponente"), " {text-transform: uppercase;}")),
-          textInput(ns("textNameComponente"), label = "Nome",
-          placeholder = "Digite o nome para o componente",value = componente$name_componente),
+          uiOutput(ns("uiDynamicComponentNames")),
           multiInput(
             inputId = ns('multiEstruturaComp'),
             width = '100%',
@@ -3635,7 +3693,7 @@ uiEditObjeto <- function(ns,input,output,session,callback){
               selected_header     = "Estrutura selecionados"
             ),
             label = "Estruturas ativas",
-            selected = estruturasComp$name_estrutura,
+            selected = estruturasComp,
             choices = NULL,
             choiceNames  = estruturas$name_estrutura,
             choiceValues = estruturas$name_estrutura
@@ -3775,6 +3833,7 @@ uiEditObjeto <- function(ns,input,output,session,callback){
             estrutura  <- isolate(estruturas |> filter(name_estrutura == input$comboEstrutura))
             df_p$estrutura[[1]] <- estrutura
             frame_data$componente[[1]][index,] <<- df_p
+            sync_componentes_current()
             
             camera      <- cameras |> filter(name_camera == isolate(input$comboCameras))
             componentes <- frame_data$componente[[1]] 
@@ -3856,6 +3915,7 @@ uiEditObjeto <- function(ns,input,output,session,callback){
           }
           
           frame_data   <<- searchFramesByCamerasSelected(dbp$get_pool(),camerasTargets,cameras,objetoSelect)
+          sync_componentes_current()
           
           sliderPosition(isolate(sliderPosition()) + 1L)
           swiperSlideNext(idSwiper)
@@ -3866,13 +3926,13 @@ uiEditObjeto <- function(ns,input,output,session,callback){
           componentes <- frame_data$componente[[1]]
           
           if(tipoObjeto$cd_id_objeto_tipo == 2L){
-            componentes$name_componente <- toupper(isolate(input$textNameComponente))
+            componentes <- .dynamic_component_collect_names(input, componentes)
             multiEstruturas <- estruturas |> filter(name_estrutura %in% isolate(input$multiEstruturaComp))
             if(nrow(multiEstruturas) == 0){
               showNotification("Nenhuma estrutura foi selecionada para o componente!", type = "warning")
               return()
             }
-            componentes$estrutura <- list(multiEstruturas)
+            componentes <- .dynamic_component_bind_structures(componentes, multiEstruturas)
           }
           
           if(is.null(componentes)){
@@ -3882,7 +3942,15 @@ uiEditObjeto <- function(ns,input,output,session,callback){
             showNotification("Nenhum desenho de poligno foi encontrado!", type = "warning")
             return()
           }
-          
+
+          if(any(stringi$stri_isempty(componentes$name_componente))){
+            showNotification("Existe componente com nomes vazios!", type = "warning")
+            return()
+          }else if(any(duplicated(componentes$name_componente))){
+            showNotification("Existe componente com nomes duplicados!", type = "warning")
+            return()
+          }
+
           actionWebUser({
             if(!db$tryTransaction(function(conn){
 
@@ -4171,6 +4239,191 @@ uiMain <- function(ns,
   )
 }
 
+.componentes_safe_df <- function(componentes) {
+  if (is.null(componentes) || !is.data.frame(componentes)) {
+    return(.empty_componentes_df())
+  }
+
+  .ensure_component_colors(componentes)
+}
+
+.dynamic_component_name_input_id <- function(component_id) {
+  paste0("textNameComponente_", .objeto_contexto_normalize_id_piece(component_id))
+}
+
+.dynamic_component_text_input <- function(ns, input_id, label, value = "", placeholder = "", color = "#38BDF8") {
+  color <- as.character(color)[1]
+  if (is.na(color) || !nzchar(trimws(color))) color <- "#38BDF8"
+
+  tags$div(
+    class = "form-group shiny-input-container",
+    tags$label(
+      class = "control-label",
+      `for` = ns(input_id),
+      style = "display:flex; align-items:center; gap:8px;",
+      tags$span(
+        style = paste0(
+          "display:inline-block; width:14px; height:14px; min-width:14px; border-radius:3px;",
+          "background:", color, "; border:1px solid rgba(0,0,0,0.25);"
+        )
+      ),
+      tags$span(label)
+    ),
+    tags$input(
+      id = ns(input_id),
+      type = "text",
+      class = "form-control",
+      value = value,
+      placeholder = placeholder,
+      autocomplete = "off",
+      style = paste0(
+        "text-transform: uppercase;",
+        " border-left: 4px solid ", color, ";"
+      ),
+      oninput = "this.value = this.value.toUpperCase();"
+    )
+  )
+}
+
+.dynamic_component_names_ui <- function(ns, componentes, input_source = NULL) {
+  comps <- .componentes_safe_df(componentes)
+
+  if (!nrow(comps)) {
+    return(
+      tags$div(
+        style = "margin: 10px 0 14px 0; color: #6b7280;",
+        tags$em("Desenhe um poligono para cada componente e os campos de nome aparecerao aqui.")
+      )
+    )
+  }
+
+  tagList(
+    tags$div(
+      style = "margin: 10px 0 8px 0; font-weight: 600;",
+      "Nomes dos componentes"
+    ),
+    tagList(lapply(seq_len(nrow(comps)), function(i) {
+      comp <- comps[i, , drop = FALSE]
+      input_id <- .dynamic_component_name_input_id(comp$cd_id_componente[[1]])
+
+      current_value <- NULL
+      if (!is.null(input_source)) {
+        current_value <- isolate(input_source[[input_id]])
+      }
+      if (is.null(current_value) || !length(current_value)) {
+        current_value <- comp$name_componente[[1]]
+      }
+
+      current_value <- as.character(current_value)[1]
+      if (is.na(current_value)) current_value <- ""
+      current_value <- toupper(current_value)
+      comp_color <- as.character(comp$color_componente[[1]] %||% "")[1]
+
+      .dynamic_component_text_input(
+        ns,
+        input_id = input_id,
+        label = paste0("Componente ", i),
+        value = current_value,
+        placeholder = paste0("Digite o nome do componente ", i),
+        color = comp_color
+      )
+    }))
+  )
+}
+
+.dynamic_component_collect_names <- function(input_source, componentes) {
+  comps <- .componentes_safe_df(componentes)
+  if (!nrow(comps)) return(comps)
+
+  for (i in seq_len(nrow(comps))) {
+    input_id <- .dynamic_component_name_input_id(comps$cd_id_componente[[i]])
+
+    value <- input_source[[input_id]]
+    if (is.null(value) || !length(value)) {
+      value <- comps$name_componente[[i]]
+    }
+
+    value <- trimws(as.character(value)[1])
+    if (is.na(value)) value <- ""
+
+    comps$name_componente[[i]] <- toupper(value)
+  }
+
+  comps
+}
+
+.dynamic_component_selected_structures <- function(componentes) {
+  comps <- .componentes_safe_df(componentes)
+  if (!nrow(comps) || !"estrutura" %in% names(comps)) return(character(0))
+
+  out <- character(0)
+  for (i in seq_len(nrow(comps))) {
+    estrutura <- comps$estrutura[[i]]
+    if (is.null(estrutura) || !is.data.frame(estrutura) || !nrow(estrutura) || !"name_estrutura" %in% names(estrutura)) {
+      next
+    }
+
+    out <- c(out, as.character(estrutura$name_estrutura))
+  }
+
+  out <- unique(trimws(out))
+  out[!is.na(out) & nzchar(out)]
+}
+
+.dynamic_component_bind_structures <- function(componentes, estruturas_df) {
+  comps <- .componentes_safe_df(componentes)
+  if (!nrow(comps)) return(comps)
+
+  comps$estrutura <- rep(list(estruturas_df), nrow(comps))
+  comps
+}
+
+.dynamic_component_combine_structures <- function(estrutura_list) {
+  rows <- Filter(function(x) is.data.frame(x) && nrow(x), estrutura_list)
+  if (!length(rows)) return(data.frame())
+
+  merged <- dplyr::bind_rows(rows)
+  if ("cd_id_estrutura" %in% names(merged)) {
+    keep <- !duplicated(suppressWarnings(as.integer(merged$cd_id_estrutura)))
+    merged <- merged[keep, , drop = FALSE]
+  }
+
+  merged
+}
+
+.dynamic_component_group_key <- function(comp) {
+  camera_id <- suppressWarnings(as.integer(comp$cd_id_camera[[1]]))
+  camera_id <- if (is.finite(camera_id)) as.character(camera_id) else ""
+
+  comp_name <- trimws(as.character(comp$name_componente[[1]])[1])
+  if (is.na(comp_name)) comp_name <- ""
+
+  poly_key <- .component_polygon_to_string(comp$poligno_componente[[1]])
+
+  paste(camera_id, toupper(comp_name), poly_key, sep = "||")
+}
+
+.collapse_dynamic_componentes <- function(componentes) {
+  comps <- .componentes_safe_df(componentes)
+  if (!nrow(comps) || !"estrutura" %in% names(comps)) return(comps)
+
+  keys <- vapply(
+    seq_len(nrow(comps)),
+    function(i) .dynamic_component_group_key(comps[i, , drop = FALSE]),
+    character(1)
+  )
+  groups <- split(seq_len(nrow(comps)), factor(keys, levels = unique(keys)))
+
+  rows <- lapply(groups, function(idx) {
+    base <- comps[idx[[1]], , drop = FALSE]
+    base$estrutura <- list(.dynamic_component_combine_structures(comps$estrutura[idx]))
+    base
+  })
+
+  out <- dplyr::bind_rows(rows)
+  .ensure_component_colors(out)
+}
+
 .filter_componentes_visible <- function(componentes, camera_id, visible_ids = NULL) {
   if (is.null(componentes) || !is.data.frame(componentes) || nrow(componentes) == 0L) return(componentes)
   if (is.null(visible_ids)) return(componentes)
@@ -4199,23 +4452,15 @@ uiMapa <-function(ns,camera,cameras,frame_data,componentes = NULL,is_dynamic = F
           circleMarkerOptions  = FALSE,
           markerOptions        = FALSE,
           # HABILITA polígono
-          polygonOptions = if(!is_dynamic){
-            drawPolygonOptions(
-              shapeOptions = drawShapeOptions(fillOpacity = 0.2, weight = 2),
-              showArea = FALSE
-            )
-          }else{
-            FALSE
-          },
+          polygonOptions = drawPolygonOptions(
+            shapeOptions = drawShapeOptions(fillOpacity = 0.2, weight = 2),
+            showArea = FALSE
+          ),
           # HABILITA retângulo
-          rectangleOptions = if(!is_dynamic){
-            drawRectangleOptions(
-              shapeOptions = drawShapeOptions(fillOpacity = 0.2, weight = 2),
-              showArea = FALSE
-            )
-          }else{
-            FALSE
-          },
+          rectangleOptions = drawRectangleOptions(
+            shapeOptions = drawShapeOptions(fillOpacity = 0.2, weight = 2),
+            showArea = FALSE
+          ),
           # HABILITA círculo
           circleOptions = FALSE,
           editOptions = editToolbarOptions(
@@ -4460,6 +4705,15 @@ searchFramesByCamerasSelected <- function(conn,camerasTargets,cameras,objeto = N
     df$componente[[1]] <- bind_rows(componentes_list)
   } else {
     df$componente[[1]] <- .empty_componentes_df()
+  }
+
+  objeto_tipo <- if (!is.null(objeto) && is.data.frame(objeto) && nrow(objeto)) {
+    suppressWarnings(as.integer(objeto$cd_id_objeto_tipo[[1]]))
+  } else {
+    NA_integer_
+  }
+  if (isTRUE(is.finite(objeto_tipo) && objeto_tipo == 2L)) {
+    df$componente[[1]] <- .collapse_dynamic_componentes(df$componente[[1]])
   }
 
   df$componente[[1]] <- .ensure_component_colors(df$componente[[1]])
