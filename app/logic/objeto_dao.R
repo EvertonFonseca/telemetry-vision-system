@@ -742,6 +742,31 @@ deleteObjetoContextoByPeriodo <- function(con,
 }
 
 #' @export
+updateObjetoContextoDataOc <- function(con, cd_id_oc, data_oc) {
+  stopifnot(!is.null(cd_id_oc))
+
+  data_oc <- as.character(data_oc)
+  if (!length(data_oc) || is.na(data_oc[[1]]) || !nzchar(data_oc[[1]])) {
+    stop("Informe um JSON valido para atualizar o contexto.")
+  }
+
+  DBI::dbExecute(
+    con,
+    "
+    update objeto_contexto
+       set data_oc = $1
+     where cd_id_oc = $2
+    ",
+    params = list(
+      data_oc[[1]],
+      as.integer(cd_id_oc[[1]])
+    )
+  )
+
+  invisible(TRUE)
+}
+
+#' @export
 selectAllObjetos <- function(con, fg_ativo = c(TRUE, FALSE), ...) {
   dots <- list(...)
   if (!is.null(dots$fg.ativo)) fg_ativo <- dots$fg.ativo

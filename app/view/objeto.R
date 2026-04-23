@@ -732,7 +732,6 @@ MAP_GROUP_COMPONENT_NAMES   <- "componentes_nomes"
   groups <- split(attrs_df, factor(attrs_df$cd_id_componente, levels = unique(attrs_df$cd_id_componente)))
   items <- lapply(groups, function(df_comp) {
     comp_name <- .objeto_contexto_first_chr(df_comp$name_componente, "COMPONENTE")
-    comp_id <- suppressWarnings(as.integer(df_comp$cd_id_componente[[1]]))
 
     attrs <- stats::setNames(vector("list", nrow(df_comp)), as.character(df_comp$name_atributo))
     for (i in seq_len(nrow(df_comp))) {
@@ -747,11 +746,113 @@ MAP_GROUP_COMPONENT_NAMES   <- "componentes_nomes"
 
     item <- list()
     item[[comp_name]] <- attrs
-    item$ID <- comp_id
     item
   })
 
   jsonlite::toJSON(items, auto_unbox = TRUE, null = "null")
+}
+
+.objeto_contexto_update_existing_json <- function(contexto_txt, attrs_df) {
+  if (is.null(attrs_df) || !is.data.frame(attrs_df) || !nrow(attrs_df)) {
+    return(.objeto_contexto_build_output_json(attrs_df))
+  }
+
+  parsed <- tryCatch(
+    jsonlite::fromJSON(as.character(contexto_txt)[[1]], simplifyVector = FALSE),
+    error = function(e) NULL
+  )
+  if (is.null(parsed) || !length(parsed)) {
+    return(.objeto_contexto_build_output_json(attrs_df))
+  }
+
+  groups <- split(attrs_df, factor(attrs_df$cd_id_componente, levels = unique(attrs_df$cd_id_componente)))
+  by_name <- list()
+  by_id <- list()
+
+  for (df_comp in groups) {
+    comp_name <- .objeto_contexto_first_chr(df_comp$name_componente, "COMPONENTE")
+    comp_id <- suppressWarnings(as.integer(df_comp$cd_id_componente[[1]]))
+
+    attrs <- stats::setNames(vector("list", nrow(df_comp)), as.character(df_comp$name_atributo))
+    for (i in seq_len(nrow(df_comp))) {
+      row <- df_comp[i, , drop = FALSE]
+      attr_name <- as.character(row$name_atributo[[1]])
+      if (identical(as.character(row$name_data[[1]]), "QUALITATIVE")) {
+        attrs[[attr_name]] <- as.character(row$VALUE[[1]])
+      } else {
+        num_value <- suppressWarnings(as.numeric(row$VALUE[[1]]))
+        attrs[[attr_name]] <- if (is.finite(num_value)) num_value else as.character(row$VALUE[[1]])
+      }
+    }
+
+    by_name[[toupper(comp_name)]] <- attrs
+    if (is.finite(comp_id)) {
+      by_id[[as.character(comp_id)]] <- attrs
+    }
+  }
+
+  meta_fields <- c("ID", "id", "cd_id_componente", "CD_ID_COMPONENTE")
+
+  update_entry <- function(entry) {
+    if (!is.list(entry) || !length(entry)) {
+      return(entry)
+    }
+
+    comp_id_raw <- .objeto_contexto_first(
+      entry$ID,
+      .objeto_contexto_first(
+        entry$id,
+        .objeto_contexto_first(
+          entry$cd_id_componente,
+          .objeto_contexto_first(entry$CD_ID_COMPONENTE, NA_integer_)
+        )
+      )
+    )
+    comp_id <- suppressWarnings(as.integer(comp_id_raw))
+
+    comp_names <- setdiff(names(entry), meta_fields)
+    if (!length(comp_names)) {
+      return(entry)
+    }
+
+    for (comp_name in comp_names) {
+      current <- entry[[comp_name]]
+      if (is.null(current) || !is.list(current) || !length(current)) {
+        next
+      }
+
+      source <- by_name[[toupper(as.character(comp_name))]]
+      if (is.null(source) && length(comp_id) == 1L && is.finite(comp_id)) {
+        source <- by_id[[as.character(comp_id)]]
+      }
+      if (is.null(source) || !length(source)) {
+        next
+      }
+
+      existing_names <- intersect(names(current), names(source))
+      if (length(existing_names)) {
+        for (nm in existing_names) {
+          current[[nm]] <- source[[nm]]
+        }
+      }
+      entry[[comp_name]] <- current
+    }
+
+    entry
+  }
+
+  entries <- if (!is.null(names(parsed)) && any(nzchar(names(parsed)))) {
+    list(parsed)
+  } else {
+    parsed
+  }
+
+  updated <- lapply(entries, update_entry)
+  if (length(updated) == 1L && !is.null(names(parsed)) && any(nzchar(names(parsed)))) {
+    updated <- updated[[1]]
+  }
+
+  jsonlite::toJSON(updated, auto_unbox = TRUE, null = "null")
 }
 
 .objeto_contexto_build_input_ia <- function(objeto) {
@@ -906,6 +1007,29 @@ MAP_GROUP_COMPONENT_NAMES   <- "componentes_nomes"
               choices = tipos_choices,
               selected = if (length(tipos_choices)) tipos_choices[[1]] else character(0)
             )
+          )
+        ),
+        div(
+          style = "margin: 4px 0 12px 0;",
+          tags$label(
+            "Alterar banco de dados",
+            style = "display:block; font-size:14px; font-weight:600; margin-bottom:6px;"
+          ),
+          prettyToggle(
+            inputId = ns("finningTunnelAlterarBanco"),
+            label_on = "Sim",
+            label_off = "Nao",
+            value = FALSE,
+            outline = TRUE,
+            plain = TRUE,
+            icon_on = icon("check"),
+            icon_off = icon("times"),
+            bigger = TRUE,
+            width = "auto"
+          ),
+          tags$div(
+            style = "margin-top:6px; color:#6b7280; font-size:12px;",
+            "Quando ativado, o registro selecionado do contexto tambem sera atualizado no banco."
           )
         ),
         panelTitle(
@@ -2181,6 +2305,7 @@ uiObjetoContexto <- function(ns, input, output, session, callback) {
 
         meta_local <<- list(
           objeto = objeto_ctx,
+          cd_id_oc = suppressWarnings(as.integer(row_sel$cd_id_oc[[1]])),
           contexto = .objeto_contexto_first_chr(row_sel$contexto, ""),
           moment_label = moment_label,
           clip_start_utc = clip_start_utc,
@@ -2324,22 +2449,48 @@ uiObjetoContexto <- function(ns, input, output, session, callback) {
       return(invisible(NULL))
     }
 
+    alterar_db <- isTRUE(isolate(input$finningTunnelAlterarBanco))
     output_ia <- .objeto_contexto_build_output_json(attrs_df)
+    output_ia_ctx <- if (isTRUE(alterar_db)) {
+      .objeto_contexto_update_existing_json(meta$contexto, attrs_df)
+    } else {
+      output_ia
+    }
     input_ia <- .objeto_contexto_build_input_ia(objeto_ctx)
+    cd_id_oc <- suppressWarnings(as.integer(meta$cd_id_oc))
+    if (isTRUE(alterar_db) && (!length(cd_id_oc) || is.na(cd_id_oc) || !is.finite(cd_id_oc))) {
+      showNotification("Nao foi possivel identificar o registro do contexto para atualizacao.", type = "error")
+      return(invisible(NULL))
+    }
 
     actionWebUser(function() {
       save_result <- db$tryTransaction(function(conn) {
-        objPacote <- list(
-          cd_id_objeto = as.integer(objeto_ctx$cd_id_objeto[[1]]),
-          titulo_ia = titulo,
-          input_ia = input_ia,
-          cd_id_tipo_pacote = as.integer(tipo_pacote$cd_id_tipo_pacote[[1]]),
-          output_ia = as.character(output_ia),
-          dt_hr_local_begin = dt_begin,
-          dt_hr_local_end = dt_end
+        DBI::dbExecute(
+          conn,
+          "
+          insert into pacote_ia
+            (cd_id_objeto, titulo_ia, input_ia, cd_id_tipo_pacote, output_ia, dt_hr_local_begin, dt_hr_local_end)
+          values
+            ($1, $2, $3, $4, $5, $6, $7)
+          ",
+          params = list(
+            as.integer(objeto_ctx$cd_id_objeto[[1]]),
+            titulo,
+            input_ia,
+            as.integer(tipo_pacote$cd_id_tipo_pacote[[1]]),
+            as.character(output_ia),
+            dt_begin,
+            dt_end
+          )
         )
 
-        db$insertTable(conn, "pacote_ia", objPacote)
+        if (isTRUE(alterar_db)) {
+          updateObjetoContextoDataOc(
+            conn,
+            cd_id_oc = cd_id_oc,
+            data_oc = output_ia_ctx
+          )
+        }
       })
 
       if (!isTRUE(save_result)) {
@@ -2352,8 +2503,18 @@ uiObjetoContexto <- function(ns, input, output, session, callback) {
         return(invisible(NULL))
       }
 
-      showNotification("Clip corrigido e salvo como pacote de treino.", type = "message")
+      if (isTRUE(alterar_db)) {
+        showNotification(
+          "Clip corrigido, salvo como pacote de treino e contexto atualizado no banco de dados.",
+          type = "message"
+        )
+      } else {
+        showNotification("Clip corrigido e salvo como pacote de treino.", type = "message")
+      }
       .clear_contexto_training_overlay()
+      if (isTRUE(alterar_db)) {
+        .load_contextos(use_loader = FALSE)
+      }
     }, delay = 0, lock_id = "objeto_contexto_finning_save")
   }, ignoreInit = TRUE))
 
